@@ -14,6 +14,10 @@ using CaptainHook.Handlers;
 // HarnessSpec (default: claude-code) and the spec drives request parsing, the
 // capability gate, and the response wire format. See Core/Harness.cs.
 
+// ---- cold-start probe (opt-in): anchor the stopwatch as early as managed code
+//      allows, before any real work. Null unless CAPTAINHOOK_COLDSTART=1. -------
+var probe = ColdStartProbe.StartIfEnabled();
+
 // ---- 0. subcommand: `captainHook actors-demo` — drive the F# actor layer ----
 if (args.Length > 0 && args[0] == "actors-demo")
 {
@@ -39,6 +43,7 @@ catch (InvalidOperationException ex)
     await Console.Error.WriteLineAsync($"captAInHook: {ex.Message}");
     return 1;
 }
+probe?.Resolved();
 
 string raw = await Console.In.ReadToEndAsync();
 JsonElement payload;
@@ -48,6 +53,7 @@ catch { payload = JsonSerializer.Deserialize<JsonElement>("{}"); }
 // The spec knows which payload fields carry the event name / session / cwd;
 // the CLI arg (kebab-case) wins over the payload's own field.
 var evt = Harness.ParseEvent(spec, eventName, payload);
+probe?.Parsed();
 
 // ---- 2. registry: echo everywhere; a latency probe on UserPromptSubmit so we
 //         can watch two handlers fan out concurrently under one budget. --------
@@ -66,7 +72,10 @@ if (Environment.GetEnvironmentVariable("CAPTAINHOOK_PROBE") == "1")
 // One short dispatchId per invocation: every structured log line this run emits
 // carries it, so a digest can stitch the whole dispatch back together.
 var dispatchId = Guid.NewGuid().ToString("N")[..8];
-var result = await new Dispatcher(registry, budget: TimeSpan.FromSeconds(2)).DispatchAsync(evt, dispatchId);
+var dispatcher = new Dispatcher(registry, budget: TimeSpan.FromSeconds(2));
+probe?.DispatcherBuilt();
+var result = await dispatcher.DispatchAsync(evt, dispatchId);
+probe?.Dispatched();
 
 // ---- 4. effect -> host (stdout); human trace -> stderr ----------------------
 // Gate first (a harness only ever receives effect kinds its spec declared),
@@ -74,4 +83,6 @@ var result = await new Dispatcher(registry, budget: TimeSpan.FromSeconds(2)).Dis
 var final = Harness.ApplyCapabilityGate(spec, evt, result.Merged, dispatchId);
 Console.Out.Write(ResponseAdapters.Get(spec.ResponseAdapter).Serialize(evt, final));
 await Console.Error.WriteLineAsync(result.Trace.Render());
+
+probe?.Emit(dispatchId);   // -> JSONL/stderr, never stdout; after the effect is written
 return 0;
