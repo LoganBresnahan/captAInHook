@@ -17,7 +17,7 @@ run live*. The framework underneath is what exists today.
   degrade, fail-closed ≈ escalate + deny). The moment the two halves become
   one architecture. Touches `Dispatcher.cs` + `Supervision.fs`; demands a
   flow-doc update and new tests (shipshape will insist).
-  Landed as `Worker<'Req,'Reply>` (ADR-0002); escalated-worker fast-fail deferred to the daemon work (item 3).
+  Landed as `Worker<'Req,'Reply>` (ADR-0002); escalated-worker fast-fail deferred to the daemon-topology item.
 - [x] **2. First live deployment** — wire the echo handler into the real
   `~/.claude/settings.json` (UserPromptSubmit) and watch an actual Claude
   Code session flow through the JSONL trail. Dogfood before features.
@@ -39,6 +39,8 @@ run live*. The framework underneath is what exists today.
 - [ ] **4. Daemon topology** — long-lived `captaind` + thin per-event shim
   (DESIGN.md's split). ⚠ Fires ADR-0001's revisit trigger: re-evaluate
   Akka.NET vs the hand-rolled layer *before* building on either → an ADR.
+  Design recorded in ADR-0004 (verdict: stay hand-rolled; carry-ins
+  answered) — the gate is discharged, this item is now implementation.
   **Carry-ins from ADR-0002 (do not forget):** (a) a handler that IGNORES its
   cancellation token and hangs never crashes its worker — the mailbox stays
   blocked and later asks queue behind it (fix: cancel-on-timeout kill/respawn,

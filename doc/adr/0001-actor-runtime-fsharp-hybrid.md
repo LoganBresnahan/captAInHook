@@ -138,6 +138,10 @@ spike is the ready-made starting point) if any of these fire:
 
 - We **commit to the persistent `captaind` daemon topology** — Akka's startup
   cost amortizes and its long-lived-process assumption becomes true.
+  **Update (2026-07-04):** fired and evaluated in
+  [ADR-0004](0004-daemon-topology.md) — verdict: stay hand-rolled; the pull
+  narrows to routers/pools under observed head-of-line blocking. The triggers
+  below stay live.
 - We need **rest_for_one, watch/DeathWatch, routers, or clustering** —
   rebuilding those by hand is where hand-rolling stops paying.
 - **Supervision bugs** are discovered in our hand-rolled code — a correctness

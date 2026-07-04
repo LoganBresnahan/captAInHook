@@ -38,6 +38,12 @@ lifecycle event  ──►  handler(s)  ──►  bounded effect on the loop
 while the daemon stays warm — and because it *is* the thesis: a thin
 deterministic seam calling an arbitrarily intelligent subsystem.
 
+**Update (2026-07-04):** the split is committed by
+[ADR-0004](doc/adr/0004-daemon-topology.md) — one binary, three modes
+(daemon / shim / collapsed); the transport is a versioned Unix domain
+socket rather than localhost TCP, and single-binary mode survives as the
+collapsed fallback (and the no-daemon path for CI/one-off runs).
+
 ## Lifecycle events & effect contracts
 
 | Event            | Handler receives            | Allowed effects                                   |
