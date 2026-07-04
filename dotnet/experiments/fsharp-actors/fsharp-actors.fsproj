@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>fsharp_actors</RootNamespace>
+  </PropertyGroup>
+
+  <!-- F# compiles top-to-bottom in dependency order: a file may only reference
+       things declared ABOVE it. Messages -> Worker -> Supervisor -> Program. -->
+  <ItemGroup>
+    <Compile Include="Log.fs" />
+    <Compile Include="Messages.fs" />
+    <Compile Include="Worker.fs" />
+    <Compile Include="Supervisor.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+</Project>

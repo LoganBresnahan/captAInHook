@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CaptainHook.Actors</RootNamespace>
+    <AssemblyName>captainHookActors</AssemblyName>
+  </PropertyGroup>
+
+  <!-- F# compiles files IN ORDER — dependencies must come first.
+       Logging.fs is first so every layer (F# actors AND the C# host, which
+       references this assembly) shares one Log surface. -->
+  <ItemGroup>
+    <Compile Include="Logging.fs" />
+    <Compile Include="Supervision.fs" />
+    <Compile Include="Counter.fs" />
+    <Compile Include="HotPath.fs" />
+  </ItemGroup>
+
+</Project>

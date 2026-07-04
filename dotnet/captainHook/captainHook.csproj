@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>captainHook</AssemblyName>
+    <RootNamespace>CaptainHook</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Cross-language interop: the F# actor layer is just another assembly.
+       This one line is the whole integration — no bindings, no FFI. -->
+  <ItemGroup>
+    <ProjectReference Include="../captainHookActors/captainHookActors.fsproj" />
+  </ItemGroup>
+
+</Project>
