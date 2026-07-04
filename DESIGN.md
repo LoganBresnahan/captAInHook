@@ -113,3 +113,6 @@ actor/supervision layer is an F# hybrid (`MailboxProcessor` default, bounded
 Channels hot path, hand-rolled one_for_one; Akka.NET deferred). The dispatcher
 core remains C#, and the N-runtime comparison harness above continues as
 planned for the Node and BEAM ports.
+[ADR-0002](doc/adr/0002-handlers-as-supervised-actors.md) then converged the
+two halves: handlers now run as supervised `Worker<'Req,'Reply>` actors and
+dispatch is an ask with the latency budget as the timeout.

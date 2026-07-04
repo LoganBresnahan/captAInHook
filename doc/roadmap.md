@@ -11,12 +11,13 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
-- [ ] **1. Converge the C# dispatcher and F# actor layer** — handlers become
+- [x] **1. Converge the C# dispatcher and F# actor layer** — handlers become
   supervised actors: dispatch = `Ask` with the latency budget as the ask
   timeout; fail-open/fail-closed maps onto supervision (fail-open ≈ restart +
   degrade, fail-closed ≈ escalate + deny). The moment the two halves become
   one architecture. Touches `Dispatcher.cs` + `Supervision.fs`; demands a
   flow-doc update and new tests (shipshape will insist).
+  Landed as `Worker<'Req,'Reply>` (ADR-0002); escalated-worker fast-fail deferred to the daemon work (item 3).
 - [ ] **2. First live deployment** — wire the echo handler into the real
   `~/.claude/settings.json` (UserPromptSubmit) and watch an actual Claude
   Code session flow through the JSONL trail. Dogfood before features.
@@ -25,7 +26,7 @@ run live*. The framework underneath is what exists today.
 
 - [ ] **3. Daemon topology** — long-lived `captaind` + thin per-event shim
   (DESIGN.md's split). ⚠ Fires ADR-0001's revisit trigger: re-evaluate
-  Akka.NET vs the hand-rolled layer *before* building on either → ADR-0002.
+  Akka.NET vs the hand-rolled layer *before* building on either → ADR-0003.
 - [ ] **4. Management API** — HTTP + WebSocket on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId

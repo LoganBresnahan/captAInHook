@@ -12,6 +12,7 @@
   <ItemGroup>
     <Compile Include="Logging.fs" />
     <Compile Include="Supervision.fs" />
+    <Compile Include="Worker.fs" />
     <Compile Include="Counter.fs" />
     <Compile Include="HotPath.fs" />
   </ItemGroup>

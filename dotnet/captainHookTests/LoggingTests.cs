@@ -70,8 +70,12 @@ public class LoggingTests
             Assert.False(string.IsNullOrEmpty(root.GetProperty("src").GetString()));
             Assert.Contains('.', root.GetProperty("evt").GetString()!);
 
-            // Absent-fields-omitted: ActorId is never set by the dispatcher.
-            Assert.False(root.TryGetProperty("actorId", out _), "dispatcher event must omit actorId");
+            // Absent-fields-omitted: ActorId is never set by the dispatcher
+            // itself. (Constructing a Dispatcher also spawns supervised workers,
+            // whose actor.spawn events legitimately DO carry an actorId — so
+            // scope this check to dispatcher-sourced events.)
+            if (root.GetProperty("src").GetString() == "dispatcher")
+                Assert.False(root.TryGetProperty("actorId", out _), "dispatcher event must omit actorId");
         }
 
         // The failing handler produced a handler.error carrying the fail mode.

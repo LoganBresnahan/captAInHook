@@ -81,6 +81,23 @@ dual-boot RTC skew, which would silently stretch or shrink the window. Tests
 inject a `FakeClock` and advance it explicitly — "6 seconds pass" is one line,
 not a real sleep. Pinned by `SlidingWindow_PrunesAgedAttempts_NoFalseEscalation`.
 
+## The generic Worker — the convergence seam
+
+`Worker<'Req,'Reply>` (`Worker.fs`) is how the C# dispatcher rides this
+machinery without the F# assembly ever seeing a domain type — the dependency
+arrow points C# host → F# lib, so `HookEvent`/`Effect` can never appear here.
+It wraps a caller-supplied `Func<'Req, Task<'Reply>>` in a supervised
+`MailboxProcessor`: `Supervised(sup, id, handlerFactory)` treats the factory
+as the child spec (a fresh delegate per restart = fresh handler state), and
+`AskAsync` rethrows a handler exception with its original stack
+(`ExceptionDispatchInfo`), so to the asker it looks exactly like awaiting the
+delegate directly. A failure inside the worker is **reply-then-crash**: reply
+`Choice2Of2 ex` first (the asker learns immediately instead of burning its ask
+timeout), then raise (so `.Error` still fires and the supervisor restarts or
+escalates). The dispatcher spawns one worker per handler registration — see
+[hook-dispatch.md](hook-dispatch.md) and
+[ADR-0002](../adr/0002-handlers-as-supervised-actors.md).
+
 ## The two mailbox flavors
 
 | | `MailboxProcessor` (default) | `Channel` (hot path) |
@@ -105,8 +122,9 @@ not a real sleep. Pinned by `SlidingWindow_PrunesAgedAttempts_NoFalseEscalation`
 | what | where |
 |---|---|
 | `ActorRef` (Post/Ask/Swap), `SupMsg`, `Supervisor` (+ clock ctor) | `dotnet/captainHookActors/Supervision.fs` |
+| `WorkMsg` DU, `Worker<'Req,'Reply>` (Supervised/AskAsync, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `CounterMsg` DU, worker loop, `Counter` facade | `dotnet/captainHookActors/Counter.fs` |
 | `AuditWriter` bounded actor | `dotnet/captainHookActors/HotPath.fs` |
 | log events | `actor.spawn`, `actor.restart`, `actor.escalate`, `counter.increment/boom`, `audit.drain` |
-| pinned by | `dotnet/captainHookTests/ActorTests.cs`, `HotPathTests.cs` |
-| decision record | `doc/adr/0001-actor-runtime-fsharp-hybrid.md` |
+| pinned by | `dotnet/captainHookTests/ActorTests.cs`, `HotPathTests.cs`; the Worker path by `DispatcherTests.cs` and `ConvergenceTests.cs` |
+| decision records | `doc/adr/0001-actor-runtime-fsharp-hybrid.md`, `doc/adr/0002-handlers-as-supervised-actors.md` |

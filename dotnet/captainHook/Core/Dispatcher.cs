@@ -4,32 +4,97 @@ using CaptainHook.Actors;
 
 namespace CaptainHook.Core;
 
+/// A CHILD SPEC, not a live handler: everything the dispatcher needs to
+/// (re)create a handler — its name, fail mode, and a factory. This is the OTP
+/// child-spec idea ported to the registry: "restart" means "run the factory
+/// again", so a restarted worker gets a genuinely fresh handler.
+internal sealed record HandlerSpec(string Name, FailMode OnFailure, Func<IHandler> Factory);
+
 public sealed class Registry
 {
-    private readonly Dictionary<string, List<IHandler>> _byEvent = new();
+    // Registration order is preserved end-to-end: Merge's inject-concatenation
+    // and last-replace-wins rules depend on it.
+    private readonly List<(string EventType, HandlerSpec Spec)> _specs = new();
 
+    /// Instance registration. Each handler is wrapped as a spec whose factory
+    /// returns THE SAME instance — so instance-registered handlers are NOT
+    /// state-reset by a supervisor restart (fine for stateless handlers, which
+    /// is what this overload is for). Use the factory overload when a restart
+    /// must produce fresh state.
     public Registry On(string eventType, params IHandler[] handlers)
     {
-        if (!_byEvent.TryGetValue(eventType, out var list))
-            _byEvent[eventType] = list = new List<IHandler>();
-        list.AddRange(handlers);
+        foreach (var h in handlers)
+            _specs.Add((eventType, new HandlerSpec(h.Name, h.OnFailure, () => h)));
         return this;
     }
 
-    public IReadOnlyList<IHandler> For(string eventType) =>
-        _byEvent.TryGetValue(eventType, out var list) ? list : Array.Empty<IHandler>();
+    /// Spec registration: the factory runs once at Dispatcher construction and
+    /// once per supervised restart, so a restart yields a genuinely fresh
+    /// handler (fresh state, not just a fresh mailbox).
+    public Registry On(string eventType, string name, Func<IHandler> factory, FailMode onFailure = FailMode.Open)
+    {
+        _specs.Add((eventType, new HandlerSpec(name, onFailure, factory)));
+        return this;
+    }
+
+    /// Everything the Dispatcher needs to spawn one worker per registration.
+    internal IReadOnlyList<(string EventType, HandlerSpec Spec)> Specs => _specs;
 }
 
 public sealed record DispatchResult(Effect Merged, Trace Trace);
 
-public sealed class Dispatcher(Registry registry, TimeSpan budget)
+public sealed class Dispatcher
 {
     private sealed record Outcome(string Name, Effect Effect);
 
+    /// A registered handler, converged onto the actor layer: the spec's name
+    /// and fail mode ride along in C#, while the handler itself lives inside a
+    /// supervised F# Worker actor and is only ever reached via ask.
+    private sealed record Runner(string Name, FailMode OnFailure, Worker<(HookEvent, HandlerContext), Effect> Worker);
+
+    private readonly TimeSpan _budget;
+    private readonly Dictionary<string, List<Runner>> _runners = new();
+
+    /// Workers are spawned HERE, from a snapshot of the registry — register all
+    /// handlers BEFORE constructing the Dispatcher; later Registry.On calls are
+    /// not picked up. The optional supervisor is the test seam (inject one
+    /// built on a fake clock to make restart-window math deterministic).
+    public Dispatcher(Registry registry, TimeSpan budget, Supervisor? supervisor = null)
+    {
+        _budget = budget;
+        var sup = supervisor ?? new Supervisor("dispatcher", maxRestarts: 3, TimeSpan.FromSeconds(5));
+
+        // ONE worker per (eventType, spec) registration. The worker is generic
+        // — the F# side never sees HookEvent/Effect (dependency arrow: C# host
+        // -> F# lib); the (event, ctx) tuple flows through it opaquely and only
+        // the delegate below ever looks inside.
+        var idCounts = new Dictionary<string, int>();
+        foreach (var (eventType, spec) in registry.Specs)
+        {
+            var baseId = $"{eventType}/{spec.Name}";
+            var n = idCounts.TryGetValue(baseId, out var c) ? c + 1 : 1;
+            idCounts[baseId] = n;
+            var id = n == 1 ? baseId : $"{baseId}#{n}";   // disambiguate name collisions
+
+            var worker = Worker<(HookEvent, HandlerContext), Effect>.Supervised(sup, id, () =>
+            {
+                // Child spec in action: a restart re-runs THIS, so factory-
+                // registered handlers come back with fresh state.
+                var h = spec.Factory();
+                return req => h.HandleAsync(req.Item1, req.Item2);
+            });
+
+            if (!_runners.TryGetValue(eventType, out var list))
+                _runners[eventType] = list = new List<Runner>();
+            list.Add(new Runner(spec.Name, spec.OnFailure, worker));
+        }
+    }
+
     public async Task<DispatchResult> DispatchAsync(HookEvent e, string? dispatchId = null)
     {
-        var handlers = registry.For(e.Type);
-        var trace = new Trace(e.Type, budget, handlers.Count);
+        var handlers = _runners.TryGetValue(e.Type, out var list)
+            ? (IReadOnlyList<Runner>)list : Array.Empty<Runner>();
+        var trace = new Trace(e.Type, _budget, handlers.Count);
 
         // Structured trail alongside the human Trace: dispatch.start now, and a
         // span that stamps durMs onto dispatch.done when the whole run finishes.
@@ -37,11 +102,11 @@ public sealed class Dispatcher(Registry registry, TimeSpan budget)
             data: new Dictionary<string, object>
             {
                 ["handlers"] = handlers.Count,
-                ["budgetMs"] = budget.TotalMilliseconds,
+                ["budgetMs"] = _budget.TotalMilliseconds,
             }));
         using var span = Log.Span("dispatcher", "dispatch.done", Fields(e, dispatchId));
 
-        using var budgetCts = new CancellationTokenSource(budget);
+        using var budgetCts = new CancellationTokenSource(_budget);
 
         // FAN-OUT: every handler runs concurrently on the work-stealing thread
         // pool. This is the .NET analogue of BEAM's Task.async_stream or Node's
@@ -91,32 +156,41 @@ public sealed class Dispatcher(Registry registry, TimeSpan budget)
         return new DispatchResult(merged, trace);
     }
 
-    private async Task<Outcome> RunGuarded(IHandler h, HookEvent e, string? dispatchId, CancellationToken budgetCt, Trace trace)
+    private async Task<Outcome> RunGuarded(Runner r, HookEvent e, string? dispatchId, CancellationToken budgetCt, Trace trace)
     {
         var sw = Stopwatch.StartNew();
-        var ctx = new HandlerContext(DateTimeOffset.UtcNow + budget, budgetCt);
+        var ctx = new HandlerContext(DateTimeOffset.UtcNow + _budget, budgetCt);
         try
         {
-            // WaitAsync enforces the budget even on handlers that ignore the token.
-            var eff = await h.HandleAsync(e, ctx).WaitAsync(budgetCt);
-            trace.Handler(h.Name, sw.Elapsed, "ok");
+            // Dispatch IS an ask: the latency budget doubles as the ask timeout,
+            // and WaitAsync on the dispatch-wide token stays as a backstop for
+            // whichever fires first. A handler crash comes back as the original
+            // exception (reply-then-crash inside the worker), so the catch
+            // blocks below see exactly what direct invocation used to throw —
+            // while the crash ALSO reaches the supervisor for restart/escalate.
+            var eff = await r.Worker.AskAsync((e, ctx), (int)_budget.TotalMilliseconds).WaitAsync(budgetCt);
+            trace.Handler(r.Name, sw.Elapsed, "ok");
             Log.Info("dispatcher", "handler.ok", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                data: Handler(h.Name)));
-            return new Outcome(h.Name, eff);
+                data: Handler(r.Name)));
+            return new Outcome(r.Name, eff);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
         {
-            trace.Handler(h.Name, sw.Elapsed, $"TIMEOUT -> fail-{Mode(h)}");
+            // OperationCanceledException: the budget token fired (handler honored
+            // ctx.Ct, or WaitAsync cut it loose). TimeoutException: the ask timed
+            // out — a token-ignoring handler, or a worker already escalated to
+            // dead. All of them are the same story: no answer within budget.
+            trace.Handler(r.Name, sw.Elapsed, $"TIMEOUT -> fail-{Mode(r)}");
             Log.Warn("dispatcher", "handler.timeout", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                data: Handler(h.Name, failMode: Mode(h))));
-            return new Outcome(h.Name, Fail(h));
+                data: Handler(r.Name, failMode: Mode(r))));
+            return new Outcome(r.Name, Fail(r));
         }
         catch (Exception ex)
         {
-            trace.Handler(h.Name, sw.Elapsed, $"ERROR -> fail-{Mode(h)} ({ex.Message})");
+            trace.Handler(r.Name, sw.Elapsed, $"ERROR -> fail-{Mode(r)} ({ex.Message})");
             Log.Error("dispatcher", "handler.error", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                msg: ex.Message, data: Handler(h.Name, failMode: Mode(h))));
-            return new Outcome(h.Name, Fail(h));
+                msg: ex.Message, data: Handler(r.Name, failMode: Mode(r))));
+            return new Outcome(r.Name, Fail(r));
         }
     }
 
@@ -141,10 +215,10 @@ public sealed class Dispatcher(Registry registry, TimeSpan budget)
         return d;
     }
 
-    private static string Mode(IHandler h) => h.OnFailure == FailMode.Closed ? "closed" : "open";
+    private static string Mode(Runner r) => r.OnFailure == FailMode.Closed ? "closed" : "open";
 
-    private static Effect Fail(IHandler h) => h.OnFailure == FailMode.Closed
-        ? new Effect.Decide(Verdict.Deny, $"{h.Name} failed under fail-closed policy")
+    private static Effect Fail(Runner r) => r.OnFailure == FailMode.Closed
+        ? new Effect.Decide(Verdict.Deny, $"{r.Name} failed under fail-closed policy")
         : new Effect.Noop();
 
     // Deterministic merge: deny wins, then ask, then replace-output, then

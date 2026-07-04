@@ -18,7 +18,9 @@ put guarantees.
 v0 on the .NET runtime:
 
 - **Hook dispatch core (C#)** — registry → concurrent fan-out under a latency
-  budget → fail-open/fail-closed → deterministic effect merge. Wire-compatible
+  budget → fail-open/fail-closed → deterministic effect merge; each handler
+  runs inside a supervised F# worker actor
+  ([ADR-0002](doc/adr/0002-handlers-as-supervised-actors.md)). Wire-compatible
   with Claude Code hooks (stdin JSON in, one effect JSON on stdout).
 - **Actor/supervision layer (F#)** — MailboxProcessor actors under a
   hand-rolled one_for_one supervisor (restart intensity on an injectable
@@ -27,7 +29,7 @@ v0 on the .NET runtime:
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
   kept pure for the hook protocol.
-- **Tests** — 25 xunit tests; the bar is green twice in a row.
+- **Tests** — 31 xunit tests; the bar is green twice in a row.
 
 Maps of the system live in [doc/flow/](doc/flow/); decisions in
 [doc/adr/](doc/adr/); direction in [doc/roadmap.md](doc/roadmap.md). The
