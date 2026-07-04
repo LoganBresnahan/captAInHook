@@ -20,8 +20,10 @@ v0 on the .NET runtime:
 - **Hook dispatch core (C#)** — registry → concurrent fan-out under a latency
   budget → fail-open/fail-closed → deterministic effect merge; each handler
   runs inside a supervised F# worker actor
-  ([ADR-0002](doc/adr/0002-handlers-as-supervised-actors.md)). Wire-compatible
-  with Claude Code hooks (stdin JSON in, one effect JSON on stdout).
+  ([ADR-0002](doc/adr/0002-handlers-as-supervised-actors.md)). Harness-agnostic
+  via declarative harness specs — `claude-code` is the built-in default (stdin
+  JSON in, one effect JSON on stdout)
+  ([ADR-0003](doc/adr/0003-declarative-harness-registry.md)).
 - **Actor/supervision layer (F#)** — MailboxProcessor actors under a
   hand-rolled one_for_one supervisor (restart intensity on an injectable
   monotonic clock, escalation), plus a bounded-Channels hot-path actor.
@@ -29,7 +31,8 @@ v0 on the .NET runtime:
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
   kept pure for the hook protocol.
-- **Tests** — 31 xunit tests; the bar is green twice in a row.
+- **Tests** — xunit suite; the bar is green twice in a row (`/shipshape`
+  verifies coverage, docs, and logging conventions).
 
 Maps of the system live in [doc/flow/](doc/flow/); decisions in
 [doc/adr/](doc/adr/); direction in [doc/roadmap.md](doc/roadmap.md). The

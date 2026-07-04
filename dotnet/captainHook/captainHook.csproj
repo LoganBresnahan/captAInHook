@@ -15,4 +15,11 @@
     <ProjectReference Include="../captainHookActors/captainHookActors.fsproj" />
   </ItemGroup>
 
+  <!-- Default harness specs ship INSIDE the assembly (HarnessRegistry reads
+       them via GetManifestResourceStream), so the single-binary deployment
+       never depends on files lying next to the dll. -->
+  <ItemGroup>
+    <EmbeddedResource Include="harnesses/*.json" />
+  </ItemGroup>
+
 </Project>

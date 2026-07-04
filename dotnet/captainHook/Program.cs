@@ -9,33 +9,45 @@ using CaptainHook.Handlers;
 // Claude Code drives a hook, so this wires straight into settings.json — and is
 // testable in isolation:
 //     printf '{...}' | dotnet captainHook.dll hook user-prompt-submit
+//
+// Which host we speak to is now DATA, not code: `--harness <name>` selects a
+// HarnessSpec (default: claude-code) and the spec drives request parsing, the
+// capability gate, and the response wire format. See Core/Harness.cs.
 
 // ---- 0. subcommand: `captainHook actors-demo` — drive the F# actor layer ----
 if (args.Length > 0 && args[0] == "actors-demo")
 {
     await CaptainHook.Demo.ActorsDemo.RunAsync();
-    return;
+    return 0;
 }
 
-// ---- 1. which lifecycle event fired? ----------------------------------------
+// ---- 1. args: which lifecycle event fired, and for which harness? -----------
 string? eventName = null;
+var harnessName = "claude-code";
 for (int i = 0; i + 1 < args.Length; i++)
-    if (args[i] == "hook") { eventName = args[i + 1]; break; }
+{
+    if (args[i] == "hook") { eventName ??= args[++i]; }
+    else if (args[i] == "--harness") { harnessName = args[++i]; }
+}
+
+// Resolve the harness BEFORE touching stdin/stdout: an unknown name must put
+// a clear error on stderr and NOTHING on stdout (the host parses stdout).
+HarnessSpec spec;
+try { spec = new HarnessRegistry().Get(harnessName); }
+catch (InvalidOperationException ex)
+{
+    await Console.Error.WriteLineAsync($"captAInHook: {ex.Message}");
+    return 1;
+}
 
 string raw = await Console.In.ReadToEndAsync();
 JsonElement payload;
 try { payload = JsonSerializer.Deserialize<JsonElement>(string.IsNullOrWhiteSpace(raw) ? "{}" : raw); }
 catch { payload = JsonSerializer.Deserialize<JsonElement>("{}"); }
 
-// The host also carries the name in the JSON (`hook_event_name`); fall back to it.
-eventName ??= payload.TryGetProperty("hook_event_name", out var hen) ? hen.GetString() : null;
-eventName = Canon(eventName ?? "UserPromptSubmit");
-
-var evt = new HookEvent(
-    Type: eventName,
-    SessionId: payload.TryGetProperty("session_id", out var sid) ? sid.GetString() : null,
-    Cwd: payload.TryGetProperty("cwd", out var cwd) ? cwd.GetString() : null,
-    Payload: payload);
+// The spec knows which payload fields carry the event name / session / cwd;
+// the CLI arg (kebab-case) wins over the payload's own field.
+var evt = Harness.ParseEvent(spec, eventName, payload);
 
 // ---- 2. registry: echo everywhere; a latency probe on UserPromptSubmit so we
 //         can watch two handlers fan out concurrently under one budget. --------
@@ -57,27 +69,9 @@ var dispatchId = Guid.NewGuid().ToString("N")[..8];
 var result = await new Dispatcher(registry, budget: TimeSpan.FromSeconds(2)).DispatchAsync(evt, dispatchId);
 
 // ---- 4. effect -> host (stdout); human trace -> stderr ----------------------
-Console.Out.Write(ClaudeCode.Serialize(evt, result.Merged));
+// Gate first (a harness only ever receives effect kinds its spec declared),
+// then serialize through the adapter the spec selected.
+var final = Harness.ApplyCapabilityGate(spec, evt, result.Merged, dispatchId);
+Console.Out.Write(ResponseAdapters.Get(spec.ResponseAdapter).Serialize(evt, final));
 await Console.Error.WriteLineAsync(result.Trace.Render());
-
-// kebab-case (cavemem style) -> PascalCase (host style)
-static string Canon(string s) =>
-    s.Contains('-')
-        ? string.Concat(s.Split('-').Select(p => p.Length == 0 ? p : char.ToUpperInvariant(p[0]) + p[1..]))
-        : s;
-
-// Maps our internal Effect onto Claude Code's hook stdout contract.
-// NOTE: field names follow the Agent SDK hook docs; verify against current docs
-// before relying on them in a live settings.json wire-up.
-static class ClaudeCode
-{
-    public static string Serialize(HookEvent e, Effect eff) => eff switch
-    {
-        Effect.Inject inj => J(new { hookSpecificOutput = new { hookEventName = e.Type, additionalContext = inj.Text } }),
-        Effect.Decide dec => J(new { hookSpecificOutput = new { hookEventName = e.Type, permissionDecision = dec.Verdict.ToString().ToLowerInvariant(), permissionDecisionReason = dec.Reason ?? "" } }),
-        Effect.Replace rep => J(new { hookSpecificOutput = new { hookEventName = e.Type, replaceOutput = rep.Text } }),
-        _ => "{}",
-    };
-
-    static string J(object o) => JsonSerializer.Serialize(o);
-}
+return 0;

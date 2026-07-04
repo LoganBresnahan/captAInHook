@@ -1,0 +1,25 @@
+{
+  "name": "claude-code",
+  "request": {
+    "eventNameField": "hook_event_name",
+    "sessionIdField": "session_id",
+    "cwdField": "cwd"
+  },
+  "response": { "adapter": "claude-hook-json" },
+  "events": {
+    "SessionStart":     { "effects": ["inject"] },
+    "UserPromptSubmit": { "effects": ["inject"] },
+    "PreToolUse":       { "effects": ["decide", "inject"] },
+    "PostToolUse":      { "effects": ["inject", "replace"] },
+    "Stop":             { "effects": [] },
+    "SessionEnd":       { "effects": [] }
+  },
+  "install": {
+    "configFile": "~/.claude/settings.json",
+    "hooksPath": "hooks.{event}",
+    "entry": {
+      "type": "command",
+      "command": "{dotnet} {captainHookDll} hook {event-kebab}"
+    }
+  }
+}

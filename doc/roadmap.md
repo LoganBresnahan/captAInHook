@@ -23,7 +23,7 @@ run live*. The framework underneath is what exists today.
   Code session flow through the JSONL trail. Dogfood before features.
   Observed live 2026-07-04: a real session's dispatch in the trail (47.7ms
   end-to-end) with the injection visible in-context.
-- [ ] **3. Declarative harness registry** — no hardcoded harness-string
+- [x] **3. Declarative harness registry** — no hardcoded harness-string
   branches: a `HarnessSpec` registry (embedded defaults + validated user
   overrides in `~/.captainHook/harnesses/`) declares each harness's request
   fields, response adapter (a CLOSED coded set — data selects, code

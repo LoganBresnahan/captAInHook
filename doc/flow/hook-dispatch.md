@@ -1,17 +1,23 @@
 # Flow: hook dispatch — from agent event to merged effect
 
-How one lifecycle event travels through the C# core: in on stdin, fanned out
-to supervised handler workers under a budget, merged deterministically, out on
-stdout — with a structured JSONL trail the whole way.
+How one lifecycle event travels through the C# core: in on stdin (parsed per
+the selected harness spec), fanned out to supervised handler workers under a
+budget, merged deterministically, capability-gated, out on stdout in the
+harness's wire format — with a structured JSONL trail the whole way.
 
 ```
- Claude Code / Agent SDK host
+ Agent harness (Claude Code by default; any host described by a HarnessSpec)
         │  fires a lifecycle hook; payload JSON on STDIN
         ▼
 ┌ captainHook (per-invocation binary) ──────────────────────────────────────┐
 │ Program.cs                                                                │
-│   parse stdin JSON ─ canon event name (user-prompt-submit →               │
-│   UserPromptSubmit) ─ mint dispatchId (8 hex)                             │
+│   resolve HarnessSpec (--harness <name>, default claude-code)             │
+│     embedded defaults ◄─ overridden by ~/.captainHook/harnesses/*.json    │
+│     (invalid override skipped, default kept)   ── harness.specInvalid     │
+│        │                                                                  │
+│        ▼                                                                  │
+│   parse stdin JSON per the spec's field names ─ canon event name          │
+│   (user-prompt-submit → UserPromptSubmit) ─ mint dispatchId (8 hex)       │
 │        │                                                                  │
 │        ▼                                                                  │
 │ ctor: snapshot Registry.Specs ──► spawn one supervised                    │
@@ -37,9 +43,15 @@ stdout — with a structured JSONL trail the whole way.
 │        ▼                                                                  │
 │   Merge(loop effects):  deny ▸ ask ▸ replace(last) ▸ inject(concat)       │
 │        │                                        ── dispatch.done (durMs)  │
+│        ▼                                                                  │
+│   capability gate: effect kind undeclared for this event in the spec?     │
+│   warn + downgrade to Noop                 ── harness.effectUnsupported   │
+│        │                                                                  │
+│        ▼                                                                  │
+│   spec's response adapter (closed set: claude-hook-json / generic-json)   │
 └────────┼──────────────────────────────────────────────────────────────────┘
          ▼
- STDOUT  one effect JSON (hookSpecificOutput…)  ← the ONLY stdout bytes
+ STDOUT  one effect JSON in the harness's wire format  ← the ONLY stdout bytes
  STDERR  human Trace summary (+ pretty log one-liners)
  FILE    ~/.captainHook/logs/captainHook.jsonl  ← the digestible trail
 ```
@@ -51,6 +63,31 @@ the hook's response, so exactly one JSON object may ever appear there. All
 diagnostics are split by audience — humans get the `Trace` summary and pretty
 one-liners on stderr; machines get JSONL in the log file. This is why
 `Logging.fs` structurally cannot write to stdout.
+
+## The harness boundary
+
+Which host we speak to is data, not code
+([ADR-0003](../adr/0003-declarative-harness-registry.md)). `--harness <name>`
+(default `claude-code`) selects a `HarnessSpec` from the `HarnessRegistry`:
+embedded defaults (`harnesses/*.json`, compiled into the assembly) overlaid
+by user overrides from `CAPTAINHOOK_HARNESS_DIR` (else
+`~/.captainHook/harnesses`) — a valid same-name file replaces the default
+wholesale, a new name adds a harness, and an invalid file is skipped with a
+`harness.specInvalid` warning, so a bad override can never crash the live
+hook. An unknown `--harness` name exits 1 with a stderr message and **zero**
+stdout bytes.
+
+The spec drives both ends of the dispatch. At ingress, `Harness.ParseEvent`
+reads the event name, session id, and cwd from whichever payload fields the
+spec declares (the CLI event arg wins over the payload field). At egress, the
+merged effect passes `Harness.ApplyCapabilityGate`: an effect kind the spec
+never declared for that event is downgraded to `Noop` with a
+`harness.effectUnsupported` warning — never send a harness something it
+cannot represent — while an event *absent* from the spec passes permissively
+with a `harness.eventUndeclared` debug line. The surviving effect is then
+serialized by the adapter the spec names (`claude-hook-json` or
+`generic-json`) — a CLOSED, coded set: data selects *which* adapter, code
+defines *what* it emits, and config never becomes a template language.
 
 ## Fan-out under a budget
 
@@ -117,11 +154,13 @@ blocks the response.
 
 | what | where |
 |---|---|
-| stdin parse, event canon, dispatchId, stdout write | `dotnet/captainHook/Program.cs` |
+| harness resolution, stdin read, dispatchId, stdout write | `dotnet/captainHook/Program.cs` |
+| `HarnessSpec` (+`TryParse`), `HarnessRegistry`, `Harness.ParseEvent`/`Canon`, `Harness.ApplyCapabilityGate`, `IResponseAdapter` + `ResponseAdapters` | `dotnet/captainHook/Core/Harness.cs` |
+| default harness spec (embedded resource) | `dotnet/captainHook/harnesses/claude-code.json` |
 | `Registry` (spec registration), `HandlerSpec`, `Dispatcher` (ctor spawns workers), `RunGuarded`, `Merge`, `Trace` | `dotnet/captainHook/Core/Dispatcher.cs` |
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error`, `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/escalate` (src `sup:dispatcher`) |
-| pinned by | `dotnet/captainHookTests/DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization) |
-| decision record | `doc/adr/0002-handlers-as-supervised-actors.md` |
+| log events | `dispatch.start`, `handler.ok/timeout/error`, `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/escalate` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`) |
+| pinned by | `dotnet/captainHookTests/DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
+| decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md` |
