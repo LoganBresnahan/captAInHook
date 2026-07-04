@@ -43,14 +43,14 @@ layer (the Akka re-evaluation below).
    `captainHook` executable, mode chosen by invocation:
    - *daemon* — `captainHook --daemon`: build the registry, dispatcher, and
      supervised workers **once**, then serve dispatches over the socket.
-     Environment (`CAPTAINHOOK_*`) is read at daemon start, and so is the
-     harness registry — the embedded specs *and* the
-     `~/.captainHook/harnesses/` overrides ADR-0003 loads Lazy-once. Both
-     become daemon-start configuration, no longer per-hook: ADR-0003's
-     edit-a-spec, effective-next-hook contract is **explicitly superseded**
-     — an override edit or a new harness file takes effect at the next
-     daemon start (`--replace` / `doctor`, decision 3), with livelier reload
-     deferred until the management API wants it.
+     Environment (`CAPTAINHOOK_*`) is read at daemon start and becomes
+     daemon-start configuration, no longer per-hook — a probe or log-path
+     change now needs a restart (`--replace` / `doctor`, decision 3) or,
+     eventually, a management-API push. Harness specs are the deliberate
+     exception: to preserve ADR-0003's edit-a-spec-effective-next-hook
+     contract, the daemon `stat`s the `~/.captainHook/harnesses/` override
+     directory per dispatch and reloads on change (one syscall; the embedded
+     defaults are fixed at build).
    - *shim* — the existing `hook <event>` invocation, unchanged from the
      host's point of view: connect to the socket, forward a framed request
      (dispatchId, event name, harness name, raw stdin bytes), relay the
@@ -214,6 +214,27 @@ layer (the Akka re-evaluation below).
    than grow the daemon. A bounded mailbox is explicitly **rejected as the
    wedge fix**: a wedged worker that rejects new work is still a dead
    handler; abandon-and-respawn is the fix regardless of mailbox type.
+
+   Head-of-line blocking — the router pull — is narrower than it looks, and
+   the .NET thread pool does **not** address it: per-worker serialization is
+   deliberate (private state, one message at a time), so more threads cannot
+   unblock a queue that is serial by construction. It bites only a handler
+   that is **stateful *and* slow *and* concurrently hit**, and the fix splits
+   on state. A **stateless** handler needs no mailbox at all — the actor
+   exists solely to serialize state access — so it runs directly on the
+   thread pool under a `SemaphoreSlim` concurrency cap and head-of-line
+   blocking never arises (zero deps; here the thread pool *is* the answer).
+   A **stateful** handler that becomes the bottleneck needs *sharded*
+   serialization — route by key so same-key messages still serialize while
+   different keys run in parallel — for which the zero-dep tool is a
+   mailbox-per-shard over Channels behind the same `Worker` facade, and the
+   bought tool is Akka.NET's `ConsistentHashingPool` (the one genuine Akka
+   pull above; `System.Threading.Tasks.Dataflow`'s `ActionBlock` is the
+   closest ready-made shape but is a package and tell-only). The router
+   question is deferred to *observed* evidence not from caution but because
+   only a specific stateful handler under real concurrent load reveals which
+   shape it needs — and either shape is an internals swap behind
+   `Worker<'Req,'Reply>`, not an API change.
 7. **Build strategy: one JIT binary now; AOT behind a measurement gate.**
    The daemon's win — setup paid once — is independent of compilation
    strategy, and the collapsed fallback bounds the worst case at today's
@@ -264,24 +285,60 @@ Zero new runtime dependencies, as always: BCL + FSharp.Core only.
 
 ### Negative
 
-- **Per-invocation context freezes at daemon start.** `CAPTAINHOOK_PROBE=1`
-  on a single hook no longer reaches a warm daemon, and a harness-override
-  edit is invisible until a daemon restart (`--replace` / `doctor`);
-  per-invocation knobs move to daemon start and eventually the management
-  API. Live debugging habits change.
-- **Wedge abandonment leaks the stuck task.** Bounded by the wedge breaker
+- **N1 · Env freezes at daemon start.** `CAPTAINHOOK_PROBE=1` on a single
+  hook no longer reaches a warm daemon; per-invocation env knobs move to
+  daemon start and eventually the management API (harness-override *files*
+  stay hot via decision 1's stat-reload). Live debugging habits change.
+- **N2 · Wedge abandonment leaks the stuck task.** Bounded by the wedge breaker
   (a chronic wedger escalates), but a hostile handler still costs leaked
   threads until it does.
-- **Two processes in one trail.** Shim and daemon both emit JSONL; the
+- **N3 · Two processes in one trail.** Shim and daemon both emit JSONL; the
   shim-minted `dispatchId` (decision 1) and the shared default log path keep
   a digest able to stitch one dispatch together, but both halves must be
   read.
-- **A second hand-rolled category.** OS-process lifecycle — locks, signals,
+- **N4 · A second hand-rolled category.** OS-process lifecycle — locks, signals,
   reaping — is fiddly and ours to get right, mitigated by adopting pharos's
   proven ADR-030 contract wholesale rather than designing from scratch.
-- **Collapsed-mode hooks still pay today's full cost** — the first event
+- **N5 · Collapsed-mode hooks still pay today's full cost** — the first event
   after boot and any pre-delivery-failure retry run at cold-process speed
   (strictly more than the 47.7ms dispatch span), not warm speed.
+
+### Mitigations
+
+Each Negative is a real cost, not a blocker; every one has a remedy — most
+deferrable, a few v1:
+
+- **N1 · Env freeze** — harness specs stay hot via decision 1's per-dispatch
+  stat-reload; env changes take a restart (`--replace` / `doctor`) until the
+  management API can push them, with a whitelisted `CAPTAINHOOK_*` passthrough
+  in the request frame as the escape hatch if debug-knob friction proves real.
+- **N2 · Leaked wedge tasks** — the wedge breaker caps the leak count; the
+  structural fix is process isolation for untrusted or expensive handlers (a
+  process takes `SIGKILL`, a thread cannot), converging with the hook-trust
+  and real-handler roadmap items — in-process handlers owe a good-cancellation
+  contract, anything else runs where the kernel can reclaim it. A daemon past
+  a leaked-thread threshold drains and self-restarts (near-free; it is already
+  respawnable).
+- **N3 · Split trail** — single-writer-per-dispatch (warm: the daemon writes
+  and the shim ships its trace over the socket it already holds; collapsed:
+  the shim writes locally), plus `O_APPEND` one-syscall line writes
+  (POSIX-atomic under `PIPE_BUF`). This also closes a cross-process interleave
+  **already latent** whenever two agent sessions log concurrently — the daemon
+  only makes it routine.
+- **N4 · OS-lifecycle surface** — beyond adopting pharos's hardened ADR-030
+  contract wholesale, the lifecycle takes the same injectable seams the actor
+  layer has: an injected clock (idle-exit), an injected socket path /
+  filesystem (spawn-race, in a temp dir), a drivable lock→bind→listen unit,
+  and a concurrency soak test (N shims against cold state → exactly one daemon,
+  no double-dispatch, no orphans). Hand-rolled OS plumbing is acceptable only
+  because it is made as deterministically testable as the ~90-line actor layer.
+- **N5 · Cold collapsed hooks** — accept it: it is the correctness floor.
+  SessionStart spawns the daemon and collapse-dispatches itself, so only the
+  first hook of a session is cold; a generous idle window keeps it warm across
+  gaps; an always-on service install (the install-UX roadmap item) removes even
+  the first-hook cost for steady-state users. The dev-loop coldness is
+  *correct* — a fresh content-hash after every rebuild guarantees freshly built
+  code never talks to a stale daemon, and tests run `--no-daemon` regardless.
 
 ## Alternatives considered
 
