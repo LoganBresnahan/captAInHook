@@ -30,8 +30,8 @@ v0 on the .NET runtime:
 - **Tests** — 25 xunit tests; the bar is green twice in a row.
 
 Maps of the system live in [doc/flow/](doc/flow/); decisions in
-[doc/adr/](doc/adr/). The `/shipshape` skill verifies tests, docs, and
-logging are in order.
+[doc/adr/](doc/adr/); direction in [doc/roadmap.md](doc/roadmap.md). The
+`/shipshape` skill verifies tests, docs, and logging are in order.
 
 The core remains a **one-spec / N-runtime harness**: the same contracts are
 planned in Node (event loop) and BEAM (actors) to compare concurrency
