@@ -18,15 +18,27 @@ run live*. The framework underneath is what exists today.
   one architecture. Touches `Dispatcher.cs` + `Supervision.fs`; demands a
   flow-doc update and new tests (shipshape will insist).
   Landed as `Worker<'Req,'Reply>` (ADR-0002); escalated-worker fast-fail deferred to the daemon work (item 3).
-- [ ] **2. First live deployment** — wire the echo handler into the real
+- [x] **2. First live deployment** — wire the echo handler into the real
   `~/.claude/settings.json` (UserPromptSubmit) and watch an actual Claude
   Code session flow through the JSONL trail. Dogfood before features.
+  Observed live 2026-07-04: a real session's dispatch in the trail (47.7ms
+  end-to-end) with the injection visible in-context.
+- [ ] **3. Declarative harness registry** — no hardcoded harness-string
+  branches: a `HarnessSpec` registry (embedded defaults + validated user
+  overrides in `~/.captainHook/harnesses/`) declares each harness's request
+  fields, response adapter (a CLOSED coded set — data selects, code
+  implements; config never becomes a template language), per-event effect
+  capabilities, and install target (the data the management API + GUI will
+  consume). Pattern lineage: pharos `config.gleam` (defaults/load/cached
+  layering, tool gating) and moby `models/registry.ts` (capability registry
+  + validated custom entries). `claude-code` stays the default; a
+  `generic-json` adapter proves N>1.
 
 ## Next
 
-- [ ] **3. Daemon topology** — long-lived `captaind` + thin per-event shim
+- [ ] **4. Daemon topology** — long-lived `captaind` + thin per-event shim
   (DESIGN.md's split). ⚠ Fires ADR-0001's revisit trigger: re-evaluate
-  Akka.NET vs the hand-rolled layer *before* building on either → ADR-0003.
+  Akka.NET vs the hand-rolled layer *before* building on either → an ADR.
   **Carry-ins from ADR-0002 (do not forget):** (a) a handler that IGNORES its
   cancellation token and hangs never crashes its worker — the mailbox stays
   blocked and later asks queue behind it (fix: cancel-on-timeout kill/respawn,
@@ -34,11 +46,11 @@ run live*. The framework underneath is what exists today.
   full ask timeout — add fast-fail-on-dead; (c) budget timeouts of
   token-honoring handlers count as crashes toward the restart window —
   chronic slowness escalates; keep or change *deliberately*.
-- [ ] **4. Management API** — HTTP + WebSocket on the daemon: inventory of
+- [ ] **5. Management API** — HTTP + WebSocket on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId
   correlation = per-dispatch traces for free).
-- [ ] **5. GUI v1: browser UI** — localhost web app served by the daemon.
+- [ ] **6. GUI v1: browser UI** — localhost web app served by the daemon.
   Catalog + one-click install, live dispatch traces, supervision view
   (restarts/escalations as they happen). Web-first per the GUI direction
   below; on WSL2 this is the *best* UX, not a fallback. Lands WITH a
@@ -48,20 +60,20 @@ run live*. The framework underneath is what exists today.
 
 ## Later
 
-- [ ] **6. Desktop shell** — wrap the same web assets in Photino (native
+- [ ] **7. Desktop shell** — wrap the same web assets in Photino (native
   window, .NET runtime in-process) once the browser UI proves the workflows.
   ADR to record Photino vs Tauri vs staying browser-only.
-- [ ] **7. TUI** — geex-style terminal UI against the same API, for product
+- [ ] **8. TUI** — geex-style terminal UI against the same API, for product
   reasons (SSH-side admin, terminal-native users) — not as the agent's
   feedback instrument: the feedback pyramid is API assertions (bulk) →
   Playwright over the web UI (visual) → TUI capture only to test the TUI.
-- [ ] **8. Real handlers** — the payloads the framework exists for: retriever
+- [ ] **9. Real handlers** — the payloads the framework exists for: retriever
   (forced-RAG on UserPromptSubmit), policy gate (PreToolUse write approval),
   memory (SessionStart/Stop, cavemem-shaped).
-- [ ] **9. Hook trust model** — installing a hook = installing arbitrary code
+- [ ] **10. Hook trust model** — installing a hook = installing arbitrary code
   that runs on every prompt. The install UX must show exactly what will
   execute, from where, before touching settings.
-- [ ] **10. N-runtime harness** — port the core spec to Node and BEAM
+- [ ] **11. N-runtime harness** — port the core spec to Node and BEAM
   (DESIGN.md's comparison thesis — still the point of the exercise).
 
 ## Parking lot
@@ -77,7 +89,7 @@ run live*. The framework underneath is what exists today.
 
 **One API, three faces, in this order:**
 
-1. **Browser UI first.** The runtime becomes a daemon anyway (item 3); serving
+1. **Browser UI first.** The runtime becomes a daemon anyway (item 4); serving
    localhost HTML/JS reuses web skills we already have, needs zero packaging,
    and is first-class from WSL2 (Windows browser → localhost), where desktop
    GUI apps under WSLg are second-class.
@@ -87,7 +99,7 @@ run live*. The framework underneath is what exists today.
    process behind an IPC boundary — at which point plain localhost-in-browser
    already does the same job with less machinery. Tauri is right when the
    core is Rust; ours is .NET.
-3. **TUI as the dev-loop instrument** (item 7), driving the same API.
+3. **TUI as the dev-loop instrument** (item 8), driving the same API.
 
 The structured log stream (JSONL + correlation ids) is the GUI's live data
 feed — the observability layer was built GUI-ready before the GUI existed.
