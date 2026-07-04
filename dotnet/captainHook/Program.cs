@@ -41,8 +41,14 @@ var evt = new HookEvent(
 //         can watch two handlers fan out concurrently under one budget. --------
 var registry = new Registry()
     .On("SessionStart", new EchoHandler())
-    .On("UserPromptSubmit", new EchoHandler(), new LatencyProbeHandler(TimeSpan.FromMilliseconds(150)))
+    .On("UserPromptSubmit", new EchoHandler())
     .On("PostToolUse", new EchoHandler());
+
+// Fan-out demo probe: +150ms and a second inject on every UserPromptSubmit.
+// Opt-in via env so a LIVE deployment doesn't tax every real prompt with it.
+// (Register before the Dispatcher ctor — workers spawn from a registry snapshot.)
+if (Environment.GetEnvironmentVariable("CAPTAINHOOK_PROBE") == "1")
+    registry.On("UserPromptSubmit", new LatencyProbeHandler(TimeSpan.FromMilliseconds(150)));
 
 // ---- 3. dispatch under a latency budget -------------------------------------
 // One short dispatchId per invocation: every structured log line this run emits
