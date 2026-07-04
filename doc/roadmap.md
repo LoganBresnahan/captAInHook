@@ -27,6 +27,13 @@ run live*. The framework underneath is what exists today.
 - [ ] **3. Daemon topology** — long-lived `captaind` + thin per-event shim
   (DESIGN.md's split). ⚠ Fires ADR-0001's revisit trigger: re-evaluate
   Akka.NET vs the hand-rolled layer *before* building on either → ADR-0003.
+  **Carry-ins from ADR-0002 (do not forget):** (a) a handler that IGNORES its
+  cancellation token and hangs never crashes its worker — the mailbox stays
+  blocked and later asks queue behind it (fix: cancel-on-timeout kill/respawn,
+  or bounded mailbox); (b) asks against an ESCALATED (dead) worker burn the
+  full ask timeout — add fast-fail-on-dead; (c) budget timeouts of
+  token-honoring handlers count as crashes toward the restart window —
+  chronic slowness escalates; keep or change *deliberately*.
 - [ ] **4. Management API** — HTTP + WebSocket on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId
