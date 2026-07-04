@@ -17,7 +17,7 @@ corrupted for the life of the process.
 
 Today that costs little: the hook binary is per-invocation, so every dispatch
 starts from a fresh process anyway. But the daemon topology
-([roadmap item 3](../roadmap.md)) makes handlers long-lived — caches, session
+([the daemon-topology roadmap item](../roadmap.md)) makes handlers long-lived — caches, session
 state, audit writers surviving thousands of dispatches — and long-lived
 stateful handlers need exactly what the actor layer already provides: private
 state behind a mailbox, one message at a time, crash → supervised restart with
@@ -95,7 +95,7 @@ Zero new runtime dependencies, as before: BCL + FSharp.Core only.
   persistently crashing handler into an escalated (dead) worker
   (`actor.escalate`), and every subsequent dispatch degrades to that
   handler's fail-mode effect instead of re-running broken code.
-- **The daemon-ready shape.** Roadmap item 3 no longer requires
+- **The daemon-ready shape.** The daemon-topology roadmap item no longer requires
   re-architecting the dispatch path — the workers are already long-lived-
   capable, and the supervision layer is now on the critical path where its
   bugs surface in the dispatch test suite rather than in a demo.
@@ -110,7 +110,7 @@ Zero new runtime dependencies, as before: BCL + FSharp.Core only.
 - **An escalated worker burns the full ask timeout on every subsequent
   dispatch** before surfacing `TimeoutException` → its fail-mode effect. A
   fast-fail-on-dead-worker optimization is a known follow-up, deferred to the
-  daemon work (roadmap item 3), where a long-lived process can actually
+  daemon work (the daemon-topology roadmap item), where a long-lived process can actually
   accumulate escalated workers.
 - **Budget timeouts of token-honoring handlers count as crashes.** A handler
   that honors `ctx.Ct` throws `OperationCanceledException` *inside* the
@@ -130,12 +130,12 @@ Zero new runtime dependencies, as before: BCL + FSharp.Core only.
 | Option | Why not (now) |
 | --- | --- |
 | Move the domain types (`HookEvent`, `Effect`) into the F# assembly so workers are typed natively | Large churn across the host, handlers, and tests; C# ergonomics of DU-heavy domain types are worse than records; the generic worker delivers the same supervision without moving anything |
-| Keep plain `Task` handlers (status quo) | No supervision, no state reset, no daemon story — the two halves stay disconnected forever, and roadmap item 3 inherits the convergence under pressure |
+| Keep plain `Task` handlers (status quo) | No supervision, no state reset, no daemon story — the two halves stay disconnected forever, and the daemon work inherits the convergence under pressure |
 | Bounded-Channels worker instead of `MailboxProcessor` | Viable, and stays viable — deferred per ADR-0001's hybrid split: MailboxProcessor ergonomics (DU protocol, native ask) win at hook rates; switch the worker's internals when a hot path demands backpressure or throughput |
 
 ## Revisit triggers
 
-- **The daemon lands (roadmap item 3):** add fast-fail on escalated/dead
+- **The daemon lands (the daemon-topology roadmap item):** add fast-fail on escalated/dead
   workers, decide worker lifecycle (draining, idle shutdown), and revisit
   cancel-on-timeout for token-ignoring handlers and the timeout-counts-as-
   crash policy for token-honoring ones.
