@@ -33,16 +33,20 @@ run live*. The framework underneath is what exists today.
 - [ ] **5. GUI v1: browser UI** — localhost web app served by the daemon.
   Catalog + one-click install, live dispatch traces, supervision view
   (restarts/escalations as they happen). Web-first per the GUI direction
-  below; on WSL2 this is the *best* UX, not a fallback.
+  below; on WSL2 this is the *best* UX, not a fallback. Lands WITH a
+  Playwright harness (Microsoft.Playwright, same xunit suite): the DOM +
+  accessibility tree is the agent-legible surface — semantic locators and
+  auto-waiting beat TUI screen-scraping for the agentic dev loop.
 
 ## Later
 
 - [ ] **6. Desktop shell** — wrap the same web assets in Photino (native
   window, .NET runtime in-process) once the browser UI proves the workflows.
   ADR to record Photino vs Tauri vs staying browser-only.
-- [ ] **7. TUI dev loop** — geex-style terminal UI against the same API: the
-  agentic development instrument (cheap for an agent to drive, render, and
-  read), not the end-user product.
+- [ ] **7. TUI** — geex-style terminal UI against the same API, for product
+  reasons (SSH-side admin, terminal-native users) — not as the agent's
+  feedback instrument: the feedback pyramid is API assertions (bulk) →
+  Playwright over the web UI (visual) → TUI capture only to test the TUI.
 - [ ] **8. Real handlers** — the payloads the framework exists for: retriever
   (forced-RAG on UserPromptSubmit), policy gate (PreToolUse write approval),
   memory (SessionStart/Stop, cavemem-shaped).
