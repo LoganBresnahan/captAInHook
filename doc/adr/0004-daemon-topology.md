@@ -248,6 +248,22 @@ layer (the Akka re-evaluation below).
    JIT daemon — reflection-based JSON and F# stay daemon-side by
    construction either way.
 
+   **Measured (2026-07-04, `CAPTAINHOOK_COLDSTART=1`, `Core/ColdStartProbe.cs`,
+   7 steady cold runs).** End-to-end cold start ~216ms, and Release ≈ Debug
+   (~216 vs ~205ms) — a run-once process is JIT/startup-bound, so
+   optimization level is no lever; only *not running* the managed code
+   (daemon) or *not JIT-ing* it (AOT) helps. `procBoot` (CLR + assembly load
+   + entry JIT) is ~67ms / **31%**; the managed remainder (harness resolve,
+   parse, Dispatcher ctor, first dispatch) is ~149ms / **69%**, nearly all
+   first-run JIT the daemon amortizes. So raw process start does **not**
+   dominate the total — AOT-the-whole-binary is out, since the daemon
+   eliminates the 69% without the F#/reflection-AOT fight — but `procBoot`
+   is ~all that is left on the shim's hot path once warm, so AOT stays
+   justified for the thin shim as a **second-order** step: daemon first
+   (the ~70% win), AOT-the-shim later, gated on whether the residual
+   (~40-60ms, lower for a thinner shim that loads less than this full
+   binary — needs its own measurement) is felt.
+
 **Pattern lineage.** The lifecycle layer borrows from pharos-mcp's LSP pool —
 the sibling project that find-or-spawns long-lived language servers:
 connect-or-spawn shape (`src/pharos/lsp/pool.gleam`), readiness as a hard
