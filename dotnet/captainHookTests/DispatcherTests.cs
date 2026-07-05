@@ -162,10 +162,15 @@ public class DispatcherFailureTests
 
         var result = await dispatcher.DispatchAsync(Ev("PostToolUse"));
 
-        // The side effect actually ran (DispatchAsync drains the side channel
-        // before returning in single-shot mode)...
+        // Since daemon-serve-loop, the side channel is LONG-LIVED: the
+        // response never waits on background work (in a daemon it outlives the
+        // response by design), so the dispatch may return before the effect
+        // runs...
+        Assert.IsType<Effect.Noop>(result.Merged);   // never leaks into the merge
+        // ...and completing the queue (the single-shot drain-before-exit
+        // contract, now explicit) guarantees it ran.
+        await dispatcher.CompleteBackgroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(ran.Task.IsCompletedSuccessfully, "background effect did not run");
-        // ...and it never leaks into the loop-effect merge.
-        Assert.IsType<Effect.Noop>(result.Merged);
+        Assert.Equal(0, dispatcher.BackgroundPending);
     }
 }

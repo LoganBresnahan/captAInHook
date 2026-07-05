@@ -71,6 +71,12 @@ public static class HookRun
         var result = await dispatcher.DispatchAsync(evt, dispatchId);
         probe?.Dispatched();
 
+        // Single-shot: drain background work before exit (the queue itself is
+        // long-lived for the daemon's sake; a per-invocation process must not
+        // exit with effects still queued). Drain BEFORE rendering the trace so
+        // side lines still appear in it, exactly as before the queue moved.
+        await dispatcher.CompleteBackgroundAsync();
+
         // Effect -> stdout (gate first: a harness only ever receives effect kinds
         // its spec declared), human trace -> stderr.
         var final = Harness.ApplyCapabilityGate(spec, evt, result.Merged, dispatchId);

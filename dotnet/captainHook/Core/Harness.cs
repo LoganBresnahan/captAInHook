@@ -124,12 +124,17 @@ public sealed class HarnessRegistry
     /// else ~/.captainHook/harnesses); tests pass an explicit directory.
     public HarnessRegistry(string? overrideDir = null)
     {
-        var dir = overrideDir
-            ?? Environment.GetEnvironmentVariable("CAPTAINHOOK_HARNESS_DIR")
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                            ".captainHook", "harnesses");
-        _specs = new Lazy<Dictionary<string, HarnessSpec>>(() => Load(dir));
+        _specs = new Lazy<Dictionary<string, HarnessSpec>>(() => Load(ResolveDir(overrideDir)));
     }
+
+    /// The override directory this process uses: explicit, else the env var,
+    /// else ~/.captainHook/harnesses. Shared with ReloadingHarnessRegistry so
+    /// the watcher and the loader always agree on the directory.
+    public static string ResolveDir(string? overrideDir = null) =>
+        overrideDir
+        ?? Environment.GetEnvironmentVariable("CAPTAINHOOK_HARNESS_DIR")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        ".captainHook", "harnesses");
 
     public HarnessSpec Get(string name) =>
         _specs.Value.TryGetValue(name, out var spec)
@@ -318,5 +323,45 @@ internal sealed class GenericJsonAdapter : IResponseAdapter
             _ => new { kind = "noop" },
         };
         return JsonSerializer.Serialize(new { @event = e.Type, effect });
+    }
+}
+
+/// The daemon's harness view (ADR-0004 decision 1): environment is read once
+/// at daemon start, but harness specs keep ADR-0003's contract — edit a spec,
+/// effective next hook. Per dispatch the daemon stats the OVERRIDE DIRECTORY
+/// (one syscall) and rebuilds the registry when its write stamp moves; the
+/// embedded defaults are fixed at build. Add/remove/rename and the usual
+/// editor write-rename all bump the directory stamp; a strictly in-place
+/// overwrite does not — the rare miss the ADR accepts for a one-syscall check.
+/// Stamp comparison is EQUALITY on wall-clock mtimes (change detection, like
+/// content identity), never interval math — the monotonic rule is untouched.
+public sealed class ReloadingHarnessRegistry(string? overrideDir = null)
+{
+    private readonly string _dir = HarnessRegistry.ResolveDir(overrideDir);
+    private DateTime _stamp = Stamp(HarnessRegistry.ResolveDir(overrideDir));
+    private HarnessRegistry _current = new(overrideDir);
+
+    private static DateTime Stamp(string dir) =>
+        Directory.Exists(dir) ? new DirectoryInfo(dir).LastWriteTimeUtc : DateTime.MinValue;
+
+    /// The registry as of now. Benign race under concurrent dispatches: two
+    /// callers seeing a fresh stamp both rebuild and one wins the reference
+    /// swap — both registries are valid loads of the same directory.
+    public HarnessRegistry Current
+    {
+        get
+        {
+            var s = Stamp(_dir);
+            if (s != _stamp)
+            {
+                _stamp = s;
+                _current = new HarnessRegistry(_dir);
+                Log.Info("harness", "harness.reload", new LogFields
+                {
+                    Data = new Dictionary<string, object> { ["dir"] = _dir },
+                });
+            }
+            return _current;
+        }
     }
 }

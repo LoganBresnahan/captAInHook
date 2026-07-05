@@ -87,8 +87,17 @@ as `--daemon`, fully detached (/dev/null stdio — the host waits for the
 shim's stdout EOF, so an inherited fd would hang it; cwd at /; reparented to
 init via an intermediate /bin/sh; environment inherited, so `CAPTAINHOOK_*`
 becomes daemon-start config). This hook collapses; the next rides the warm
-path. (The daemon serve loop itself is a later slice; until it lands the
-spawned daemon is a stub that exits 1.)
+path. Daemon-side (`Core/DaemonHost.cs`): acquire the lock or exit 0, warm up
+— registry, dispatcher, supervised workers, harness specs, all built ONCE —
+then bind (listening ⟺ ready) and serve one dispatch per connection on the
+shared dispatcher, adopting the shim's dispatchId. Harness specs keep
+ADR-0003's edit-a-spec-effective-next-hook contract via one stat of the
+override dir per dispatch (`ReloadingHarnessRegistry`); the rest of
+`CAPTAINHOOK_*` is daemon-start configuration, and the stderr pretty sink
+defaults off in daemon mode (the JSONL file is the record). SIGTERM drain and
+idle-exit are upcoming slices — until then the daemon serves until killed,
+which is safe: the kernel releases the lock, the next winner unlinks the
+stale socket.
 
 ## The harness boundary
 
@@ -181,11 +190,14 @@ gates). A failing handler never poisons its siblings' effects.
 
 ## Background effects
 
-`Effect.Background` work (audit writes, notifications) is routed onto a
-`Channel` and drained after the handler barrier — it contributes nothing to
-the merged effect. In today's per-invocation binary the drain completes
-before exit; in a future daemon the consumer becomes long-lived and never
-blocks the response.
+`Effect.Background` work (audit writes, notifications) is routed onto the
+dispatcher's LONG-LIVED side channel — it contributes nothing to the merged
+effect and the response never waits on it. One consumer task runs the queue;
+`BackgroundPending` is the bookkeeping the drain and idle-exit slices share
+(a non-empty queue defers exit). Collapsed mode calls
+`CompleteBackgroundAsync()` before emitting, so a per-invocation process
+still never exits with effects queued — the drain-before-exit contract,
+relocated.
 
 ## Ground truth
 
@@ -196,6 +208,7 @@ blocks the response.
 | `Frame`, `HookRequest`/`HookResponse` (wire codec) | `dotnet/captainHook/Core/Frame.cs` |
 | `ContentIdentity`, `RendezvousPaths`, `DaemonRendezvous` (lock/bind) | `dotnet/captainHook/Core/Rendezvous.cs`, `Core/DaemonRendezvous.cs` |
 | `DaemonSpawner` (detached spawn on fallback) | `dotnet/captainHook/Core/DaemonSpawner.cs` |
+| `DaemonHost` (serve loop, daemon-side pipeline), `ReloadingHarnessRegistry` | `dotnet/captainHook/Core/DaemonHost.cs`, `Core/Harness.cs` |
 | harness resolution, stdin read, dispatchId, stdout write (`HookRun.CollapsedAsync`); Console wiring in `Program.cs` | `dotnet/captainHook/Core/HookRun.cs` |
 | `HarnessSpec` (+`TryParse`), `HarnessRegistry`, `Harness.ParseEvent`/`Canon`, `Harness.ApplyCapabilityGate`, `IResponseAdapter` + `ResponseAdapters` | `dotnet/captainHook/Core/Harness.cs` |
 | default harness spec (embedded resource) | `dotnet/captainHook/harnesses/claude-code.json` |
@@ -203,6 +216,6 @@ blocks the response.
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`) |
+| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError` (src `daemon`); `harness.reload` (src `harness`) |
 | pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md` |

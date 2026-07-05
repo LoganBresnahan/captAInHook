@@ -48,10 +48,11 @@ run live*. The framework underneath is what exists today.
   `content-identity-versioned-socket`, `timeout-fault-classification`
   (2026-07-05) — Phase 1 complete; `lock-bind-rendezvous`,
   `shim-forward-or-fallback`, `detached-daemon-spawn` (2026-07-05) —
-  Phase 2 complete.
-  Slice notes from landed work: the dispatchId seam now exists
-  (`HookRun.CollapsedAsync(dispatchId:)`, verified adopted end-to-end);
-  `daemon-serve-loop` must pass the frame's `req.DispatchId` through it.
+  Phase 2 complete; `daemon-serve-loop` (2026-07-05; dispatchId adoption
+  verified end-to-end).
+  ⚠ Until `sigterm-drain` + `mandatory-idle-exit` land, a spawned daemon
+  lives until killed — kill via the pidfile when it matters; a kill is safe
+  (kernel releases the lock, next winner unlinks the stale socket).
   **Carry-ins from ADR-0002 — DISCHARGED** by the
   `timeout-fault-classification` slice (ADR-0004 decision 5): (a) a wedged,
   token-ignoring handler is abandoned-and-respawned and counts toward

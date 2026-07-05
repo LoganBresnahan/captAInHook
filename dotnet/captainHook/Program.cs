@@ -28,11 +28,9 @@ switch (inv.Mode)
         return 0;
 
     case Mode.Daemon:
-        // Lands with the daemon-serve-loop slice (ADR-0004 § Implementation plan).
-        // Until then: clear error on stderr, nothing on stdout, exit 1.
-        await Console.Error.WriteLineAsync(
-            "captAInHook: --daemon is not implemented yet (ADR-0004); run `hook <event>` instead.");
-        return 1;
+        // captaind: warm once, serve over the socket until killed (drain and
+        // idle-exit are upcoming slices). See Core/DaemonHost.cs.
+        return await DaemonHost.RunAsync();
 
     case Mode.Shim:
     {

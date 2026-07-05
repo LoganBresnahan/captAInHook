@@ -56,6 +56,18 @@ public sealed class Dispatcher
     private readonly TimeSpan _grace;
     private readonly Dictionary<string, List<Runner>> _runners = new();
 
+    // The LONG-LIVED background queue (ADR-0004: built here, once). Background
+    // effects outlive their responses in a daemon by design: DispatchAsync
+    // enqueues and returns; this single consumer runs them in order. Collapsed
+    // mode awaits CompleteBackgroundAsync before exit — same drain-before-exit
+    // contract as before, relocated. _sidePending is the bookkeeping the
+    // sigterm-drain and mandatory-idle-exit slices share ("a non-empty
+    // background queue defers exit") — one counter, both readers.
+    private sealed record SideWork(string Name, HookEvent E, string? DispatchId, Effect.Background Effect, Trace Trace);
+    private readonly Channel<SideWork> _side = Channel.CreateUnbounded<SideWork>();
+    private readonly Task _sideConsumer;
+    private int _sidePending;
+
     /// Workers are spawned HERE, from a snapshot of the registry — register all
     /// handlers BEFORE constructing the Dispatcher; later Registry.On calls are
     /// not picked up. The optional supervisor is the test seam (inject one
@@ -69,6 +81,7 @@ public sealed class Dispatcher
     {
         _budget = budget;
         _grace = grace ?? TimeSpan.FromMilliseconds(Math.Clamp(budget.TotalMilliseconds * 0.10, 100, 1000));
+        _sideConsumer = Task.Run(ConsumeSideAsync);
         var sup = supervisor ?? new Supervisor("dispatcher", maxRestarts: 3, TimeSpan.FromSeconds(5));
 
         // ONE worker per (eventType, spec) registration. The worker is generic
@@ -121,36 +134,19 @@ public sealed class Dispatcher
         var outcomes = await Task.WhenAll(
             handlers.Select(h => RunGuarded(h, e, dispatchId, budgetCts.Token, trace)));
 
-        // Route fire-and-forget effects onto a channel; keep loop-effects to
-        // merge. System.Threading.Channels = a CSP-style queue with backpressure
-        // — the primitive I'd use for the audit / memory-write pipeline in anger.
-        var side = Channel.CreateUnbounded<Outcome>();
+        // Route fire-and-forget effects onto the LONG-LIVED side channel; keep
+        // loop-effects to merge. The response never waits on background work —
+        // the daemon's consumer runs it after this method returns; collapsed
+        // mode drains via CompleteBackgroundAsync before exit.
         var loop = new List<Effect>();
         foreach (var o in outcomes)
         {
-            if (o.Effect is Effect.Background) await side.Writer.WriteAsync(o);
+            if (o.Effect is Effect.Background bg)
+            {
+                Interlocked.Increment(ref _sidePending);
+                _side.Writer.TryWrite(new SideWork(o.Name, e, dispatchId, bg, trace));
+            }
             else loop.Add(o.Effect);
-        }
-        side.Writer.Complete();
-
-        // Drain background work before exit (single-shot mode). In daemon mode
-        // this consumer would be long-lived and never block the response.
-        await foreach (var o in side.Reader.ReadAllAsync())
-        {
-            var sw = Stopwatch.StartNew();
-            try
-            {
-                await ((Effect.Background)o.Effect).Run(CancellationToken.None);
-                trace.Side(o.Name, sw.Elapsed, true);
-                Log.Info("dispatcher", "side.ok", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                    data: Handler(o.Name)));
-            }
-            catch (Exception ex)
-            {
-                trace.Side(o.Name, sw.Elapsed, false, ex.Message);
-                Log.Error("dispatcher", "side.error", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                    msg: ex.Message, data: Handler(o.Name)));
-            }
         }
 
         var merged = Merge(loop);
@@ -161,6 +157,44 @@ public sealed class Dispatcher
                 ["effect"] = merged.GetType().Name,
             }));
         return new DispatchResult(merged, trace);
+    }
+
+    /// Background effects not yet completed — queued or running. The idle and
+    /// drain machinery reads this: a non-empty queue defers exit.
+    public int BackgroundPending => Volatile.Read(ref _sidePending);
+
+    /// Single-shot mode: no more dispatches will come — complete the side
+    /// queue and wait for the consumer to finish everything already enqueued.
+    /// The dispatcher is done after this; daemon mode calls it only at drain.
+    public async Task CompleteBackgroundAsync()
+    {
+        _side.Writer.Complete();
+        await _sideConsumer;
+    }
+
+    private async Task ConsumeSideAsync()
+    {
+        await foreach (var w in _side.Reader.ReadAllAsync())
+        {
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                await w.Effect.Run(CancellationToken.None);
+                w.Trace.Side(w.Name, sw.Elapsed, true);
+                Log.Info("dispatcher", "side.ok", Fields(w.E, w.DispatchId, sw.Elapsed.TotalMilliseconds,
+                    data: Handler(w.Name)));
+            }
+            catch (Exception ex)
+            {
+                w.Trace.Side(w.Name, sw.Elapsed, false, ex.Message);
+                Log.Error("dispatcher", "side.error", Fields(w.E, w.DispatchId, sw.Elapsed.TotalMilliseconds,
+                    msg: ex.Message, data: Handler(w.Name)));
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _sidePending);
+            }
+        }
     }
 
     private async Task<Outcome> RunGuarded(Runner r, HookEvent e, string? dispatchId, CancellationToken budgetCt, Trace trace)
@@ -282,15 +316,24 @@ public sealed class Dispatcher
 
 public sealed class Trace(string ev, TimeSpan budget, int handlerCount)
 {
+    // Locked: the long-lived background consumer appends Side lines after the
+    // response is built in daemon mode, so writes can race a Render.
     private readonly List<string> _lines = new();
 
-    public void Handler(string name, TimeSpan took, string status) =>
-        _lines.Add($"  handler {name,-14} {took.TotalMilliseconds,7:F1}ms  {status}");
+    public void Handler(string name, TimeSpan took, string status)
+    {
+        lock (_lines) _lines.Add($"  handler {name,-14} {took.TotalMilliseconds,7:F1}ms  {status}");
+    }
 
-    public void Side(string name, TimeSpan took, bool ok, string? err = null) =>
-        _lines.Add($"  side    {name,-14} {took.TotalMilliseconds,7:F1}ms  {(ok ? "ok" : "ERR: " + err)}");
+    public void Side(string name, TimeSpan took, bool ok, string? err = null)
+    {
+        lock (_lines) _lines.Add($"  side    {name,-14} {took.TotalMilliseconds,7:F1}ms  {(ok ? "ok" : "ERR: " + err)}");
+    }
 
-    public string Render() =>
-        $"[captAInHook] {ev}  ({handlerCount} handler(s), budget {budget.TotalMilliseconds:F0}ms)\n" +
-        (_lines.Count > 0 ? string.Join("\n", _lines) : "  (no handlers registered)");
+    public string Render()
+    {
+        lock (_lines)
+            return $"[captAInHook] {ev}  ({handlerCount} handler(s), budget {budget.TotalMilliseconds:F0}ms)\n" +
+                   (_lines.Count > 0 ? string.Join("\n", _lines) : "  (no handlers registered)");
+    }
 }
