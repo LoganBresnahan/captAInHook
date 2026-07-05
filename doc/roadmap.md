@@ -41,6 +41,9 @@ run live*. The framework underneath is what exists today.
   Akka.NET vs the hand-rolled layer *before* building on either → an ADR.
   Design recorded in ADR-0004 (verdict: stay hand-rolled; carry-ins
   answered) — the gate is discharged, this item is now implementation.
+  Build order: ADR-0004 § Implementation plan (14 slices → 6 phases;
+  critical path content-identity → lock-bind → serve-loop → drain →
+  idle-exit). Tick progress here as slices land.
   **Carry-ins from ADR-0002 (do not forget):** (a) a handler that IGNORES its
   cancellation token and hangs never crashes its worker — the mailbox stays
   blocked and later asks queue behind it (fix: cancel-on-timeout kill/respawn,
