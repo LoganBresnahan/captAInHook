@@ -33,10 +33,14 @@ public static class HookRun
     /// Run one hook dispatch in-process: resolve harness, read stdin, dispatch
     /// under the latency budget, write exactly one effect to stdout and the
     /// human trace to stderr. Returns the process exit code.
+    /// `dispatchId`: pass the shim-minted id so a collapsed FALLBACK logs under
+    /// the same id as the forward attempt it follows — one id, one story in
+    /// the trail (ADR-0004 decision 2); null mints a fresh one (direct
+    /// collapsed / shim-less runs).
     public static async Task<int> CollapsedAsync(
         Invocation inv,
         TextReader stdin, TextWriter stdout, TextWriter stderr,
-        ColdStartProbe? probe = null, string? harnessDir = null)
+        ColdStartProbe? probe = null, string? harnessDir = null, string? dispatchId = null)
     {
         // Resolve the harness BEFORE touching stdin/stdout: an unknown name must
         // put a clear error on stderr and NOTHING on stdout (the host parses stdout).
@@ -61,7 +65,7 @@ public static class HookRun
 
         // One short dispatchId per invocation: every structured log line this run
         // emits carries it, so a digest can stitch the whole dispatch back together.
-        var dispatchId = Guid.NewGuid().ToString("N")[..8];
+        dispatchId ??= Guid.NewGuid().ToString("N")[..8];
         var dispatcher = new Dispatcher(BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
         probe?.DispatcherBuilt();
         var result = await dispatcher.DispatchAsync(evt, dispatchId);

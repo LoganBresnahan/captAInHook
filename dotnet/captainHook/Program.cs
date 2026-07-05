@@ -35,9 +35,56 @@ switch (inv.Mode)
         return 1;
 
     case Mode.Shim:
-        // Socket forwarding lands with shim-forward-or-fallback; until then the
-        // shim's fallback IS the whole shim: dispatch in-process.
-        return await HookRun.CollapsedAsync(inv, Console.In, Console.Out, Console.Error, probe);
+    {
+        // The SHIM mints the dispatchId; the daemon adopts it, and a collapsed
+        // fallback reuses it — one id stitches the forward attempt, the
+        // fallback, and the daemon half into one story (ADR-0004 decision 2).
+        var dispatchId = Guid.NewGuid().ToString("N")[..8];
+
+        // Raw stdin bytes, read once: forwarded VERBATIM inside the frame; the
+        // collapsed fallback re-reads them as text, exactly as Console.In would.
+        using var stdinBuf = new MemoryStream();
+        await Console.OpenStandardInput().CopyToAsync(stdinBuf);
+        var stdinBytes = stdinBuf.ToArray();
+
+        // Resolve the rendezvous. A failure here (e.g. the sun_path guard on a
+        // pathological runtime dir) must never cost the user their hook:
+        // collapse instead — the shim without a daemon is today's binary.
+        string? socketPath = null;
+        try { socketPath = RendezvousPaths.Resolve().SocketPath; }
+        catch (Exception ex) { await Console.Error.WriteLineAsync($"captAInHook: rendezvous unavailable, dispatching in-process: {ex.Message}"); }
+
+        if (socketPath is not null)
+        {
+            var outcome = await ShimClient.TryForwardAsync(socketPath,
+                new HookRequest(dispatchId, inv.EventName, inv.HarnessName, stdinBytes));
+            switch (outcome)
+            {
+                case ForwardOutcome.Answered a:
+                    // Relay VERBATIM: the effect's stdout bytes are the sacred
+                    // channel and cross the socket byte-identically.
+                    using (var stdout = Console.OpenStandardOutput())
+                        stdout.Write(a.StdoutBytes);
+                    await Console.Error.WriteLineAsync(a.StderrText);
+                    return a.ExitCode;
+
+                case ForwardOutcome.FailedAfterDelivery f:
+                    // The daemon may already be running non-idempotent
+                    // Background effects: at-most-once forbids re-dispatching.
+                    // Zero stdout bytes, visible error, non-blocking exit 1.
+                    await Console.Error.WriteLineAsync($"captAInHook: dispatch {dispatchId} failed after delivery: {f.Reason}");
+                    return 1;
+
+                // ForwardOutcome.NotDelivered: provably never dispatched —
+                // fall through to collapsed. (detached-daemon-spawn will also
+                // spawn a daemon here so the NEXT hook rides the warm path.)
+            }
+        }
+
+        return await HookRun.CollapsedAsync(inv,
+            new StringReader(System.Text.Encoding.UTF8.GetString(stdinBytes)),
+            Console.Out, Console.Error, probe, dispatchId: dispatchId);
+    }
 
     default: // Mode.Collapsed (--no-daemon)
         return await HookRun.CollapsedAsync(inv, Console.In, Console.Out, Console.Error, probe);

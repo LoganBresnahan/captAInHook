@@ -46,11 +46,11 @@ run live*. The framework underneath is what exists today.
   idle-exit). Tick progress here as slices land.
   Slices landed: `three-mode-dispatch`, `frame-protocol`,
   `content-identity-versioned-socket`, `timeout-fault-classification`
-  (2026-07-05) — Phase 1 complete; `lock-bind-rendezvous` (2026-07-05).
-  Slice notes from landed work: `daemon-serve-loop` must add a dispatchId
-  parameter through the dispatch pipeline (HookRun mints its own today;
-  frame-protocol verification showed shim and daemon halves logging under
-  different ids until the daemon adopts the shim's).
+  (2026-07-05) — Phase 1 complete; `lock-bind-rendezvous`,
+  `shim-forward-or-fallback` (2026-07-05).
+  Slice notes from landed work: the dispatchId seam now exists
+  (`HookRun.CollapsedAsync(dispatchId:)`, verified adopted end-to-end);
+  `daemon-serve-loop` must pass the frame's `req.DispatchId` through it.
   **Carry-ins from ADR-0002 — DISCHARGED** by the
   `timeout-fault-classification` slice (ADR-0004 decision 5): (a) a wedged,
   token-ignoring handler is abandoned-and-respawned and counts toward
