@@ -44,17 +44,12 @@ run live*. The framework underneath is what exists today.
   Build order: ADR-0004 § Implementation plan (14 slices → 6 phases;
   critical path content-identity → lock-bind → serve-loop → drain →
   idle-exit). Tick progress here as slices land.
-  Slices landed: `three-mode-dispatch`, `frame-protocol` (2026-07-05).
-  Slice notes from landed work: (a) `daemon-serve-loop` must add a dispatchId
+  Slices landed: `three-mode-dispatch`, `frame-protocol`,
+  `content-identity-versioned-socket` (2026-07-05).
+  Slice notes from landed work: `daemon-serve-loop` must add a dispatchId
   parameter through the dispatch pipeline (HookRun mints its own today;
   frame-protocol verification showed shim and daemon halves logging under
-  different ids until the daemon adopts the shim's). (b)
-  `content-identity-versioned-socket`: UDS sun_path caps at 108 bytes
-  (frame-protocol verify hit it live) — socket/lock/pid go under
-  `$XDG_RUNTIME_DIR/captainHook/` when set, else `~/.captainHook/`, chosen
-  deterministically from env (shim and daemon must compute the identical
-  path — never probe-until-fits), with a clear-error guard if the result
-  still exceeds the limit; amend ADR-0004 decision 3 in the landing commit.
+  different ids until the daemon adopts the shim's).
   **Carry-ins from ADR-0002 (do not forget):** (a) a handler that IGNORES its
   cancellation token and hangs never crashes its worker — the mailbox stays
   blocked and later asks queue behind it (fix: cancel-on-timeout kill/respawn,

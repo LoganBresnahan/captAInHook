@@ -88,17 +88,33 @@ layer (the Akka re-evaluation below).
    daemon-start configuration like the rest of `CAPTAINHOOK_*` — shim and
    daemon default to the same file so the trail stays in one place.
 3. **Rendezvous: a versioned socket, lock-holder binds, listening ⟺ ready.**
-   - Socket at `~/.captainHook/captaind-<ver>.sock` (0600), `<ver>` a short
-     hash of the binary's **content identity**: the ModuleVersionIds of all
-     application assemblies in the app directory. Deliberately *not* the
-     informational version — an uncommitted dev rebuild keeps the same
-     version string while changing behavior (SourceRevisionId is the HEAD
-     sha; dirty state is invisible to it), which would leave a warm daemon
-     silently serving stale code whose own traffic keeps resetting its idle
-     clock. Content identity makes any rebuild — committed or dirty, host
-     or F#-lib assembly — rendezvous on a **fresh socket by construction**:
+   - Socket at `<runtime>/captaind-<ver>.sock` (0600), where `<runtime>`
+     *(amended 2026-07-05, with the sun_path facts in
+     [doc/platform.md](../platform.md))* is `$XDG_RUNTIME_DIR/captainHook/`
+     when set (Linux/systemd: short by construction, per-user 0700 tmpfs),
+     else `~/.captainHook/` (macOS/Windows never set XDG; their home paths
+     are short) — a **pure function of the environment**, because the
+     memoryless shim and the daemon must *compute* the identical path;
+     probe-until-fits is unsound by construction. A resolved socket path
+     over the ~104-byte sun_path cap is a clear error naming the escape
+     hatch (set `XDG_RUNTIME_DIR`), hit at resolve time, not bind time.
+     `<ver>` is a short hash of the binary's **content identity**: the
+     ModuleVersionIds of all application assemblies in the app directory.
+     Deliberately *not* the informational version — an uncommitted dev
+     rebuild keeps the same version string while changing behavior
+     (SourceRevisionId is the HEAD sha; dirty state is invisible to it),
+     which would leave a warm daemon silently serving stale code whose own
+     traffic keeps resetting its idle clock. Content identity makes any
+     **behavior-changing** rebuild — committed or dirty, host or F#-lib
+     assembly — rendezvous on a **fresh socket by construction**:
      shim/daemon version mismatch is unrepresentable, no handshake or compat
-     logic exists to get wrong. Superseded daemons stop receiving
+     logic exists to get wrong. *(Measured 2026-07-05: Roslyn's
+     deterministic compilation means MVIDs track compiled content, not
+     compile events — a touch-only or comment-only rebuild emits identical
+     bytes and keeps its socket, a reverted change returns to the prior
+     identity. Stronger than the original framing: no daemon churn on no-op
+     rebuilds, and "identity differs" now literally means "behavior may
+     differ".)* Superseded daemons stop receiving
      connections and idle-exit; `captainHook --daemon --replace` is the
      explicit escape hatch (tell the incumbent to drain, take over) so no
      workflow ever depends on waiting one out.

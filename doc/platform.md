@@ -15,7 +15,7 @@ verified the day a real run touches them.
 
 | Fact | Detail | What leans on it |
 | --- | --- | --- |
-| `sun_path` caps at ~108 bytes | Linux 108 incl. NUL; macOS 104; Windows AF_UNIX also ~108. Hit live 2026-07-05: a scratchpad-length socket path aborted with `ArgumentOutOfRangeException` before bind. | ADR-0004 decision 3's socket path. Fix recorded on the roadmap daemon item: runtime files under `$XDG_RUNTIME_DIR/captainHook/` when set, else `~/.captainHook/`, plus a clear-error guard. |
+| `sun_path` caps at ~108 bytes | Linux 108 incl. NUL; macOS 104; Windows AF_UNIX also ~108. Hit live 2026-07-05: a scratchpad-length socket path aborted with `ArgumentOutOfRangeException` before bind. | ADR-0004 decision 3 (as amended 2026-07-05): runtime files under `$XDG_RUNTIME_DIR/captainHook/` when set, else `~/.captainHook/`, plus a clear-error guard at resolve time — `Core/Rendezvous.cs`. |
 | Path choice must be a pure function of env | The shim is per-invocation with no memory and no side channel to the daemon; both sides must *compute* the identical path. Probe-until-fits or any stateful negotiation is unsound by construction. | The whole filesystem rendezvous (ADR-0004 decisions 2–3). |
 | AF_UNIX exists on Windows 10 1803+ | .NET's `UnixDomainSocketEndPoint` supports it; same length cap. Named pipes are the Windows-native alternative if AF_UNIX gaps appear. | Keeps the wire design portable in principle; see the Windows caveat below for what is *not* portable. |
 | `connect()` succeeding ≠ peer healthy | A listening socket's backlog accepts connects even if the accept loop is wedged or draining. | ADR-0004 decision 2's shim-side deadline spanning connect + request + response. |

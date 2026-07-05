@@ -130,7 +130,7 @@ ADR in the body. End every commit with a `Co-Authored-By: Claude <model>` traile
 - repo / dir: `captAInHook`
 - namespaces: `CaptainHook.Core` / `.Handlers` / `.Demo` (C#), `CaptainHook.Actors` (F#)
 - env vars: `CAPTAINHOOK_LOG`, `CAPTAINHOOK_LOG_STDERR`, `CAPTAINHOOK_HARNESS_DIR`, `CAPTAINHOOK_PROBE`, `CAPTAINHOOK_COLDSTART`
-- runtime home: `~/.captainHook/` — JSONL logs in `logs/`, user harness overrides in `harnesses/`
+- runtime home: `~/.captainHook/` — JSONL logs in `logs/`, user harness overrides in `harnesses/`; daemon rendezvous files (socket/lock/pid) in `$XDG_RUNTIME_DIR/captainHook/` when set, else here
 
 ⚠ `~/.captainHook/` is the **same tree the live-deployed hook uses.** A dev run or a
 test that writes the real sinks pollutes your actual logs — tests swap the `Log` sink
