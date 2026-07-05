@@ -47,7 +47,8 @@ run live*. The framework underneath is what exists today.
   Slices landed: `three-mode-dispatch`, `frame-protocol`,
   `content-identity-versioned-socket`, `timeout-fault-classification`
   (2026-07-05) — Phase 1 complete; `lock-bind-rendezvous`,
-  `shim-forward-or-fallback` (2026-07-05).
+  `shim-forward-or-fallback`, `detached-daemon-spawn` (2026-07-05) —
+  Phase 2 complete.
   Slice notes from landed work: the dispatchId seam now exists
   (`HookRun.CollapsedAsync(dispatchId:)`, verified adopted end-to-end);
   `daemon-serve-loop` must pass the frame's `req.DispatchId` through it.

@@ -75,9 +75,13 @@ switch (inv.Mode)
                     await Console.Error.WriteLineAsync($"captAInHook: dispatch {dispatchId} failed after delivery: {f.Reason}");
                     return 1;
 
-                // ForwardOutcome.NotDelivered: provably never dispatched —
-                // fall through to collapsed. (detached-daemon-spawn will also
-                // spawn a daemon here so the NEXT hook rides the warm path.)
+                case ForwardOutcome.NotDelivered:
+                    // Provably never dispatched: spawn a detached daemon so
+                    // the NEXT hook rides the warm path (this one collapses —
+                    // no hook ever waits for warmup), then fall through.
+                    // Spawn first: its warmup overlaps our handler run.
+                    DaemonSpawner.SpawnDaemonForNextHook(dispatchId);
+                    break;
             }
         }
 
