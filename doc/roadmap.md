@@ -46,7 +46,7 @@ run live*. The framework underneath is what exists today.
   idle-exit). Tick progress here as slices land.
   Slices landed: `three-mode-dispatch`, `frame-protocol`,
   `content-identity-versioned-socket`, `timeout-fault-classification`
-  (2026-07-05) — Phase 1 complete.
+  (2026-07-05) — Phase 1 complete; `lock-bind-rendezvous` (2026-07-05).
   Slice notes from landed work: `daemon-serve-loop` must add a dispatchId
   parameter through the dispatch pipeline (HookRun mints its own today;
   frame-protocol verification showed shim and daemon halves logging under
