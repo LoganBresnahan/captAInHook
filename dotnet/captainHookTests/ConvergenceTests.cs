@@ -134,8 +134,9 @@ public class DispatcherSelfHealingTests
 
 public class DispatcherEscalationTests
 {
-    // Small budget on purpose: after escalation the dead worker burns the full
-    // ask timeout on every dispatch, so the budget IS the degradation cost.
+    // Small budget keeps mid-restart probe dispatches cheap. (Since the
+    // timeout-fault-classification slice, a dead worker fails FAST — the ask
+    // no longer burns the budget; ClassificationTests pins that.)
     private static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(300);
 
     /// Dispatch (bounded iterations) until the supervisor escalates the crashy
@@ -168,9 +169,9 @@ public class DispatcherEscalationTests
         await CrashUntilEscalated(dispatcher, escalated.Task);
 
         // ESCALATION DEGRADES, NOT BREAKS: the flaky worker is now permanently
-        // dead, so its ask burns the 300ms budget and surfaces TimeoutException
-        // -> fail-open Noop. The dispatch as a whole still completes and the
-        // sibling on the same event still contributes its effect.
+        // dead, so its ask fails fast (AskStatus.Dead) -> fail-open Noop. The
+        // dispatch as a whole still completes and the sibling on the same
+        // event still contributes its effect.
         var result = await dispatcher.DispatchAsync(Ev());
         var inject = Assert.IsType<Effect.Inject>(result.Merged);
         Assert.Equal("steady says hi", inject.Text);

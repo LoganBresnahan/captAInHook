@@ -53,15 +53,22 @@ public sealed class Dispatcher
     private sealed record Runner(string Name, FailMode OnFailure, Worker<(HookEvent, HandlerContext), Effect> Worker);
 
     private readonly TimeSpan _budget;
+    private readonly TimeSpan _grace;
     private readonly Dictionary<string, List<Runner>> _runners = new();
 
     /// Workers are spawned HERE, from a snapshot of the registry — register all
     /// handlers BEFORE constructing the Dispatcher; later Registry.On calls are
     /// not picked up. The optional supervisor is the test seam (inject one
     /// built on a fake clock to make restart-window math deterministic).
-    public Dispatcher(Registry registry, TimeSpan budget, Supervisor? supervisor = null)
+    /// `grace` (default: 10% of budget, clamped 100ms..1s) widens the ask
+    /// window past the budget so a token-honoring handler's cancellation reply
+    /// lands INSIDE it — that reply leaves the handler AT the budget and needs
+    /// a beat to travel (ADR-0004 decision 5). Worst-case dispatch wall time
+    /// is budget + grace, paid only when a handler never answers.
+    public Dispatcher(Registry registry, TimeSpan budget, Supervisor? supervisor = null, TimeSpan? grace = null)
     {
         _budget = budget;
+        _grace = grace ?? TimeSpan.FromMilliseconds(Math.Clamp(budget.TotalMilliseconds * 0.10, 100, 1000));
         var sup = supervisor ?? new Supervisor("dispatcher", maxRestarts: 3, TimeSpan.FromSeconds(5));
 
         // ONE worker per (eventType, spec) registration. The worker is generic
@@ -162,36 +169,76 @@ public sealed class Dispatcher
         var ctx = new HandlerContext(DateTimeOffset.UtcNow + _budget, budgetCt);
         try
         {
-            // Dispatch IS an ask: the latency budget doubles as the ask timeout,
-            // and WaitAsync on the dispatch-wide token stays as a backstop for
-            // whichever fires first. A handler crash comes back as the original
-            // exception (reply-then-crash inside the worker), so the catch
-            // blocks below see exactly what direct invocation used to throw —
-            // while the crash ALSO reaches the supervisor for restart/escalate.
-            var eff = await r.Worker.AskAsync((e, ctx), (int)_budget.TotalMilliseconds).WaitAsync(budgetCt);
-            trace.Handler(r.Name, sw.Elapsed, "ok");
-            Log.Info("dispatcher", "handler.ok", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                data: Handler(r.Name)));
-            return new Outcome(r.Name, eff);
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
-        {
-            // OperationCanceledException: the budget token fired (handler honored
-            // ctx.Ct, or WaitAsync cut it loose). TimeoutException: the ask timed
-            // out — a token-ignoring handler, or a worker already escalated to
-            // dead. All of them are the same story: no answer within budget.
-            trace.Handler(r.Name, sw.Elapsed, $"TIMEOUT -> fail-{Mode(r)}");
-            Log.Warn("dispatcher", "handler.timeout", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                data: Handler(r.Name, failMode: Mode(r))));
-            return new Outcome(r.Name, Fail(r));
+            // Dispatch IS a CLASSIFIED ask (ADR-0004 decision 5): the budget
+            // token cancels the handler at budget; the ask itself waits budget
+            // + grace so an honoring handler's cancellation reply lands inside
+            // the window and "no reply" is unambiguous. Classification of what
+            // no-reply MEANS (wedge vs backlog) happens in the ask layer, which
+            // reports wedges to the supervisor — the supervisor owns all
+            // counting; this method only converts outcomes to effects and logs.
+            var res = await r.Worker.AskClassifiedAsync(
+                (e, ctx), (int)_budget.TotalMilliseconds, (int)_grace.TotalMilliseconds, dispatchId ?? "");
+            switch (res.Status)
+            {
+                case AskStatus.Ok:
+                    trace.Handler(r.Name, sw.Elapsed, "ok");
+                    Log.Info("dispatcher", "handler.ok", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
+                        data: Handler(r.Name)));
+                    return new Outcome(r.Name, res.Reply);
+
+                case AskStatus.Faulted when res.Error is OperationCanceledException:
+                    // The handler HONORED its budget token: a timeout, not a
+                    // fault. (The supervisor sees the same OCE via
+                    // reply-then-crash and restarts the worker WITHOUT counting
+                    // it — carry-in c.) Chronic slowness stays visible here.
+                    return Timeout(r, e, dispatchId, sw, trace, "cancelled");
+
+                case AskStatus.Wedged:
+                    // Received but never answered: the ask layer has reported
+                    // it; the supervisor abandons the worker and counts it
+                    // (carry-in a). The stuck task is leaked, deliberately.
+                    return Timeout(r, e, dispatchId, sw, trace, "wedged");
+
+                case AskStatus.Backlogged:
+                    // Never received — queued behind a busy sibling dispatch.
+                    // Backlog, not a defect: nothing counted against the worker
+                    // (sustained backlog is the router evidence ADR-0004 d6
+                    // waits for).
+                    return Timeout(r, e, dispatchId, sw, trace, "backlogged");
+
+                case AskStatus.Dead:
+                    // Escalated worker: fail fast in ~0ms instead of burning
+                    // the budget per dispatch (carry-in b).
+                    trace.Handler(r.Name, sw.Elapsed, $"DEAD -> fail-{Mode(r)}");
+                    Log.Warn("dispatcher", "handler.dead", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
+                        data: Handler(r.Name, failMode: Mode(r))));
+                    return new Outcome(r.Name, Fail(r));
+
+                default:   // AskStatus.Faulted, non-cancellation: the handler crashed
+                    trace.Handler(r.Name, sw.Elapsed, $"ERROR -> fail-{Mode(r)} ({res.Error.Message})");
+                    Log.Error("dispatcher", "handler.error", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
+                        msg: res.Error.Message, data: Handler(r.Name, failMode: Mode(r))));
+                    return new Outcome(r.Name, Fail(r));
+            }
         }
         catch (Exception ex)
         {
+            // Belt-and-braces: the classified ask routes every expected outcome
+            // into a status; anything landing here is infrastructure failure.
             trace.Handler(r.Name, sw.Elapsed, $"ERROR -> fail-{Mode(r)} ({ex.Message})");
             Log.Error("dispatcher", "handler.error", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
                 msg: ex.Message, data: Handler(r.Name, failMode: Mode(r))));
             return new Outcome(r.Name, Fail(r));
         }
+    }
+
+    private Outcome Timeout(Runner r, HookEvent e, string? dispatchId, Stopwatch sw, Trace trace, string classification)
+    {
+        trace.Handler(r.Name, sw.Elapsed, $"TIMEOUT({classification}) -> fail-{Mode(r)}");
+        var data = Handler(r.Name, failMode: Mode(r));
+        data["classification"] = classification;
+        Log.Warn("dispatcher", "handler.timeout", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds, data: data));
+        return new Outcome(r.Name, Fail(r));
     }
 
     // Correlation bundle every dispatcher event carries: who asked (sessionId),

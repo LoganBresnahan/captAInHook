@@ -30,14 +30,17 @@ harness's wire format — with a structured JSONL trail the whole way.
 │   Task.WhenAll ── FAN-OUT: all handlers run concurrently                  │
 │    ┌───────────────┼────────────────┐                                     │
 │    ▼               ▼                ▼                                     │
-│ RunGuarded      RunGuarded       RunGuarded     each ASKS its worker      │
-│    │ ok            │ timeout        │ throws    (budget = ask timeout)    │
-│    │ Effect        │ Fail(h):       │ Fail(h):        ── handler.ok       │
-│    │               │  open → Noop   │  open → Noop    ── handler.timeout  │
-│    │               │  closed → Deny │  closed → Deny  ── handler.error    │
+│ RunGuarded      RunGuarded       RunGuarded   each: a CLASSIFIED ask      │
+│    │ ok            │ no answer      │ throws  (window = budget + grace)   │
+│    │ Effect        │ cancelled /    │ Fail(h):        ── handler.ok       │
+│    │               │ wedged /       │  open → Noop    ── handler.timeout  │
+│    │               │ backlogged /   │  closed → Deny  ── handler.error    │
+│    │               │ dead → Fail(h) │                 ── handler.dead     │
 │    │               │                │ reply-then-crash: the worker also   │
-│    │               │                │ crashes → supervisor restarts it    │
-│    │               │                │      ── actor.restart / escalate    │
+│    │               │                │ crashes → supervisor CLASSIFIES:    │
+│    │               │                │ crashes & wedges count, honored     │
+│    │               │                │ cancellations don't (ADR-0004 d5)   │
+│    │               │                │  ── actor.restart / wedge / escalate│
 │    └───────────────┴── outcomes ────┘                                     │
 │        │ partition                                                        │
 │        ├─ Effect.Background ──► Channel ──► drained    ── side.ok/error   │
@@ -93,13 +96,21 @@ defines *what* it emits, and config never becomes a template language.
 ## Fan-out under a budget
 
 Handlers run concurrently via `Task.WhenAll` on the thread pool, so dispatch
-wall-time tracks the *slowest* handler, not the sum. Each `RunGuarded` is an
-**ask against the handler's supervised worker**: the latency budget doubles as
-the ask timeout, and `.WaitAsync(budgetCt)` on the dispatch-wide
-`CancellationTokenSource(budget)` stays as a backstop — the budget bites even
-for handlers that ignore their cancellation token. `OperationCanceledException`
-(the token fired) and `TimeoutException` (the ask timed out, or the worker is
-dead after escalation) land on the same timeout path: no answer within budget.
+wall-time tracks the *slowest* handler, not the sum. Each `RunGuarded` is a
+**classified ask against the handler's supervised worker** (ADR-0004
+decision 5): the dispatch-wide `CancellationTokenSource(budget)` cancels
+`ctx.Ct` at the budget, while the ask itself waits **budget + grace** (default
+10% of budget, clamped 100ms–1s) so a token-honoring handler's cancellation
+reply — which leaves the handler *at* the budget — lands inside the window
+instead of racing it. No-answer outcomes are then unambiguous and classified:
+`cancelled` (the handler honored its token — a timeout, never a fault),
+`wedged` (received but silent — the supervisor abandons the worker and it
+counts toward escalation), `backlogged` (never received, queued behind a busy
+sibling — uncounted), and `dead` (already-escalated worker — fails fast in
+~0ms instead of burning the budget). All four degrade to the handler's
+fail-mode effect; classification changes what the *supervisor counts*, never
+what the dispatch returns. Worst-case dispatch wall time is budget + grace,
+paid only when a handler never answers.
 
 ## Handlers as supervised workers
 
@@ -113,17 +124,20 @@ while the instance overload wraps the same object — no state reset, by
 documented contract.
 
 A handler exception inside the worker is **reply-then-crash**: the reply
-carries the exception back, so `RunGuarded` rethrows exactly what direct
+carries the exception back, so `RunGuarded` sees exactly what direct
 invocation used to throw — immediately, not after an ask timeout — and
 converts it per fail mode; the raise still escapes the loop, so the supervisor
-restarts the worker (`actor.restart`). A crash-looping handler blows the
-restart window and escalates (`actor.escalate`): the worker stays dead, and
-every later ask burns the full budget before degrading to the fail-mode effect
-(fast-fail on dead workers is deferred to the daemon work). One nuance: a
-handler that *honors* `ctx.Ct` and times out throws inside the worker, so
-budget timeouts also count against its restart window. Supervision mechanics:
-[actor-supervision.md](actor-supervision.md); decision:
-[ADR-0002](../adr/0002-handlers-as-supervised-actors.md).
+classifies the exit (ADR-0004 decision 5): a crash counts toward the restart
+window, an `OperationCanceledException` — the handler *honored* `ctx.Ct` —
+restarts the worker **without counting** (`actor.restart` with
+`kind=cancelled, counted=false`), so a correct-but-slow handler is never
+escalated; its slowness stays visible through `handler.timeout` warns. A
+crash-looping or chronically wedging handler blows the restart window and
+escalates (`actor.escalate`): the worker is marked dead and every later ask
+**fails fast** (`handler.dead`, ~0ms) instead of burning the budget.
+Supervision mechanics: [actor-supervision.md](actor-supervision.md);
+decisions: [ADR-0002](../adr/0002-handlers-as-supervised-actors.md),
+[ADR-0004](../adr/0004-daemon-topology.md) decision 5.
 
 ## Failure policy
 
@@ -163,6 +177,6 @@ blocks the response.
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error`, `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/escalate` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`) |
-| pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
+| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`) |
+| pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md` |

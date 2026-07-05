@@ -29,18 +29,23 @@ window, escalation when restarting stops making sense.
             body throws → agent dies silently
                                          │ .Error fires
                                          ▼
-                agent.Post(ChildExit(id, err, restart))
-                                         │  the crash is a MESSAGE in the
-                                         ▼  supervisor's own mailbox
- ┌─ Supervisor loop (handles one crash at a time) ────────────────────────┐
- │ now = clock()              ← MONOTONIC ms (TickCount64 by default,     │
- │ prune attempts > windowMs    injectable — tests advance a fake clock)  │
- │ attempts = now :: recent                                               │
- │                                                                        │
- │ ≤ maxRestarts ──► restart(): factory → fresh state → handle.Swap       │
- │                   actor.restart (warn)     callers never notice        │
- │ > maxRestarts ──► actor.escalate (error) + OnEscalated(id, err)        │
- │                   child stays DEAD; future Asks fault w/ Timeout       │
+        agent.Post(ChildExit(id, gen, err))     agent.Post(ChildWedged(id, gen, corr))
+                                         │  faults are MESSAGES in the   │ from the ask layer:
+                                         ▼  supervisor's own mailbox     ▼ received, never answered
+ ┌─ Supervisor loop (handles one fault at a time) ────────────────────────┐
+ │ stale generation or dead child? ──► actor.staleExit (debug), ignore    │
+ │ err is OperationCanceledException (budget token honored)?              │
+ │   ──► restart, NOT COUNTED (actor.restart kind=cancelled counted=false)│
+ │       — timeout is not fault (ADR-0004 d5)                             │
+ │ else crash / wedge — COUNTED:                                          │
+ │   now = clock()            ← MONOTONIC ms (TickCount64 by default,     │
+ │   prune attempts > windowMs  injectable — tests advance a fake clock)  │
+ │   attempts = now :: recent                                             │
+ │   ≤ maxRestarts ──► restart(): factory → fresh state → handle.Swap     │
+ │                     actor.restart (warn)     callers never notice      │
+ │   > maxRestarts ──► actor.escalate (error) + MarkDead + OnEscalated    │
+ │                     child stays DEAD; classified asks fail FAST (Dead),│
+ │                     legacy Asks fault w/ Timeout                       │
  └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -72,14 +77,49 @@ restart races by construction.
 
 The sliding window (`maxRestarts` within `window`) distinguishes a transient
 blip (restart, quietly heal) from a persistent fault (escalate: log
-`actor.escalate`, fire `OnEscalated`, stop restarting — the child stays dead
-and asks against it fault with `TimeoutException` instead of hanging).
+`actor.escalate`, fire `OnEscalated`, mark the handle dead, stop restarting —
+classified asks against a dead child return `AskStatus.Dead` immediately;
+the legacy `Ask` faults with `TimeoutException` instead of hanging).
 
 Window math runs on an **injectable monotonic clock** (`Environment.TickCount64`
 default), never `DateTime.UtcNow`: wall time steps under NTP corrections and
 dual-boot RTC skew, which would silently stretch or shrink the window. Tests
 inject a `FakeClock` and advance it explicitly — "6 seconds pass" is one line,
 not a real sleep. Pinned by `SlidingWindow_PrunesAgedAttempts_NoFalseEscalation`.
+
+## Timeout is not fault — the classified ask (ADR-0004 decision 5)
+
+What counts toward that window is **classified**, not everything that goes
+wrong. `Worker.AskClassifiedAsync(req, budget, grace, correlationId)` waits
+budget + grace — the grace exists so a token-honoring handler's cancellation
+reply, which *leaves* the handler at the budget, lands **inside** the ask
+window instead of racing the deadline — and resolves to one of five statuses:
+
+| status | what happened | counted? | worker fate |
+|---|---|---|---|
+| `Ok` | reply arrived | — | lives |
+| `Faulted` (OCE) | budget token **honored** | **no** | restart (mailbox died via reply-then-crash) |
+| `Faulted` (other) | handler crashed | yes | restart or escalate |
+| `Wedged` | **received, never answered** | **yes** | **abandoned**: factory re-runs, handle swaps, stuck task LEAKED |
+| `Backlogged` | never received (queued behind a busy sibling) | no | untouched — backlog is load evidence, not a defect |
+| `Dead` | already escalated | — | ask fails fast, ~0ms |
+
+The wedge/backlog split rides a **receipt flag** the worker flips the moment
+it dequeues the message; wedges reach the supervisor through its narrow
+reporting channel (`ReportWedge`), because the supervisor owns *all* counting.
+Wedges count precisely because each abandonment leaks a stuck task — .NET
+cannot kill user code mid-flight — so a chronic wedger must escalate rather
+than leak forever. Every fault signal carries the **generation** of the
+instance it belongs to (bumped on each `Swap`): a leaked, abandoned instance
+dying minutes later is recognized as stale (`actor.staleExit`) instead of
+restarting its healthy replacement.
+
+One observable race, seen live and deliberate: a dispatch fired in the moment
+between a wedge report and the respawn posts into the doomed mailbox and
+classifies `Backlogged` (physically true — it queued behind the stuck
+handler). It degrades identically and merely doesn't count, so a chronic
+wedger may take a few extra dispatches to escalate. Classification guides
+counting, never correctness.
 
 ## The generic Worker — the convergence seam
 
@@ -121,10 +161,10 @@ escalates). The dispatcher spawns one worker per handler registration — see
 
 | what | where |
 |---|---|
-| `ActorRef` (Post/Ask/Swap), `SupMsg`, `Supervisor` (+ clock ctor) | `dotnet/captainHookActors/Supervision.fs` |
-| `WorkMsg` DU, `Worker<'Req,'Reply>` (Supervised/AskAsync, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
+| `ActorRef` (Post/Ask/Swap/Generation/IsDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`) | `dotnet/captainHookActors/Supervision.fs` |
+| `WorkMsg` DU (with receipt flag), `AskStatus`, `AskOutcome`, `Worker<'Req,'Reply>` (Supervised/AskAsync/AskClassifiedAsync, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `CounterMsg` DU, worker loop, `Counter` facade | `dotnet/captainHookActors/Counter.fs` |
 | `AuditWriter` bounded actor | `dotnet/captainHookActors/HotPath.fs` |
-| log events | `actor.spawn`, `actor.restart`, `actor.escalate`, `counter.increment/boom`, `audit.drain` |
-| pinned by | `dotnet/captainHookTests/ActorTests.cs`, `HotPathTests.cs`; the Worker path by `DispatcherTests.cs` and `ConvergenceTests.cs` |
-| decision records | `doc/adr/0001-actor-runtime-fsharp-hybrid.md`, `doc/adr/0002-handlers-as-supervised-actors.md` |
+| log events | `actor.spawn`, `actor.restart` (data: `kind` = cancelled/crash/wedge, `counted`), `actor.wedge`, `actor.escalate` (data: `kind`), `actor.staleExit`, `counter.increment/boom`, `audit.drain` |
+| pinned by | `dotnet/captainHookTests/ActorTests.cs`, `HotPathTests.cs`; the Worker path by `DispatcherTests.cs` and `ConvergenceTests.cs`; classification by `ClassificationTests.cs` |
+| decision records | `doc/adr/0001-actor-runtime-fsharp-hybrid.md`, `doc/adr/0002-handlers-as-supervised-actors.md`, `doc/adr/0004-daemon-topology.md` (decision 5) |

@@ -45,18 +45,19 @@ run live*. The framework underneath is what exists today.
   critical path content-identity → lock-bind → serve-loop → drain →
   idle-exit). Tick progress here as slices land.
   Slices landed: `three-mode-dispatch`, `frame-protocol`,
-  `content-identity-versioned-socket` (2026-07-05).
+  `content-identity-versioned-socket`, `timeout-fault-classification`
+  (2026-07-05) — Phase 1 complete.
   Slice notes from landed work: `daemon-serve-loop` must add a dispatchId
   parameter through the dispatch pipeline (HookRun mints its own today;
   frame-protocol verification showed shim and daemon halves logging under
   different ids until the daemon adopts the shim's).
-  **Carry-ins from ADR-0002 (do not forget):** (a) a handler that IGNORES its
-  cancellation token and hangs never crashes its worker — the mailbox stays
-  blocked and later asks queue behind it (fix: cancel-on-timeout kill/respawn,
-  or bounded mailbox); (b) asks against an ESCALATED (dead) worker burn the
-  full ask timeout — add fast-fail-on-dead; (c) budget timeouts of
-  token-honoring handlers count as crashes toward the restart window —
-  chronic slowness escalates; keep or change *deliberately*.
+  **Carry-ins from ADR-0002 — DISCHARGED** by the
+  `timeout-fault-classification` slice (ADR-0004 decision 5): (a) a wedged,
+  token-ignoring handler is abandoned-and-respawned and counts toward
+  escalation; (b) asks against an escalated worker fail fast (~0ms); (c)
+  honored cancellations restart without counting — changed deliberately.
+  Pinned by ClassificationTests.cs; mechanics in
+  doc/flow/actor-supervision.md.
 - [ ] **5. Management API** — HTTP + WebSocket on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId
