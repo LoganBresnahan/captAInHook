@@ -74,12 +74,20 @@ public static class ShimClient
                 return new ForwardOutcome.NotDelivered($"connect: {Reason(ex)}");
             }
 
+            // The EXACT boundary: `committed` flips the instant the last
+            // payload byte is accepted by the transport. A failure thrown out
+            // of the write call before that is provably pre-delivery; the same
+            // exception thrown after it (a deadline landing on the flush or on
+            // the way out) means the daemon may already be dispatching — and a
+            // fallback would run this hook TWICE. The flag, not the catch
+            // block, decides.
+            var committed = false;
             try
             {
                 var stream = new NetworkStream(sock, ownsSocket: false);
-                await Frame.WriteAsync(stream, req.Encode(), pre.Token);
+                await Frame.WriteAsync(stream, req.Encode(), pre.Token, committed: () => committed = true);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!committed)
             {
                 Log.Warn("shim", "shim.fallback", new LogFields
                 {
@@ -87,6 +95,10 @@ public static class ShimClient
                     Msg = $"request write: {Reason(ex)}",
                 });
                 return new ForwardOutcome.NotDelivered($"request write: {Reason(ex)}");
+            }
+            catch (Exception ex)
+            {
+                return Failed(req, sw, $"post-commit write failure: {Reason(ex)}");
             }
         }
         // ==== the at-most-once boundary: the request frame is fully written ====

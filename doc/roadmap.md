@@ -49,7 +49,9 @@ run live*. The framework underneath is what exists today.
   (2026-07-05) — Phase 1 complete; `lock-bind-rendezvous`,
   `shim-forward-or-fallback`, `detached-daemon-spawn` (2026-07-05) —
   Phase 2 complete; `daemon-serve-loop` (2026-07-05; dispatchId adoption
-  verified end-to-end).
+  verified end-to-end); `at-most-once-fallback-guard` (2026-07-05; chaos
+  audit: 30 hooks under random daemon SIGKILL — zero double dispatches) —
+  Phase 3 complete.
   ⚠ Until `sigterm-drain` + `mandatory-idle-exit` land, a spawned daemon
   lives until killed — kill via the pidfile when it matters; a kill is safe
   (kernel releases the lock, next winner unlinks the stale socket).

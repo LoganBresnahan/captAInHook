@@ -80,7 +80,11 @@ diagram above shows — versus response (5s, covering the daemon's dispatch
 budget + grace) — expiry is a FAILED dispatch (zero stdout bytes, exit 1),
 never a retry, because the daemon may already be running non-idempotent
 Background effects. The at-most-once boundary is the request frame's write
-completion, encoded in `ForwardOutcome`: only `NotDelivered` falls back. A
+completion, encoded in `ForwardOutcome`: only `NotDelivered` falls back —
+and the boundary is EXACT: `Frame.WriteAsync`'s `committed` marker fires the
+instant the last payload byte is accepted by the transport, so a deadline
+landing on the flush or on the way out of the write classifies
+after-delivery (no fallback) instead of double-running the hook. A
 collapsed fallback reuses the shim's dispatchId — one id, one story in the
 trail — and fires `DaemonSpawner.SpawnDaemonForNextHook`: the engine spawned
 as `--daemon`, fully detached (/dev/null stdio — the host waits for the
@@ -217,5 +221,5 @@ relocated.
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
 | log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError` (src `daemon`); `harness.reload` (src `harness`) |
-| pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
+| pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `AtMostOnceTests.cs` (commit-marker boundary, mid-write deadline → truncated frame dispatches nothing, one-dispatch-per-id accounting); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md` |

@@ -32,7 +32,16 @@ public static class Frame
 
     /// Write one frame (header + payload) and flush. Returning = the frame is
     /// fully handed to the transport — the at-most-once boundary above.
-    public static async Task WriteAsync(Stream stream, ReadOnlyMemory<byte> payload, CancellationToken ct = default)
+    ///
+    /// `committed` fires the instant the LAST payload byte is accepted by the
+    /// transport, BEFORE the flush: past that point the frame may be
+    /// delivered, so a failure thrown out of the remainder of this method
+    /// (flush, a cancellation check on the way out) must be classified
+    /// after-delivery. Without this marker a deadline landing between
+    /// final-byte and return would misclassify as not-delivered and permit a
+    /// fallback that double-runs the dispatch (at-most-once-fallback-guard).
+    public static async Task WriteAsync(Stream stream, ReadOnlyMemory<byte> payload,
+        CancellationToken ct = default, Action? committed = null)
     {
         if (payload.Length > MaxPayloadBytes)
             throw new InvalidDataException($"frame payload {payload.Length} bytes exceeds max {MaxPayloadBytes}");
@@ -40,6 +49,7 @@ public static class Frame
         BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)payload.Length);
         await stream.WriteAsync(header, ct);
         await stream.WriteAsync(payload, ct);
+        committed?.Invoke();
         await stream.FlushAsync(ct);
     }
 
