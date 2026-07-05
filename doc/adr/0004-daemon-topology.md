@@ -63,10 +63,18 @@ layer (the Akka re-evaluation below).
      still exits 1 with zero stdout bytes, now decided daemon-side).
    - *collapsed* — dispatch in-process exactly as today; forced with
      `--no-daemon` (CI, one-off runs), and the automatic fallback below.
+
+   These are three modes of ONE JIT binary in v1. Decision 7's AOT step
+   later peels the shim off into its own thin, dependency-free `captainShim`
+   artifact (Native AOT), leaving `captainHook` as the JIT engine behind the
+   daemon and collapsed modes — at which point "one binary" becomes two.
 2. **Connect-or-fallback: no hook ever waits for warmup — or for silence.**
    The shim tries the socket; on connect failure it does **not** wait — it
    dispatches in-process (collapsed) for *this* event and spawns a detached
-   daemon for the *next* one. The warm path also carries a short shim-side
+   daemon for the *next* one. (Once the shim is decision 7's AOT artifact,
+   which carries no dispatcher, this in-process collapse becomes a
+   *delegation* — exec the JIT engine in collapsed mode and relay — same
+   effect, one process hop.) The warm path also carries a short shim-side
    deadline spanning connect + request + response (a small multiple of the
    warm round-trip): a daemon that accepts but never answers — a wedged
    accept loop, a mid-drain listener — is treated exactly like a transport
@@ -242,11 +250,19 @@ layer (the Akka re-evaluation below).
    process start vs. framework construction vs. first-dispatch JIT — with a
    new probe gated like `CAPTAINHOOK_PROBE` (process start-time vs.
    first-managed-code vs. pre/post-`Dispatcher`-construction timestamps; the
-   existing trail cannot see anything before its first log line). Only if
-   raw process start dominates does AOT pay; then prefer whole-binary
-   Native AOT if the host compiles cleanly, else a thin AOT shim with the
-   JIT daemon — reflection-based JSON and F# stay daemon-side by
-   construction either way.
+   existing trail cannot see anything before its first log line). The AOT
+   form, when the shim's residual justifies it, is a **thin AOT shim as its
+   own artifact** — not whole-binary AOT. A separate minimal `captainShim`
+   (C#, referencing neither the host nor the F# lib — just sockets and bytes)
+   Native-AOT-compiles trivially, while the dispatcher, F# actor lib, and
+   reflection-based spec parsing stay in the JIT `captainHook` engine (daemon
+   + collapsed modes), where warm startup makes AOT moot. Whole-binary AOT is
+   rejected: it would force source-generated JSON and F#-AOT-cleanliness for
+   a gain the daemon already delivers. One consequence for decision 2 — the
+   AOT shim carries no dispatcher, so its no-daemon fallback is a
+   **delegation** (exec the JIT engine in collapsed mode and relay its
+   output), not an in-process dispatch, which the interim one-binary JIT
+   shim still does.
 
    **Measured (2026-07-04, `CAPTAINHOOK_COLDSTART=1`, `Core/ColdStartProbe.cs`,
    7 steady cold runs).** End-to-end cold start ~216ms, and Release ≈ Debug
@@ -364,7 +380,8 @@ deferrable, a few v1:
 | localhost TCP instead of UDS | Port allocation needs its own discovery; TCP is reachable by any local process where the socket file is filesystem-permissioned (0600); UDS is first-class on Linux/WSL2 and modern Windows |
 | Version handshake instead of versioned socket path | Running code must implement compat negotiation correctly under skew; a versioned path makes mismatch structurally impossible and needs zero protocol |
 | Bounded mailbox as the wedge fix | Turns "queue grows behind a corpse" into "rejects behind a corpse" — the handler is equally dead; only abandon-and-respawn restores service |
-| AOT shim as part of this work | Optimizes before measuring; the collapsed fallback already bounds the worst case at today's cost, and the breakdown may show setup, not process start, dominates |
+| AOT shim as part of this work | Optimizes before the daemon exists; the breakdown confirmed managed setup (69%), not process start (31%), dominates — so the daemon is the win and the thin AOT `captainShim` (decision 7) is a later second step the daemon *enables*, not part of this work |
+| Whole-binary Native AOT (shim + daemon + collapsed as one AOT build) | Forces source-generated JSON and F#-AOT-cleanliness across the dispatcher and actor lib for no gain the warm daemon does not already deliver; the thin `captainShim` gets AOT's fast start by having *neither* F# nor reflection, and the engine stays JIT because it starts once |
 | Stay per-invocation (status quo) | Every hook pays cold-process construction plus first-run JIT (the measured dispatch span alone is 47.7ms); supervision value stays latent; the management API and GUI roadmap items need a resident process regardless |
 
 ## Revisit triggers
@@ -373,9 +390,10 @@ deferrable, a few v1:
   delaying concurrent dispatches → the router/pool question: re-open Akka.NET
   (the spike is still one directory away) against a hand-rolled pool behind
   the same `Worker` facade.
-- **Cold-start breakdown shows raw process start dominates** and the
-  collapsed fallback is felt in practice → AOT the shim path (decision 7's
-  gate fires).
+- **The shim's residual (`procBoot`) is felt in practice** — the daemon has
+  landed and its ~40-60ms per-hook floor matters → build the thin
+  `captainShim` AOT artifact (decision 7). Measured at ~31% of cold start;
+  second-order behind the daemon, and a *new project* of its own.
 - **The management API lands** — persistent or multiplexed connections may
   replace one-connection-per-dispatch; the length-prefixed framing already
   permits it.
