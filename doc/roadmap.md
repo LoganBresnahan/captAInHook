@@ -44,6 +44,7 @@ run live*. The framework underneath is what exists today.
   Build order: ADR-0004 § Implementation plan (14 slices → 6 phases;
   critical path content-identity → lock-bind → serve-loop → drain →
   idle-exit). Tick progress here as slices land.
+  Slices landed: `three-mode-dispatch` (2026-07-05).
   **Carry-ins from ADR-0002 (do not forget):** (a) a handler that IGNORES its
   cancellation token and hangs never crashes its worker — the mailbox stays
   blocked and later asks queue behind it (fix: cancel-on-timeout kill/respawn,

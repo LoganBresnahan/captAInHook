@@ -10,7 +10,8 @@ harness's wire format — with a structured JSONL trail the whole way.
         │  fires a lifecycle hook; payload JSON on STDIN
         ▼
 ┌ captainHook (per-invocation binary) ──────────────────────────────────────┐
-│ Program.cs                                                                │
+│ Program.cs: Invocation.Parse (Cli.cs) picks the mode — shim / collapsed / │
+│ --daemon (ADR-0004); shim & collapsed both run HookRun.CollapsedAsync:    │
 │   resolve HarnessSpec (--harness <name>, default claude-code)             │
 │     embedded defaults ◄─ overridden by ~/.captainHook/harnesses/*.json    │
 │     (invalid override skipped, default kept)   ── harness.specInvalid     │
@@ -154,7 +155,8 @@ blocks the response.
 
 | what | where |
 |---|---|
-| harness resolution, stdin read, dispatchId, stdout write | `dotnet/captainHook/Program.cs` |
+| mode selection (`Mode`, `Invocation.Parse`) | `dotnet/captainHook/Core/Cli.cs` |
+| harness resolution, stdin read, dispatchId, stdout write (`HookRun.CollapsedAsync`); Console wiring in `Program.cs` | `dotnet/captainHook/Core/HookRun.cs` |
 | `HarnessSpec` (+`TryParse`), `HarnessRegistry`, `Harness.ParseEvent`/`Canon`, `Harness.ApplyCapabilityGate`, `IResponseAdapter` + `ResponseAdapters` | `dotnet/captainHook/Core/Harness.cs` |
 | default harness spec (embedded resource) | `dotnet/captainHook/harnesses/claude-code.json` |
 | `Registry` (spec registration), `HandlerSpec`, `Dispatcher` (ctor spawns workers), `RunGuarded`, `Merge`, `Trace` | `dotnet/captainHook/Core/Dispatcher.cs` |
@@ -162,5 +164,5 @@ blocks the response.
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
 | log events | `dispatch.start`, `handler.ok/timeout/error`, `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/escalate` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`) |
-| pinned by | `dotnet/captainHookTests/DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
+| pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md` |
