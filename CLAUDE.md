@@ -110,6 +110,10 @@ lib replaced.
   truth" table of files/symbols/events/tests. Flow docs must match code.
 - **What's next → [doc/roadmap.md](doc/roadmap.md)** only (Now / Next / Later). Check
   the box in the commit that lands the item.
+- **OS facts → [doc/platform.md](doc/platform.md)**: constraints the environment
+  imposes (socket path caps, lock semantics, per-OS availability), each tied to what
+  leans on it. The lane rule: the environment *imposes* → platform.md; we *chose* →
+  ADR; the code *does* → flow doc.
 - **[doc/scratch.md](doc/scratch.md)** is an informal idea list — non-authoritative;
   don't cite it as a plan.
 
