@@ -36,7 +36,7 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
-- [ ] **4. Daemon topology** — long-lived `captaind` + thin per-event shim
+- [x] **4. Daemon topology** — long-lived `captaind` + thin per-event shim
   (DESIGN.md's split). ⚠ Fires ADR-0001's revisit trigger: re-evaluate
   Akka.NET vs the hand-rolled layer *before* building on either → an ADR.
   Design recorded in ADR-0004 (verdict: stay hand-rolled; carry-ins
@@ -59,7 +59,14 @@ run live*. The framework underneath is what exists today.
   deployed daemon from a dev-tree run) — Phase 4 complete;
   `mandatory-idle-exit` (2026-07-06; live daemon survived refreshing hooks,
   self-reaped 92ms past its window, respawned on the next hook) — Phase 5
-  complete. Remaining: Phase 6 `concurrency-audit-and-soak`.
+  complete; `concurrency-audit-and-soak` (2026-07-06; 200 concurrent
+  dispatches in-suite — seq values a perfect 1..200 permutation, background
+  queue exact, escalation mid-load survived; 180 live hooks against the
+  deployed daemon — 100% warm, zero double dispatches, p50 99ms round-trip
+  / 13.4ms daemon-side, RSS asymptoting not leaking) — Phase 6 complete.
+  **ADR-0004's implementation plan is fully landed**; dogfooding live.
+  Carry-out for the AOT-shim gate (ADR-0004 decision 7): the measured warm
+  residual is ~85ms of shim procBoot+JIT per hook.
   ⚠ Until `mandatory-idle-exit` lands, a spawned daemon lives until killed —
   SIGTERM now drains gracefully; kill -9 stays safe.
   Dogfooding: `/deploy` ships the apphost build to the live hooks and

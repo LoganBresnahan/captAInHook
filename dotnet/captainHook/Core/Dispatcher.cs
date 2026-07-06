@@ -144,7 +144,17 @@ public sealed class Dispatcher
             if (o.Effect is Effect.Background bg)
             {
                 Interlocked.Increment(ref _sidePending);
-                _side.Writer.TryWrite(new SideWork(o.Name, e, dispatchId, bg, trace));
+                if (!_side.Writer.TryWrite(new SideWork(o.Name, e, dispatchId, bg, trace)))
+                {
+                    // Unreachable while the drain's active==0 guard holds (no
+                    // dispatch can be mid-flight when the writer completes) —
+                    // but if that invariant ever slips, a silently dropped
+                    // background effect is the nightmare: be LOUD instead.
+                    Interlocked.Decrement(ref _sidePending);
+                    Log.Error("dispatcher", "side.dropped", Fields(e, dispatchId,
+                        msg: "background effect enqueued after queue completion — dropped",
+                        data: Handler(o.Name)));
+                }
             }
             else loop.Add(o.Effect);
         }
