@@ -53,7 +53,12 @@ run live*. The framework underneath is what exists today.
   `git mv`'d into the new leaf lib, wire log seam bound to `Actors.Log` by
   engine + tests, suite green twice, zero behavior change);
   `wire-json-source-gen` (2026-07-06; `WireJson` context for the two frame
-  records, `IsAotCompatible` analyzers on — wire lib builds warning-free).
+  records, `IsAotCompatible` analyzers on — wire lib builds warning-free);
+  `wire-jsonl-logger` (2026-07-06; `WireJsonl.Render` = the shim's emitter of
+  the trail's one schema, pinned byte-identical to F# `ToJson()` by 17 golden
+  cross-emitter tests — unicode/control escaping, durMs rounding, omit-null,
+  nested data — plus mirrored path resolution and the O_APPEND appender).
+  Phase A complete.
 
 ## Next
 
