@@ -33,7 +33,7 @@ run live*. The framework underneath is what exists today.
   layering, tool gating) and moby `models/registry.ts` (capability registry
   + validated custom entries). `claude-code` stays the default; a
   `generic-json` adapter proves N>1.
-- [ ] **12. Thin AOT `captainShim`** — ADR-0004 decision 7's gate tripped
+- [x] **12. Thin AOT `captainShim`** — ADR-0004 decision 7's gate tripped
   (2026-07-06): a PreToolUse-class before-tools hook puts the shim's measured
   ~85ms procBoot+JIT residual on **every tool call** — per-action, on the
   agent's critical path — so the reserved thin-AOT-shim step is scheduled.
@@ -75,6 +75,15 @@ run live*. The framework underneath is what exists today.
   verified in the native artifact — including catching a REAL skew created
   mid-verification by copying one artifact without the other, which
   delegated and answered the hook exactly as designed). Phase B complete.
+  `deploy-two-artifacts` (2026-07-06; /deploy reworked to stage-both +
+  swap-together with `bin.prev` kept for one-swap rollback; live cutover
+  verified — cold delegated+spawned, warm `shim.answered`, zero
+  `shim.wireSkew`, superseded daemon doctor-drained; PreToolUse wired into
+  settings.json per the gate's own trigger, dispatching `{}`/exit-0 with
+  zero handlers until item 9's policy gate; **live warm hook 16ms vs 143ms
+  pre-cutover** — 9×, the amendment's ≤40ms bar beaten on the real path).
+  **Item complete: the amendment plan is fully landed; dogfooding live on
+  the native shim.**
 
 ## Next
 
