@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
     <AssemblyName>captainHook</AssemblyName>
     <RootNamespace>CaptainHook</RootNamespace>
+    <!-- Keep git out of the compiled bytes: content identity must track
+         compiled content only (rationale: captainHookActors.fsproj). -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
   </PropertyGroup>
 
   <!-- Cross-language interop: the F# actor layer is just another assembly.

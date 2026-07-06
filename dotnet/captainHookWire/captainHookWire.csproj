@@ -16,6 +16,10 @@
          into a native image, so reflection-shaped code here must be a build
          warning today, not a publish failure later. -->
     <IsAotCompatible>true</IsAotCompatible>
+    <!-- Keep git out of the compiled bytes: content identity AND the shim's
+         wire-stamp skew guard key on this assembly's MVID, which must track
+         compiled content only (rationale: captainHookActors.fsproj). -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
   </PropertyGroup>
 
 </Project>

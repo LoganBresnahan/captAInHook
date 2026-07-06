@@ -4,6 +4,19 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>CaptainHook.Actors</RootNamespace>
     <AssemblyName>captainHookActors</AssemblyName>
+    <!-- Content identity (ADR-0004 d3) demands MVIDs track compiled content
+         ONLY. Two SDK defaults break that, both probed 2026-07-06:
+         (a) the build queries git and bakes HEAD into the compilation
+         (InformationalVersion sha, SourceLink), so every COMMIT — docs-only
+         included — minted fresh MVIDs; killed at the root here, same
+         property in every shipped project.
+         (b) fsc's REFERENCE-assembly emission is nondeterministic (fresh
+         bytes per compile from identical input), which poisoned the
+         deterministic hash of every C# assembly referencing this one — so
+         no ref assembly: reference the real dll; this repo is small enough
+         that the lost build-shielding is free. -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
   </PropertyGroup>
 
   <!-- F# compiles files IN ORDER — dependencies must come first.

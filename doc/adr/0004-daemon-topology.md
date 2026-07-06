@@ -121,7 +121,20 @@ layer (the Akka re-evaluation below).
      bytes and keeps its socket, a reverted change returns to the prior
      identity. Stronger than the original framing: no daemon churn on no-op
      rebuilds, and "identity differs" now literally means "behavior may
-     differ".)* Superseded daemons stop receiving
+     differ".)* *(Amended 2026-07-06: that measurement held only within one
+     commit — three SDK defaults quietly made compile EVENTS inputs again,
+     caught when a post-cutover redeploy of identical source rolled the
+     identity. (1) The build queries git and bakes HEAD into
+     InformationalVersion — every commit, docs-only included, minted fresh
+     MVIDs; (2) implicit SourceLink put the sha into the C# PDBs, feeding
+     the deterministic hash; (3) fsc emits a NONDETERMINISTIC reference
+     assembly, poisoning the hash of every C# assembly referencing the F#
+     lib on every recompile. Fixed at the roots:
+     `EnableSourceControlManagerQueries=false` in all shipped projects,
+     `ProduceReferenceAssembly=false` on the F# lib. Probed after the fix:
+     clean publish ×2 at one HEAD plus ×1 behind an empty commit — all nine
+     MVIDs identical. The facts are recorded in doc/platform.md; the
+     original claim is now true as stated.)* Superseded daemons stop receiving
      connections and idle-exit; `captainHook --daemon --replace` is the
      explicit escape hatch (tell the incumbent to drain, take over) so no
      workflow ever depends on waiting one out.

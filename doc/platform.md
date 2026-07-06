@@ -49,6 +49,14 @@ verified the day a real run touches them.
 | `AppContext.BaseDirectory` / `Environment.ProcessPath` work under AOT | Both resolve to the native executable's directory/path. | `ShimMain.DefaultEnginePath` (co-located engine), the shim's identity hash over its own directory. |
 | `Process.GetCurrentProcess().StartTime` is coarse | /proc-derived; jitter of several ms observed on WSL2 — fine for the gated `shim.boot` trail line, not for benchmarking. | The `CAPTAINHOOK_COLDSTART` probe's shim half; real measurement is wall-clock over batched runs. |
 
+## Build determinism (content identity leans on all of these)
+
+| Fact | Detail | What leans on it |
+| --- | --- | --- |
+| The SDK bakes git HEAD into builds by default | `InitializeSourceControlInformation` queries git on every build; the sha lands in `AssemblyInformationalVersion` and (C#) the implicit-SourceLink document feeding the PDB id — so identical source recompiles to fresh MVIDs behind ANY commit, docs-only included. Probed with empty commits 2026-07-06. Opt-out at the root: `EnableSourceControlManagerQueries=false`. | ADR-0004 d3's "identity differs ⟺ behavior may differ"; without the opt-out every commit churns a daemon and costs a spurious cold hook. |
+| fsc reference assemblies are nondeterministic | The F# compiler's `ref/` assembly gets fresh bytes per compile from identical input (Roslyn's are deterministic), poisoning the deterministic hash of every C# assembly that references the F# lib. Probed by hashing obj trees across clean publishes 2026-07-06. Opt-out: `ProduceReferenceAssembly=false` on the fsproj. | Same — `captainHook.dll`'s MVID (the biggest identity input) was rolling on every publish. |
+| Verified end state | Clean `dotnet publish` ×2 at one HEAD + ×1 behind an empty commit → all shipped MVIDs identical. Re-run this probe if the SDK majors or a project is added. | The no-op-republish-keeps-the-warm-daemon property (doc/flow/live-deployment.md). |
+
 ## Per-OS summary
 
 | | Linux / WSL2 | macOS | Windows (native) |
