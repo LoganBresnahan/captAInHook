@@ -16,6 +16,9 @@ are as-of-write-time and can drift. When in doubt, read the code.
   commits + roadmap + docs. Run it first in a fresh window.
 - **`/shipshape`** — verifies the repo is in order (tests / docs / logging). Run
   before commits. It *proposes* fixes; it does not apply them unless asked.
+- **`/deploy`** — ships the current build to the live hook installation
+  (`~/.captainHook/bin`, apphost only) and verifies the daemon warm path. The
+  ONLY sanctioned way to touch the live deployment; needs the suite green twice.
 
 ## Architecture in one breath
 

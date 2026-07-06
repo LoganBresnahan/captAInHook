@@ -55,6 +55,8 @@ run live*. The framework underneath is what exists today.
   ⚠ Until `sigterm-drain` + `mandatory-idle-exit` land, a spawned daemon
   lives until killed — kill via the pidfile when it matters; a kill is safe
   (kernel releases the lock, next winner unlinks the stale socket).
+  Dogfooding: `/deploy` ships the apphost build to the live hooks and
+  verifies the warm path (mechanics: doc/flow/live-deployment.md).
   **Carry-ins from ADR-0002 — DISCHARGED** by the
   `timeout-fault-classification` slice (ADR-0004 decision 5): (a) a wedged,
   token-ignoring handler is abandoned-and-respawned and counts toward

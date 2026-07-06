@@ -53,6 +53,19 @@ public class SpawnTests
     }
 
     [Fact]
+    public void MuxerInvocation_RefusesToSpawn_AndSaysWhy()
+    {
+        // `dotnet captainHook.dll` makes ProcessPath the dotnet muxer;
+        // spawning `dotnet --daemon` would fail silently forever. The guard
+        // must refuse loudly in the trail instead.
+        using var log = new CapturedLog();
+        DaemonSpawner.SpawnDaemonForNextHook("test0001", exeOverride: "/home/user/.dotnet/dotnet");
+
+        var ev = Assert.Single(log.Events, e => e.Evt == "shim.spawnFailed");
+        Assert.Contains("apphost", ev.Fields.Msg);
+    }
+
+    [Fact]
     public void Detached_ReturnsPromptly_NeverWaitsOnTheDaemon()
     {
         // The shim must not stall behind its own spawn: the intermediate sh

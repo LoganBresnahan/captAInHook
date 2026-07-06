@@ -27,14 +27,28 @@ public static class DaemonSpawner
     /// Fire-and-forget: spawn this same binary in daemon mode (one binary,
     /// three modes). Failures are logged, never thrown — a hook must never be
     /// lost to a spawn problem; the worst case is the next hook collapsing too.
-    public static void SpawnDaemonForNextHook(string? dispatchId)
+    /// `exeOverride` is the test seam; production takes ProcessPath.
+    public static void SpawnDaemonForNextHook(string? dispatchId, string? exeOverride = null)
     {
-        var exe = Environment.ProcessPath;
+        var exe = exeOverride ?? Environment.ProcessPath;
         if (exe is null)
         {
             Log.Warn("shim", "shim.spawnFailed", new LogFields
             {
                 DispatchId = dispatchId, Msg = "no ProcessPath — cannot locate the engine binary",
+            });
+            return;
+        }
+        // Invoked as `dotnet captainHook.dll …`, ProcessPath is the dotnet
+        // MUXER, not this app — spawning `dotnet --daemon` is a CLI error and
+        // dogfooding silently degrades to collapsed-forever (doc/platform.md).
+        // Deploy the apphost executable and point the hook command at it.
+        if (Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Warn("shim", "shim.spawnFailed", new LogFields
+            {
+                DispatchId = dispatchId,
+                Msg = $"ProcessPath is the dotnet muxer ({exe}) — run via the apphost executable so the daemon can be spawned",
             });
             return;
         }
