@@ -17,6 +17,8 @@ public enum Mode
     Collapsed,
     /// `--daemon` — build registry/dispatcher/workers once, serve over the socket.
     Daemon,
+    /// `doctor` — reap leftover daemons/files with the PID-reuse guard.
+    Doctor,
     /// `actors-demo` — drive the F# actor layer directly.
     ActorsDemo,
 }
@@ -29,6 +31,8 @@ public sealed record Invocation(Mode Mode, string? EventName, string HarnessName
     {
         if (args.Length > 0 && args[0] == "actors-demo")
             return new(Mode.ActorsDemo, null, "claude-code");
+        if (args.Length > 0 && args[0] == "doctor")
+            return new(Mode.Doctor, null, "claude-code");
 
         string? eventName = null;
         var harnessName = "claude-code";

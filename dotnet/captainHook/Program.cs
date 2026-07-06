@@ -28,9 +28,19 @@ switch (inv.Mode)
         return 0;
 
     case Mode.Daemon:
-        // captaind: warm once, serve over the socket until killed (drain and
-        // idle-exit are upcoming slices). See Core/DaemonHost.cs.
+        // captaind: warm once, serve over the socket, drain on SIGTERM.
+        // See Core/DaemonHost.cs.
         return await DaemonHost.RunAsync();
+
+    case Mode.Doctor:
+    {
+        // Human command, not hook mode: the report goes to stdout on purpose.
+        var verdicts = await Doctor.RunAsync();
+        if (verdicts.Count == 0) Console.WriteLine("doctor: nothing to reap — rendezvous dir is clean");
+        foreach (var v in verdicts)
+            Console.WriteLine($"doctor: captaind-{v.Version}: {v.Action} — {v.Detail}");
+        return 0;
+    }
 
     case Mode.Shim:
     {

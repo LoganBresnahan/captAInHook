@@ -49,6 +49,12 @@ The `/deploy` skill *performs* this; this doc explains what it leaves behind.
   (`daemon.drainStart` → `daemon.drained` in the trail). `kill -9` remains
   safe too — the kernel releases the lock, the next prompt collapses and
   respawns. Never delete `.lock` files.
+- **Sweep leftovers**: `~/.captainHook/bin/captainHook doctor` — dead
+  pidfiles/sockets removed, pid-reused records cleaned without signaling the
+  stranger, superseded daemons (their binary's path computes a different
+  identity now) SIGTERM-drained then SIGKILLed after grace, healthy daemons
+  and lock files untouched. Runnable from any build: lineage is judged
+  per-path, so a dev-tree doctor never kills a healthy deployed daemon.
 - **Watch it live**: `tail -f ~/.captainHook/logs/captainHook.jsonl` — a warm
   prompt is `shim.answered` + daemon-side `dispatch.start/done` under one
   dispatchId; a cold one is `shim.fallback` + `shim.spawnDaemon` + collapsed

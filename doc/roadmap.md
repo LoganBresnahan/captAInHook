@@ -54,7 +54,9 @@ run live*. The framework underneath is what exists today.
   Phase 3 complete; `sigterm-drain` (2026-07-06; real SIGTERM landed
   mid-dispatch — in-flight hook still answered, drained in 62ms);
   `harness-hot-reload` (2026-07-06; in-place edit — same inode, dir mtime
-  unmoved — served on the next hook through a live daemon).
+  unmoved — served on the next hook through a live daemon); `doctor-reaper`
+  (2026-07-06; swept 3 stale identities live while sparing the healthy
+  deployed daemon from a dev-tree run) — Phase 4 complete.
   ⚠ Until `mandatory-idle-exit` lands, a spawned daemon lives until killed —
   SIGTERM now drains gracefully; kill -9 stays safe.
   Dogfooding: `/deploy` ships the apphost build to the live hooks and

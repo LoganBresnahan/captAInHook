@@ -168,7 +168,11 @@ layer (the Akka re-evaluation below).
      for **cleanup only**, not discovery. `captainHook doctor` reaps
      leftovers: liveness check *plus* verifying the process matches the
      recorded binary before SIGTERM → grace → SIGKILL — the PID-reuse guard
-     from pharos's ADR-030.
+     from pharos's ADR-030. *(Amended 2026-07-06: "superseded" is judged by
+     PATH lineage — the binary at the daemon's own recorded path computes a
+     different content identity now — never by the doctor binary's identity,
+     so doctor is safe to run from any build; a dev-tree doctor leaves a
+     healthy deployed daemon alone. Verified live.)*
 5. **Timeout is not fault — the ADR-0002 carry-in verdicts.** Supervision
    currently conflates "budget expired" with "handler crashed"; the daemon
    pulls them apart into three classified outcomes. Two mechanical changes

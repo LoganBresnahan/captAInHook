@@ -59,13 +59,16 @@ hook must log `shim.answered`. If it logs `shim.fallback` twice, the daemon
 didn't come up — read the trail for `daemon.*` events before touching
 anything.
 
-## 4. Reap superseded daemons  ⚠ until `mandatory-idle-exit` lands
+## 4. Reap superseded daemons
 
-A redeploy mints a new content identity; the previous identity's daemon idles
-forever. For each `captaind-*.pid` in the rendezvous dir (`$XDG_RUNTIME_DIR/
-captainHook/`, else `~/.captainHook/`) whose identity is NOT the one just
-deployed: verify the pid's `/proc/<pid>/exe` still points at a captainHook
-binary (PID-reuse guard), then `kill` it. Never delete `.lock` files.
+```sh
+~/.captainHook/bin/captainHook doctor
+```
+
+Doctor is double-guarded (PID-reuse via cmdline; superseded = the binary at
+the daemon's OWN path moved on), so it reaps the pre-redeploy daemon
+(SIGTERM → drain → grace → SIGKILL), sweeps stale sockets/pidfiles, and
+leaves healthy daemons and every `.lock` file alone. Safe to run any time.
 
 ## 5. Report
 
