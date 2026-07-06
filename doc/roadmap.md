@@ -57,11 +57,15 @@ run live*. The framework underneath is what exists today.
   global pause — the hook is always *answered* (the harness blocks on
   stdout), but policy short-circuits dispatch to an immediate Noop.
   Daemon-side by rule — the shim stays policy-free (aot-boundary rule 1).
-  Fires an ADR: the file contract, and the malformed-file direction —
-  leaning Noop-everything-loudly (can't parse ⇒ don't run optional
-  subsystems; hooks are enhancement, not authz, so "quiet + loud trail"
-  beats both silent-run-everything and brick-the-agent). This is the same
-  data item 5's API manages and item 6's GUI edits: file → API → GUI.
+  Design recorded in **ADR-0006** (2026-07-06): one strict JSON file
+  (`~/.captainHook/dispatch.json`, house policy dialect), decisions
+  `allow|deny` only, rules AND event/handler/project(prefix)/session,
+  first match wins; absent ⇒ allow all, malformed ⇒ Noop-everything
+  loudly; one evaluator covering both the daemon serve loop AND the
+  collapsed pipeline; hot reload, no last-good; **no pause mechanism** —
+  `default: deny` already says it (API convenience later if friction is
+  real). This is the same data item 5's API manages and item 6's GUI
+  edits: file → API → GUI. Slice with /adr-plan when work starts.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central
