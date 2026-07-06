@@ -44,7 +44,10 @@ Both leaves reference *nothing*. The F# lib must never see `HookEvent` /
 methods returning `Task`. The shim must never reference the host or the F#
 lib — that absence is exactly what makes it Native-AOT-compile trivially,
 and an added reference walks straight into the native image.
-(ADR-0001, ADR-0002, ADR-0004 decision 7 amendment.)
+(ADR-0001, ADR-0002, ADR-0004 decision 7 amendment. **Every constraint the
+AOT shim puts on application code — the 12 rules and what enforces each —
+lives in [doc/flow/aot-boundary.md](doc/flow/aot-boundary.md); read it
+before touching `captainHookWire/` or `captainShim/`.**)
 
 ## Sacred invariants — breaking one breaks the project
 
