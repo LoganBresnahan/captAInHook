@@ -51,10 +51,10 @@ run live*. The framework underneath is what exists today.
   Phase 2 complete; `daemon-serve-loop` (2026-07-05; dispatchId adoption
   verified end-to-end); `at-most-once-fallback-guard` (2026-07-05; chaos
   audit: 30 hooks under random daemon SIGKILL — zero double dispatches) —
-  Phase 3 complete.
-  ⚠ Until `sigterm-drain` + `mandatory-idle-exit` land, a spawned daemon
-  lives until killed — kill via the pidfile when it matters; a kill is safe
-  (kernel releases the lock, next winner unlinks the stale socket).
+  Phase 3 complete; `sigterm-drain` (2026-07-06; real SIGTERM landed
+  mid-dispatch — in-flight hook still answered, drained in 62ms).
+  ⚠ Until `mandatory-idle-exit` lands, a spawned daemon lives until killed —
+  SIGTERM now drains gracefully; kill -9 stays safe.
   Dogfooding: `/deploy` ships the apphost build to the live hooks and
   verifies the warm path (mechanics: doc/flow/live-deployment.md).
   **Carry-ins from ADR-0002 — DISCHARGED** by the

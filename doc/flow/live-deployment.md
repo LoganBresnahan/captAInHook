@@ -43,10 +43,12 @@ The `/deploy` skill *performs* this; this doc explains what it leaves behind.
 - **Is a daemon running?** Read `captaind-<ver>.pid` (pid, binary path,
   started-at), then check `/proc/<pid>/exe` still points at a captainHook
   binary — pids get reused; never trust the pid alone.
-- **Kill it** — always safe: `kill <pid>`. The kernel releases the lock; the
-  socket file goes stale; the next prompt's shim gets `ConnectionRefused`,
-  collapses (prompt unharmed), and spawns a fresh daemon that unlinks the
-  stale socket. Never delete `.lock` files.
+- **Kill it** — `kill <pid>` (SIGTERM) now drains gracefully: in-flight
+  prompts get their responses, queued Background work completes (10s
+  deadline), socket and pidfile are removed on the way out
+  (`daemon.drainStart` → `daemon.drained` in the trail). `kill -9` remains
+  safe too — the kernel releases the lock, the next prompt collapses and
+  respawns. Never delete `.lock` files.
 - **Watch it live**: `tail -f ~/.captainHook/logs/captainHook.jsonl` — a warm
   prompt is `shim.answered` + daemon-side `dispatch.start/done` under one
   dispatchId; a cold one is `shim.fallback` + `shim.spawnDaemon` + collapsed

@@ -98,10 +98,15 @@ shared dispatcher, adopting the shim's dispatchId. Harness specs keep
 ADR-0003's edit-a-spec-effective-next-hook contract via one stat of the
 override dir per dispatch (`ReloadingHarnessRegistry`); the rest of
 `CAPTAINHOOK_*` is daemon-start configuration, and the stderr pretty sink
-defaults off in daemon mode (the JSONL file is the record). SIGTERM drain and
-idle-exit are upcoming slices — until then the daemon serves until killed,
-which is safe: the kernel releases the lock, the next winner unlinks the
-stale socket.
+defaults off in daemon mode (the JSONL file is the record). On SIGTERM/SIGINT
+the daemon DRAINS (decision 4): listener closes first (mid-drain hooks get
+refused → collapse, never hang), in-flight dispatches still get their
+responses, queued/running Background effects complete — both phases under
+one deadline (default 10s; a blown deadline exits anyway and logs
+`daemon.drainTimeout` with the dropped counts) — then socket and pidfile are
+unlinked and it exits 0. Idle-exit is the remaining lifecycle slice; a hard
+kill stays safe regardless (the kernel releases the lock, the next winner
+unlinks the stale socket).
 
 ## The harness boundary
 
@@ -220,6 +225,6 @@ relocated.
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError` (src `daemon`); `harness.reload` (src `harness`) |
+| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`) |
 | pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `AtMostOnceTests.cs` (commit-marker boundary, mid-write deadline → truncated frame dispatches nothing, one-dispatch-per-id accounting); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md` |

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using CaptainHook.Actors;
@@ -16,12 +18,17 @@ namespace CaptainHook.Core;
 // releases the lock, the next winner unlinks the stale socket.
 public static class DaemonHost
 {
-    /// Serve until cancelled (tests) or killed (production, until the
-    /// lifecycle slices land). Returns the process exit code: 0 after losing
-    /// the spawn race (some other daemon won — mission accomplished) or on
-    /// cancel; 1 when the rendezvous itself is unusable.
+    /// Serve until SIGTERM/SIGINT (production) or `ct` (tests) triggers the
+    /// DRAIN (ADR-0004 decision 4): stop accepting, finish in-flight
+    /// dispatches AND queued/running Background effects up to `drainDeadline`
+    /// (default 10s), then clean up (unlink socket, remove pidfile — the lock
+    /// file stays, always) and exit 0. Returns 0 after losing the spawn race
+    /// too (some other daemon won — mission accomplished); 1 when the
+    /// rendezvous itself is unusable. `registry` is the test seam for handler
+    /// behavior; production uses the default wiring.
     public static async Task<int> RunAsync(
-        RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default)
+        RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
+        Registry? registry = null, TimeSpan? drainDeadline = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -57,7 +64,7 @@ public static class DaemonHost
         // ---- warm up: everything expensive happens BEFORE the bind ----------
         var harnesses = new ReloadingHarnessRegistry(harnessDir);
         _ = harnesses.Current.Known;                     // force the initial spec load
-        var dispatcher = new Dispatcher(HookRun.BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
+        var dispatcher = new Dispatcher(registry ?? HookRun.BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
 
         // Listening ⟺ ready: the first connect a shim ever makes against this
         // daemon already finds warm workers.
@@ -72,10 +79,20 @@ public static class DaemonHost
             },
         });
 
-        while (!ct.IsCancellationRequested)
+        // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
+        // one linked source, one code path. ctx.Cancel = true claims the
+        // signal so the runtime does not tear the process down under us.
+        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM,
+            sctx => { sctx.Cancel = true; drainCts.Cancel(); });
+        using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT,
+            sctx => { sctx.Cancel = true; drainCts.Cancel(); });
+
+        var active = 0;   // in-flight connections; drain waits for 0
+        while (!drainCts.IsCancellationRequested)
         {
             Socket conn;
-            try { conn = await listener.AcceptAsync(ct); }
+            try { conn = await listener.AcceptAsync(drainCts.Token); }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
@@ -85,9 +102,70 @@ public static class DaemonHost
             // One task per connection: dispatches run concurrently; per-worker
             // serialization inside the dispatcher is what actually orders work
             // (the concurrency-audit slice soaks exactly this).
-            _ = Task.Run(() => ServeConnectionAsync(conn, harnesses, dispatcher), CancellationToken.None);
+            Interlocked.Increment(ref active);
+            _ = Task.Run(async () =>
+            {
+                try { await ServeConnectionAsync(conn, harnesses, dispatcher); }
+                finally { Interlocked.Decrement(ref active); }
+            }, CancellationToken.None);
         }
-        return 0;
+
+        // ---- DRAIN (decision 4): the deadline covers BOTH phases ------------
+        // Close the listener first: new connects get refused, so their shims
+        // fall back to collapsed — no hook waits on a dying daemon.
+        listener.Close();
+        var deadline = drainDeadline ?? TimeSpan.FromSeconds(10);
+        Log.Info("daemon", "daemon.drainStart", new LogFields
+        {
+            Data = new Dictionary<string, object>
+            {
+                ["active"] = Volatile.Read(ref active),
+                ["backgroundPending"] = dispatcher.BackgroundPending,
+                ["deadlineMs"] = deadline.TotalMilliseconds,
+            },
+        });
+
+        // Phase 1: in-flight dispatches. Their responses must still be relayed
+        // — an accepted request is a promise. Monotonic deadline (Stopwatch).
+        var sw = Stopwatch.StartNew();
+        while (Volatile.Read(ref active) > 0 && sw.Elapsed < deadline)
+            await Task.Delay(20, CancellationToken.None);
+
+        // Phase 2: the Background queue — work that by design outlives its
+        // responses (the memory-write scheduled by a session's last hook is
+        // exactly what lives here). In-flight is zero (or timed out), so no
+        // new enqueues can arrive: completing the queue IS the drain.
+        var drained = false;
+        var remaining = deadline - sw.Elapsed;
+        if (Volatile.Read(ref active) == 0 && remaining > TimeSpan.Zero)
+        {
+            try
+            {
+                await dispatcher.CompleteBackgroundAsync().WaitAsync(remaining);
+                drained = true;
+            }
+            catch (TimeoutException) { /* fall through to the timeout log */ }
+        }
+
+        if (drained)
+        {
+            Log.Info("daemon", "daemon.drained", new LogFields { DurMs = sw.Elapsed.TotalMilliseconds });
+        }
+        else
+        {
+            // Deadline expired with work still pending: exit anyway — but the
+            // dropped work is VISIBLE, never silent.
+            Log.Warn("daemon", "daemon.drainTimeout", new LogFields
+            {
+                DurMs = sw.Elapsed.TotalMilliseconds,
+                Data = new Dictionary<string, object>
+                {
+                    ["active"] = Volatile.Read(ref active),
+                    ["backgroundPending"] = dispatcher.BackgroundPending,
+                },
+            });
+        }
+        return 0;   // `using rv` unlinks socket + pidfile; the lock file stays
     }
 
     /// One connection = one dispatch: read a request frame, dispatch, answer,
