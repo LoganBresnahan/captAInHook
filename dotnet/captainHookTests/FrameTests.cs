@@ -1,5 +1,6 @@
 using System.Text;
 using CaptainHook.Core;
+using CaptainHook.Wire;
 
 namespace CaptainHook.Tests;
 

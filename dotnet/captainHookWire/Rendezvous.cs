@@ -3,7 +3,7 @@ using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace CaptainHook.Core;
+namespace CaptainHook.Wire;
 
 // ADR-0004 decision 3: the shim/daemon rendezvous is versioned by the binary's
 // CONTENT identity — a hash of the ModuleVersionIds of all application

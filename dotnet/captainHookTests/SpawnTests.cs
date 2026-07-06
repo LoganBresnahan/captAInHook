@@ -1,4 +1,5 @@
 using CaptainHook.Core;
+using CaptainHook.Wire;
 using static CaptainHook.Tests.TestUtil;
 
 namespace CaptainHook.Tests;

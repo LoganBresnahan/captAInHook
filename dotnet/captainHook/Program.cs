@@ -1,4 +1,5 @@
 using CaptainHook.Core;
+using CaptainHook.Wire;
 
 // captAInHook — one binary, three modes (ADR-0004 decision 1): shim, daemon,
 // collapsed. Mode is decided once from argv in Invocation.Parse; the dispatch
@@ -19,6 +20,10 @@ using CaptainHook.Core;
 // ---- cold-start probe (opt-in): anchor the stopwatch as early as managed code
 //      allows, before any real work. Null unless CAPTAINHOOK_COLDSTART=1. -------
 var probe = ColdStartProbe.StartIfEnabled();
+
+// Wire-layer diagnostics flow into Actors.Log — bound before anything that
+// could emit (ADR-0004 decision 7 amendment; the AOT shim binds differently).
+WireLogBridge.Bind();
 
 var inv = Invocation.Parse(args);
 switch (inv.Mode)

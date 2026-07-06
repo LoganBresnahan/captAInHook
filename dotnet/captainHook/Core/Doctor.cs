@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using CaptainHook.Actors;
+using CaptainHook.Wire;
 
 namespace CaptainHook.Core;
 

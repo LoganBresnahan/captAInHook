@@ -1,7 +1,6 @@
 using System.Diagnostics;
-using CaptainHook.Actors;
 
-namespace CaptainHook.Core;
+namespace CaptainHook.Wire;
 
 // ADR-0004 decision 2: on a NotDelivered fallback the shim spawns a daemon for
 // the NEXT hook — this hook already collapsed; no hook ever waits for warmup.
@@ -33,7 +32,7 @@ public static class DaemonSpawner
         var exe = exeOverride ?? Environment.ProcessPath;
         if (exe is null)
         {
-            Log.Warn("shim", "shim.spawnFailed", new LogFields
+            WireLog.Warn("shim", "shim.spawnFailed", new WireLogFields
             {
                 DispatchId = dispatchId, Msg = "no ProcessPath — cannot locate the engine binary",
             });
@@ -45,7 +44,7 @@ public static class DaemonSpawner
         // Deploy the apphost executable and point the hook command at it.
         if (Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
         {
-            Log.Warn("shim", "shim.spawnFailed", new LogFields
+            WireLog.Warn("shim", "shim.spawnFailed", new WireLogFields
             {
                 DispatchId = dispatchId,
                 Msg = $"ProcessPath is the dotnet muxer ({exe}) — run via the apphost executable so the daemon can be spawned",
@@ -55,7 +54,7 @@ public static class DaemonSpawner
         try
         {
             Detached(exe, "--daemon");
-            Log.Info("shim", "shim.spawnDaemon", new LogFields
+            WireLog.Info("shim", "shim.spawnDaemon", new WireLogFields
             {
                 DispatchId = dispatchId,
                 Data = new Dictionary<string, object> { ["binary"] = exe },
@@ -63,7 +62,7 @@ public static class DaemonSpawner
         }
         catch (Exception ex)
         {
-            Log.Warn("shim", "shim.spawnFailed", new LogFields { DispatchId = dispatchId, Msg = ex.Message });
+            WireLog.Warn("shim", "shim.spawnFailed", new WireLogFields { DispatchId = dispatchId, Msg = ex.Message });
         }
     }
 

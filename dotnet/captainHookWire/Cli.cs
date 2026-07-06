@@ -1,4 +1,4 @@
-namespace CaptainHook.Core;
+namespace CaptainHook.Wire;
 
 // ADR-0004 decision 1: one binary, three modes. Which mode a process runs in is
 // decided ONCE, here, from argv — never inferred mid-flight — so the seam the

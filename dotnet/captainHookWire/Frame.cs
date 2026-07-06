@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace CaptainHook.Core;
+namespace CaptainHook.Wire;
 
 // ADR-0004 decision 3 (framing): 4-byte little-endian length prefix + UTF-8
 // JSON per frame; one connection per dispatch. This file is the codec BOTH

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CaptainHook.Handlers;
+using CaptainHook.Wire;
 
 namespace CaptainHook.Core;
 

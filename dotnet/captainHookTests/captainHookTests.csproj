@@ -8,11 +8,13 @@
     <RootNamespace>CaptainHook.Tests</RootNamespace>
   </PropertyGroup>
 
-  <!-- Under test: the C# host (an Exe — referencing it from tests is fine)
-       and the F# actor layer. Every actor test doubles as interop coverage. -->
+  <!-- Under test: the C# host (an Exe — referencing it from tests is fine),
+       the F# actor layer, and the wire contract lib. Every actor test doubles
+       as interop coverage. -->
   <ItemGroup>
     <ProjectReference Include="../captainHook/captainHook.csproj" />
     <ProjectReference Include="../captainHookActors/captainHookActors.fsproj" />
+    <ProjectReference Include="../captainHookWire/captainHookWire.csproj" />
   </ItemGroup>
 
   <ItemGroup>

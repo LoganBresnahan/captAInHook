@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using CaptainHook.Core;
+using CaptainHook.Wire;
 
 namespace CaptainHook.Tests;
 

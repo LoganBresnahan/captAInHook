@@ -1,8 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
-using CaptainHook.Actors;
 
-namespace CaptainHook.Core;
+namespace CaptainHook.Wire;
 
 /// How one forward attempt ended (ADR-0004 decisions 2–3). A closed set, like
 /// Effect: the caller pattern-matches, and the AT-MOST-ONCE boundary is
@@ -66,7 +65,7 @@ public static class ShimClient
             catch (Exception ex)
             {
                 // The everyday cold case (no daemon yet) — info, not error.
-                Log.Info("shim", "shim.fallback", new LogFields
+                WireLog.Info("shim", "shim.fallback", new WireLogFields
                 {
                     DispatchId = req.DispatchId, DurMs = sw.Elapsed.TotalMilliseconds,
                     Msg = $"connect: {Reason(ex)}",
@@ -89,7 +88,7 @@ public static class ShimClient
             }
             catch (Exception ex) when (!committed)
             {
-                Log.Warn("shim", "shim.fallback", new LogFields
+                WireLog.Warn("shim", "shim.fallback", new WireLogFields
                 {
                     DispatchId = req.DispatchId, DurMs = sw.Elapsed.TotalMilliseconds,
                     Msg = $"request write: {Reason(ex)}",
@@ -112,7 +111,7 @@ public static class ShimClient
                 return Failed(req, sw, "daemon closed the connection before answering");
 
             var res = HookResponse.Decode(payload);
-            Log.Info("shim", "shim.answered", new LogFields
+            WireLog.Info("shim", "shim.answered", new WireLogFields
             {
                 DispatchId = req.DispatchId, DurMs = sw.Elapsed.TotalMilliseconds,
                 Data = new Dictionary<string, object>
@@ -133,7 +132,7 @@ public static class ShimClient
     {
         // Delivered (or possibly delivered), then broken: Background effects
         // may already be running daemon-side. At-most-once forbids the retry.
-        Log.Error("shim", "shim.deliveryFailed", new LogFields
+        WireLog.Error("shim", "shim.deliveryFailed", new WireLogFields
         {
             DispatchId = req.DispatchId, DurMs = sw.Elapsed.TotalMilliseconds, Msg = reason,
         });

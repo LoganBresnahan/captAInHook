@@ -10,9 +10,13 @@
   </PropertyGroup>
 
   <!-- Cross-language interop: the F# actor layer is just another assembly.
-       This one line is the whole integration — no bindings, no FFI. -->
+       This one line is the whole integration — no bindings, no FFI.
+       captainHookWire is the shim/daemon wire contract (ADR-0004 decision 7
+       amendment) — the engine and the AOT captainShim share it, so codec,
+       identity, and log schema cannot fork. -->
   <ItemGroup>
     <ProjectReference Include="../captainHookActors/captainHookActors.fsproj" />
+    <ProjectReference Include="../captainHookWire/captainHookWire.csproj" />
   </ItemGroup>
 
   <!-- Default harness specs ship INSIDE the assembly (HarnessRegistry reads

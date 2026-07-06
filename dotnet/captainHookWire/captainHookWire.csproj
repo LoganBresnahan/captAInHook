@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The wire contract between captainShim and the captainHook engine
+       (ADR-0004 decision 7 amendment): frame codec, content identity,
+       rendezvous paths, shim client, detached spawner, argv contract, and the
+       JSONL log schema seam. A LEAF by law: this project references NOTHING
+       (BCL only) — the AOT shim's whole dependency graph is this assembly, so
+       an added reference here walks straight into the native image. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>captainHookWire</AssemblyName>
+    <RootNamespace>CaptainHook.Wire</RootNamespace>
+  </PropertyGroup>
+
+</Project>

@@ -49,6 +49,9 @@ run live*. The framework underneath is what exists today.
   § Implementation plan, amendment plan (6 slices → 3 phases; critical path
   wire-lib-extraction → captainshim-aot-artifact → deploy-two-artifacts).
   Tick slices here as they land.
+  Slices landed: `wire-lib-extraction` (2026-07-06; pure move — five files
+  `git mv`'d into the new leaf lib, wire log seam bound to `Actors.Log` by
+  engine + tests, suite green twice, zero behavior change).
 
 ## Next
 

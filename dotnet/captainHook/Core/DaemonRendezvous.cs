@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using System.Text.Json;
+using CaptainHook.Wire;
 
 namespace CaptainHook.Core;
 

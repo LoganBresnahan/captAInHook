@@ -14,8 +14,15 @@ internal static class TestLogSink
     /// Runs before any test: replace the default file+stderr sinks with a no-op
     /// so the suite never appends to the user's real ~/.captainHook JSONL file
     /// (actors log spawn/restart/etc. as a side effect of every actor test).
+    /// Also bind the wire→Actors bridge, exactly as Program.cs does, so
+    /// wire-layer events (ShimClient, DaemonSpawner) reach whatever sink a
+    /// test installs even when the test never touches an engine type.
     [ModuleInitializer]
-    internal static void Install() => Log.SetSink(_ => { });
+    internal static void Install()
+    {
+        Log.SetSink(_ => { });
+        WireLogBridge.Bind();
+    }
 }
 
 /// Lambda-based handler so each test states its behavior inline.

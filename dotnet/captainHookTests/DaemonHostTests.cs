@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using CaptainHook.Core;
+using CaptainHook.Wire;
 using static CaptainHook.Tests.TestUtil;
 
 namespace CaptainHook.Tests;
