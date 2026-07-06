@@ -101,14 +101,14 @@ public sealed record HookRequest(
     [property: JsonPropertyName("harness")] string HarnessName,
     [property: JsonPropertyName("stdin")] byte[] StdinBytes)
 {
-    public byte[] Encode() => JsonSerializer.SerializeToUtf8Bytes(this);
+    public byte[] Encode() => JsonSerializer.SerializeToUtf8Bytes(this, WireJson.Default.HookRequest);
 
     /// Decode a request payload. Throws InvalidDataException on anything less
     /// than a well-formed, field-complete request — the codec never guesses.
     public static HookRequest Decode(byte[] payload)
     {
         HookRequest? req;
-        try { req = JsonSerializer.Deserialize<HookRequest>(payload); }
+        try { req = JsonSerializer.Deserialize(payload, WireJson.Default.HookRequest); }
         catch (JsonException ex) { throw new InvalidDataException($"malformed request frame: {ex.Message}", ex); }
         if (req is null || req.DispatchId is null || req.HarnessName is null || req.StdinBytes is null)
             throw new InvalidDataException("malformed request frame: missing required field");
@@ -125,15 +125,25 @@ public sealed record HookResponse(
     [property: JsonPropertyName("stdout")] byte[] StdoutBytes,
     [property: JsonPropertyName("stderr")] string StderrText)
 {
-    public byte[] Encode() => JsonSerializer.SerializeToUtf8Bytes(this);
+    public byte[] Encode() => JsonSerializer.SerializeToUtf8Bytes(this, WireJson.Default.HookResponse);
 
     public static HookResponse Decode(byte[] payload)
     {
         HookResponse? res;
-        try { res = JsonSerializer.Deserialize<HookResponse>(payload); }
+        try { res = JsonSerializer.Deserialize(payload, WireJson.Default.HookResponse); }
         catch (JsonException ex) { throw new InvalidDataException($"malformed response frame: {ex.Message}", ex); }
         if (res is null || res.StdoutBytes is null || res.StderrText is null)
             throw new InvalidDataException("malformed response frame: missing required field");
         return res;
     }
 }
+
+/// Source-generated serialization for the two wire records (ADR-0004 decision
+/// 7 amendment): the serializer code is emitted at compile time, so the AOT
+/// shim carries no runtime reflection — and both artifacts serialize through
+/// THIS generated code, so the frame JSON cannot fork between them. The wire
+/// contract is exactly this list; adding a serializable type here is adding
+/// to the protocol.
+[JsonSerializable(typeof(HookRequest))]
+[JsonSerializable(typeof(HookResponse))]
+internal sealed partial class WireJson : JsonSerializerContext { }

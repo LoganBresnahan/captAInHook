@@ -12,6 +12,10 @@
     <Nullable>enable</Nullable>
     <AssemblyName>captainHookWire</AssemblyName>
     <RootNamespace>CaptainHook.Wire</RootNamespace>
+    <!-- The AOT analyzers keep this assembly honest: captainShim compiles it
+         into a native image, so reflection-shaped code here must be a build
+         warning today, not a publish failure later. -->
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
 </Project>

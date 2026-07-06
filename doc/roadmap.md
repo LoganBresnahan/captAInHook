@@ -51,7 +51,9 @@ run live*. The framework underneath is what exists today.
   Tick slices here as they land.
   Slices landed: `wire-lib-extraction` (2026-07-06; pure move — five files
   `git mv`'d into the new leaf lib, wire log seam bound to `Actors.Log` by
-  engine + tests, suite green twice, zero behavior change).
+  engine + tests, suite green twice, zero behavior change);
+  `wire-json-source-gen` (2026-07-06; `WireJson` context for the two frame
+  records, `IsAotCompatible` analyzers on — wire lib builds warning-free).
 
 ## Next
 
