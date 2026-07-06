@@ -39,6 +39,16 @@ verified the day a real run touches them.
 | `dotnet foo.dll` makes `Environment.ProcessPath` the MUXER | Under framework-dependent `dotnet <dll>` invocation, ProcessPath is `/…/dotnet`, not the app — a self-respawn would exec `dotnet --daemon` (a CLI error). Only the apphost executable yields the app's own path. | `DaemonSpawner`'s muxer guard (refuses + `shim.spawnFailed`); the `/deploy` skill's apphost requirement (doc/flow/live-deployment.md). |
 | .NET cannot preemptively kill user code | No `Thread.Abort`; a wedged, token-ignoring handler's task can only be abandoned, not destroyed (the honest cost of not being on the BEAM). | ADR-0004 decision 5's abandon-and-respawn + leak accounting; wedges count toward escalation. |
 
+## Native AOT (captainShim)
+
+| Fact | Detail | What leans on it |
+| --- | --- | --- |
+| AOT publish needs a platform linker toolchain | `PublishAot` drives the link through `clang` (+ `objcopy` for symbol strip) on Linux; absent toolchain fails the *publish*, not the build. A **build-host** constraint, not a runtime dependency — the csproj carries no PackageReference. Verified 2026-07-06 (clang 18, Ubuntu/WSL2). | The `captainshim-aot-artifact` slice; `/deploy`'s two-artifact publish (ADR-0004 decision 7 amendment). |
+| AOT output is per-RID | One native image per `-r <rid>` (`linux-x64` here); no portable fallback inside the artifact. | `/deploy` publishes for the host RID; other-OS support rides the per-OS summary below. |
+| A native image has no MVID | The ELF/Mach-O binary carries no managed metadata; `PEReader` throws `BadImageFormatException`, which `ContentIdentity.Compute` already skips. | The decision-7 amendment's identity story: the hash stays over the deploy dir's managed DLLs; the shim is invisible to it *by this fact*, and co-location + the wire-stamp guard carry the rest. |
+| `AppContext.BaseDirectory` / `Environment.ProcessPath` work under AOT | Both resolve to the native executable's directory/path. | `ShimMain.DefaultEnginePath` (co-located engine), the shim's identity hash over its own directory. |
+| `Process.GetCurrentProcess().StartTime` is coarse | /proc-derived; jitter of several ms observed on WSL2 — fine for the gated `shim.boot` trail line, not for benchmarking. | The `CAPTAINHOOK_COLDSTART` probe's shim half; real measurement is wall-clock over batched runs. |
+
 ## Per-OS summary
 
 | | Linux / WSL2 | macOS | Windows (native) |

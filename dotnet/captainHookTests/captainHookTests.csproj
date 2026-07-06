@@ -15,6 +15,7 @@
     <ProjectReference Include="../captainHook/captainHook.csproj" />
     <ProjectReference Include="../captainHookActors/captainHookActors.fsproj" />
     <ProjectReference Include="../captainHookWire/captainHookWire.csproj" />
+    <ProjectReference Include="../captainShim/captainShim.csproj" />
   </ItemGroup>
 
   <ItemGroup>

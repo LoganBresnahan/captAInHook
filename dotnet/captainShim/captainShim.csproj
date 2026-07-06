@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The thin AOT shim (ADR-0004 decision 7 amendment): the deployed hook
+       command points HERE; the JIT captainHook engine stays behind the daemon
+       and collapsed modes. This project references the wire lib and NOTHING
+       else — neither the host nor the F# actor lib — which is exactly why it
+       Native-AOT-compiles trivially: no dispatcher, no reflection-based spec
+       parsing, no FSharp.Core in the native image. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>captainShim</AssemblyName>
+    <RootNamespace>CaptainHook.Shim</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <!-- No culture-sensitive work on the hook path; invariant mode drops ICU
+         from the image and shaves startup. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../captainHookWire/captainHookWire.csproj" />
+  </ItemGroup>
+
+</Project>

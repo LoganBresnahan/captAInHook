@@ -59,6 +59,14 @@ run live*. The framework underneath is what exists today.
   cross-emitter tests — unicode/control escaping, durMs rounding, omit-null,
   nested data — plus mirrored path resolution and the O_APPEND appender).
   Phase A complete.
+  `captainshim-aot-artifact` (2026-07-06; 3.8MB native ELF, wire-lib-only
+  reference graph; ShimMain tested in IL form through injected streams —
+  warm relay, delegation verbatim, at-most-once held, mode refusal; staged
+  co-located deploy measured live: **16ms/hook warm native vs 139ms JIT**
+  20-run avg against the same daemon — 8.7×, success bar ≤40ms beaten;
+  ~11ms of the 16 is the forward span, native procBoot ≈5ms; the sun_path
+  overflow path exercised by accident and delegated exactly as designed;
+  AOT toolchain + no-MVID facts recorded in platform.md).
 
 ## Next
 
