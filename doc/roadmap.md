@@ -49,21 +49,25 @@ run live*. The framework underneath is what exists today.
   § Implementation plan, amendment plan (6 slices → 3 phases; critical path
   wire-lib-extraction → captainshim-aot-artifact → deploy-two-artifacts).
   Tick slices here as they land.
-- [ ] **13. PreToolUse policy gate** — split out of item 9 as the next build:
-  the hook that justified item 12 gets its payload. First **fail-closed**
-  handler in production (`FailMode.Closed` + `Effect.Decide` on write-class
-  tools) — exercises escalate-and-deny supervision under real traffic for
-  the first time, on the live ~7ms seam that today dispatches zero
-  handlers. No new infrastructure; policy source is a user-editable file
-  under `~/.captainHook/` (hot-reload semantics like harness overrides).
-  Also the real-traffic generator item 5's event stream wants to exist
-  before it's designed. Design recorded in **ADR-0005** (2026-07-06): one
-  strict JSON policy file (`~/.captainHook/policy.json`, data-selects-
-  code-enforces, first-match-wins); absent ⇒ Noop, malformed ⇒ deny-ALL
-  with the parse error as reason (inverting fail-open — deliberately
-  opposite ADR-0003's warn-and-skip); FailMode.Closed supervision; hot
-  reload per dispatch, no last-good state. The handler itself is
-  implementation — slice with /adr-plan when work starts.
+- [ ] **14. Dispatch policy — captAInHook's own front door** — the product's
+  native policy story, layer 1 of 3 (2026-07-06 reframe: policy governs what
+  WE bring, not a second copy of harness permissions). A user-editable
+  policy file decides whether an arriving hook gets *worked*: per-event /
+  per-handler enable-disable, per-project or per-session scoping, and a
+  global pause — the hook is always *answered* (the harness blocks on
+  stdout), but policy short-circuits dispatch to an immediate Noop.
+  Daemon-side by rule — the shim stays policy-free (aot-boundary rule 1).
+  Fires an ADR: the file contract, and the malformed-file direction —
+  leaning Noop-everything-loudly (can't parse ⇒ don't run optional
+  subsystems; hooks are enhancement, not authz, so "quiet + loud trail"
+  beats both silent-run-everything and brick-the-agent). This is the same
+  data item 5's API manages and item 6's GUI edits: file → API → GUI.
+- [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
+  (2026-07-06): tool-call gating overlaps harness-native permissions; its
+  differentiated value (dynamic decisions, portability, central
+  distribution) matures with items 5/10. Design stays recorded in
+  **ADR-0005** (status: deferred) for when the payload is wanted — likely
+  alongside item 9's other handlers, after item 6.
   Slices landed: `wire-lib-extraction` (2026-07-06; pure move — five files
   `git mv`'d into the new leaf lib, wire log seam bound to `Actors.Log` by
   engine + tests, suite green twice, zero behavior change);
@@ -148,13 +152,19 @@ run live*. The framework underneath is what exists today.
 - [ ] **5. Management API** — HTTP + WebSocket on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId
-  correlation = per-dispatch traces for free). **After item 13** (real
-  dispatch traces to stream, not echo traffic). ⚠ Fires an ADR: an HTTP
+  correlation = per-dispatch traces for free). **After item 14** — the API's
+  write surface IS item 14's policy/registry data (file → API → GUI), and
+  the event stream wants real dispatch traces. ⚠ Fires an ADR: an HTTP
   surface on the daemon under the zero-new-deps invariant (Kestrel is a
   package — candidates are BCL `HttpListener`, and SSE over it instead of
   WebSockets for the one-way stream), plus the idle-exit question (does an
   attached UI hold the daemon open?). Install operations carry item 10's
-  trust model with them.
+  trust model with them. The fleet/enterprise shape (one org, many
+  employees) is local-data-plane + central-control-plane: per-machine
+  daemons exactly as today, with policy distribution / config / telemetry
+  aggregation as the centralized layer this API eventually fronts —
+  never a shared remote daemon on the hot path (ADR-0004's transport
+  revisit trigger stands).
 - [ ] **6. GUI v1: browser UI** — localhost web app served by the daemon.
   Catalog + one-click install, live dispatch traces, supervision view
   (restarts/escalations as they happen). Web-first per the GUI direction
@@ -174,9 +184,19 @@ run live*. The framework underneath is what exists today.
   Playwright over the web UI (visual) → TUI capture only to test the TUI.
 - [ ] **9. Real handlers** — the payloads the framework exists for: retriever
   (forced-RAG on UserPromptSubmit) and memory (SessionStart/Stop,
-  cavemem-shaped). The policy gate moved forward as **item 13**; these two
-  deliberately wait for item 6 — the retriever needs retrieval infrastructure
-  and both are better built once the GUI can show them running.
+  cavemem-shaped); the tool-gate (item 13 / ADR-0005) rejoins them as a
+  payload. These deliberately wait for item 6 — the retriever needs
+  retrieval infrastructure and all are better built once the GUI can show
+  them running.
+- [ ] **15. Handler capability policy (egress)** — layer 3 of the native
+  policy story: what may a running handler *reach* — datastores, external
+  agents/LLMs, network, filesystem, spawn, token/cost budgets. The
+  enforcement principle to hold: handlers affect the loop only via the
+  closed `Effect` set (ADR-0002) and reach the world only via
+  `HandlerContext` — ctx hands out capabilities, policy gates what ctx
+  hands out. Becomes real (and gets its ADR) with item 9's first
+  egress-bearing handler; pairs with item 10's trust model; ADR-0004 N2's
+  process isolation is the backstop for untrusted handler code.
 - [ ] **10. Hook trust model** — installing a hook = installing arbitrary code
   that runs on every prompt. The install UX must show exactly what will
   execute, from where, before touching settings. **Rides WITH items 5–6**

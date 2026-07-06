@@ -1,6 +1,12 @@
 # ADR-0005 — PreToolUse policy gate: a declarative policy file that fails toward deny
 
-**Status:** Accepted
+**Status:** Accepted, **deferred** *(2026-07-06, same day: the product's
+native policy story was reframed around what captAInHook itself brings —
+ingress/dispatch policy (roadmap item 14), handler enable-disable (item 5),
+and handler egress capabilities (item 15). Tool-call gating overlaps
+harness-native permissions and is demoted to a secondary handler payload;
+the decisions below stand unchanged for when that payload is built —
+likely with item 9, after the GUI.)*
 **Date:** 2026-07-06
 
 ## Context
