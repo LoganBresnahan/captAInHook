@@ -33,6 +33,22 @@ run live*. The framework underneath is what exists today.
   layering, tool gating) and moby `models/registry.ts` (capability registry
   + validated custom entries). `claude-code` stays the default; a
   `generic-json` adapter proves N>1.
+- [ ] **12. Thin AOT `captainShim`** — ADR-0004 decision 7's gate tripped
+  (2026-07-06): a PreToolUse-class before-tools hook puts the shim's measured
+  ~85ms procBoot+JIT residual on **every tool call** — per-action, on the
+  agent's critical path — so the reserved thin-AOT-shim step is scheduled.
+  Design resolved in the decision-7 amendment: two new projects
+  (`captainHookWire` leaf lib + `captainShim` AOT exe; arrows `captainShim →
+  captainHookWire ← captainHook → captainHookActors`); identity math
+  unchanged (the native shim is invisible to it by construction — sound, not
+  a hole); publish-time wire-stamp skew guard (skew fails safe to collapse);
+  one JSONL schema across two emitters, pinned by a golden byte-equality
+  test; source-generated wire JSON; delegation fallback to the co-located
+  engine. Success bar: warm hook **p50 ≤ 40ms** end-to-end (from 99ms) and
+  the per-tool-call tax subjectively gone. Build order: ADR-0004
+  § Implementation plan, amendment plan (6 slices → 3 phases; critical path
+  wire-lib-extraction → captainshim-aot-artifact → deploy-two-artifacts).
+  Tick slices here as they land.
 
 ## Next
 
@@ -66,7 +82,8 @@ run live*. The framework underneath is what exists today.
   / 13.4ms daemon-side, RSS asymptoting not leaking) — Phase 6 complete.
   **ADR-0004's implementation plan is fully landed**; dogfooding live.
   Carry-out for the AOT-shim gate (ADR-0004 decision 7): the measured warm
-  residual is ~85ms of shim procBoot+JIT per hook.
+  residual is ~85ms of shim procBoot+JIT per hook — **gate tripped
+  2026-07-06 → item 12**.
   ⚠ Until `mandatory-idle-exit` lands, a spawned daemon lives until killed —
   SIGTERM now drains gracefully; kill -9 stays safe.
   Dogfooding: `/deploy` ships the apphost build to the live hooks and
@@ -115,7 +132,8 @@ run live*. The framework underneath is what exists today.
 - **Community registry** — discovery/versioning for shared hooks & skills.
 - **shipshape as a Stop-hook** — the repo verifying itself with the very
   mechanism it demonstrates.
-- **Packaging** — single-file publish / Native AOT for the shim.
+- **Packaging** — single-file publish for the JIT engine (the shim's
+  Native AOT half promoted to item 12).
 
 ## GUI direction (current leaning — becomes an ADR when work starts)
 

@@ -72,6 +72,9 @@ layer (the Akka re-evaluation below).
    later peels the shim off into its own thin, dependency-free `captainShim`
    artifact (Native AOT), leaving `captainHook` as the JIT engine behind the
    daemon and collapsed modes — at which point "one binary" becomes two.
+   *(Amended 2026-07-06: the gate tripped — see decision 7's amendment. The
+   peel-off is scheduled; the engine keeps every mode it has, so "two
+   binaries" changes only what the deployed hook command points at.)*
 2. **Connect-or-fallback: no hook ever waits for warmup — or for silence.**
    The shim tries the socket; on connect failure it does **not** wait — it
    dispatches in-process (collapsed) for *this* event and spawns a detached
@@ -304,6 +307,108 @@ layer (the Akka re-evaluation below).
    (~40-60ms, lower for a thinner shim that loads less than this full
    binary — needs its own measurement) is felt.
 
+   **Gate tripped (2026-07-06): the thin AOT `captainShim` is scheduled.**
+   The gate was "the residual is *felt*"; what tripped it is placement, not
+   feel alone: a PreToolUse-class hook — synchronous before **every tool
+   call** — moves the shim tax from once-per-prompt (overlapped with prompt
+   processing, plausibly invisible) to N-times-per-turn on the agent's
+   critical path, between deciding an action and taking it. The soak
+   (roadmap item 4) prices that tax: p50 99ms end-to-end vs 13.4ms
+   daemon-side ⇒ **~85ms shim residual**, ≈67ms procBoot + ≈18ms shim-path
+   JIT and I/O. The same split retires ReadyToRun as an intermediate rung:
+   R2R addresses only the ~18ms JIT slice while the ~67ms floor stands; it
+   stays available as orthogonal polish for the engine's cold/collapsed
+   path. Projection to verify at the slice: native procBoot is single-digit
+   ms and identity hashing is the same PE-header reads today's shim does ⇒
+   **~20-35ms end-to-end warm; success bar p50 ≤ 40ms** — and the
+   per-tool-call tax subjectively gone.
+
+   The concrete form, resolved (this amendment is the new-projects ADR):
+
+   - **Artifacts & arrows.** Two new projects. `captainHookWire` — a C#
+     **leaf** library (namespace `CaptainHook.Wire`, BCL-only): the frame
+     codec + `HookRequest`/`HookResponse` with a source-generated
+     `JsonSerializerContext`, `ContentIdentity` + `RendezvousPaths`,
+     `ShimClient` + `ForwardOutcome`, the detached spawner, the hook argv
+     contract, and the JSONL log *schema* (line rendering + default
+     log-path resolution) behind an injectable sink seam. **Moved, not
+     copied**, out of `Core/` — a codec, identity, or log-schema fork
+     between shim and engine is a silent-break hazard, so sharing is
+     load-bearing. `captainShim` — the AOT exe: `PublishAot` +
+     `InvariantGlobalization`, referencing the wire lib and **nothing
+     else**; its whole program is shim mode minus the in-process fallback.
+     Arrows become `captainShim → captainHookWire ← captainHook →
+     captainHookActors` — two leaves now, still no cycles, and the shim
+     never sees the host or F# lib, so FSharp.Core, the dispatcher, and
+     reflection-based spec parsing never enter the native image (that
+     exclusion *is* the "AOT-compiles trivially" claim). The engine
+     **keeps all its modes**: dev loops and tests run the JIT binary
+     exactly as today; only the deployed hook command repoints at
+     `captainShim`.
+   - **Identity: math unchanged — the native shim is invisible to it, and
+     that is correct, not a hole.** A native image has no MVID and
+     `ContentIdentity.Compute` already skips files without managed
+     metadata, so both sides keep hashing exactly the deploy directory's
+     managed assemblies — which now include `captainHookWire.dll`. Deploy
+     co-locates shim and engine in one directory; the shim hashes its
+     **own** directory (`AppContext.BaseDirectory` is the native exe's dir)
+     ⇒ same dir, same hash, same socket, still zero negotiation. Soundness:
+     the daemon's behavior is the engine assemblies (hashed); the contract
+     the two processes must share is exactly the wire lib (hashed, via its
+     DLL); and a *shim-local* change never needs a fresh daemon — a new
+     shim against an old daemon is compatible whenever the wire contract
+     matches, so hashing the shim binary would only churn daemons for
+     nothing.
+   - **The one representable skew, guarded.** Two artifacts can skew where
+     one binary could not: a partial copy leaves the shim's statically
+     linked wire code ≠ the directory's `captainHookWire.dll` — the shim
+     would compute the OLD identity and speak its NEW framing at that
+     socket (blast radius: a failed hook — loud in the trail, but lost).
+     Guard: the publish embeds into the shim the wire MVID it linked
+     against; at startup the shim compares it to the directory's
+     `captainHookWire.dll` and on mismatch **never touches the socket** —
+     warn loud, delegate to the co-located engine, which is self-consistent
+     with its own DLLs. Skew fails SAFE (collapse + warning) instead of
+     WRONG (mis-framed dispatch against a live daemon), and `/deploy`
+     stages both artifacts and swaps atomically, so the sanctioned path
+     cannot produce the skew at all.
+   - **Diagnostics: one JSONL schema, two emitters, byte-pinned.** The shim
+     cannot call `CaptainHook.Actors.Log` (F# in the native image defeats
+     the artifact), and its trail lines are load-bearing. The wire lib owns
+     the log *contract* — the line schema rendered with `Utf8JsonWriter`
+     (imperative, reflection-free) plus default log-path resolution —
+     behind an injectable sink. The engine binds the seam to `Actors.Log`
+     (sinks, `SetSink`, stderr modes unchanged; the "all diagnostics
+     through Log" invariant keeps its spirit engine-side); the shim binds
+     it to a direct `O_APPEND` line append at the same resolved path —
+     cross-process append atomicity is already the trail's story (N3). A
+     **golden byte-equality test** in the suite (which sees both
+     assemblies) feeds one event through F# `ToJson()` and through the wire
+     renderer and demands identical bytes: schema drift becomes a red
+     build, and evolving the schema forcibly moves both emitters in one
+     commit.
+   - **Delegation, precisely.** On `NotDelivered` — and only there;
+     `FailedAfterDelivery` keeps its no-retry contract — the shim spawns
+     the daemon for the *next* hook (unchanged) and for *this* one execs
+     the co-located engine in collapsed mode, piping the captured stdin
+     bytes in and relaying stdout **bytes**, stderr text, and exit code
+     verbatim — the sacred channel crosses a pipe under the same
+     byte-identical rule it crosses the socket. The spawner targets the
+     engine by path (the shim never self-spawns, mooting the muxer guard
+     shim-side). Cost honesty: the cold path gains one native process
+     launch (~10ms) atop the engine's ~216ms — the path that already
+     spawns a daemon and, post-soak, fires only on
+     first-hook-after-rebuild or idle-exit.
+   - **Costs, named.** Build hosts need the Native AOT toolchain (ILC +
+     clang/lld; per-RID publish) — a *build-time* environment constraint,
+     recorded in platform.md when the slice lands; invariant 3 holds
+     (`System.Reflection.Metadata` and the STJ source generator are inbox,
+     `PublishAot` is a property, not a package; wire lib and shim stay
+     BCL-only). `/deploy` becomes a two-artifact publish with an atomic
+     swap. CLAUDE.md's "three projects, one Exe, one binary three modes"
+     summary updates in the landing commits, code-first; the tests project
+     gains a project reference to the wire lib (no packages).
+
 **Pattern lineage.** The lifecycle layer borrows from pharos-mcp's LSP pool —
 the sibling project that find-or-spawns long-lived language servers:
 connect-or-spawn shape (`src/pharos/lsp/pool.gleam`), readiness as a hard
@@ -358,6 +463,9 @@ Zero new runtime dependencies, as always: BCL + FSharp.Core only.
 - **N5 · Collapsed-mode hooks still pay today's full cost** — the first event
   after boot and any pre-delivery-failure retry run at cold-process speed
   (strictly more than the 47.7ms dispatch span), not warm speed.
+- **N6 · Two artifacts, one deployment** *(added with the 2026-07-06
+  decision-7 amendment)*. The deployed shim and engine must move together; a
+  partial copy is the one skew the two-artifact split makes representable.
 
 ### Mitigations
 
@@ -395,6 +503,11 @@ deferrable, a few v1:
   the first-hook cost for steady-state users. The dev-loop coldness is
   *correct* — a fresh content-hash after every rebuild guarantees freshly built
   code never talks to a stale daemon, and tests run `--no-daemon` regardless.
+- **N6 · Two-artifact skew** — the publish-time wire-stamp guard makes skew
+  fail SAFE (never touch the socket; delegate + warn), and `/deploy` stages
+  both artifacts and swaps atomically, so the sanctioned path cannot produce
+  it. The residual exposure is a hand-copied partial deploy, which degrades to
+  collapsed dispatch — never to a mis-framed dispatch against a live daemon.
 
 ## Alternatives considered
 
@@ -418,6 +531,9 @@ deferrable, a few v1:
   landed and its ~40-60ms per-hook floor matters → build the thin
   `captainShim` AOT artifact (decision 7). Measured at ~31% of cold start;
   second-order behind the daemon, and a *new project* of its own.
+  *(Tripped 2026-07-06: a PreToolUse-class hook puts the measured ~85ms
+  residual on every tool call — decision 7's amendment records the resolved
+  design; roadmap item 12 tracks the build.)*
 - **The management API lands** — persistent or multiplexed connections may
   replace one-connection-per-dispatch; the length-prefixed framing already
   permits it.
@@ -473,3 +589,53 @@ co-design them; divergence silently drops a session's memory-write. (3)
 meaningful once drain + idle-exit exist. Only `three-mode-dispatch`,
 `daemon-serve-loop`, and `content-identity-versioned-socket` skip the adversarial
 verify pass; every other slice warrants one. No slice warrants ultracode.
+
+### Amendment plan (2026-07-06) — decision 7's `captainShim`, gate tripped
+
+Same rules as above: derived from the decision-7 amendment, progress tracks on
+[roadmap](../roadmap.md) item 12, not here.
+
+**Phase A — extraction (pure refactor: engine-only, zero behavior change)**
+- `wire-lib-extraction` ◆ — med/mechanical-but-wide · no adversarial verify
+  (the suite green twice *is* the verify: moved, not copied) — new leaf
+  project `captainHookWire`; `Frame` + the wire records,
+  `ContentIdentity`/`RendezvousPaths`, `ShimClient`/`ForwardOutcome`, the
+  spawner, and the hook argv contract move out of `Core/`; the log sink seam
+  lands **with** the move (trap below), engine binds it to `Actors.Log`.
+- `wire-json-source-gen` — low/mechanical · no adversarial verify — deps:
+  wire-lib-extraction. `JsonSerializerContext` for the two wire records; both
+  sides adopt it; the existing frame/golden-wire tests prove byte-stability.
+- `wire-jsonl-logger` — med/moderate · **verify** — deps: wire-lib-extraction.
+  `Utf8JsonWriter` renderer + log-path resolution in the wire lib; the
+  cross-emitter golden byte-equality test vs F# `ToJson()` (adversarial
+  attention: `Data` dict values, string escaping, `durMs` rounding,
+  omit-null rules).
+
+**Phase B — the artifact**
+- `captainshim-aot-artifact` ◆ — high/moderate + toolchain · **verify** —
+  deps: Phase A. The `captainShim` exe project (`PublishAot`,
+  `InvariantGlobalization`, wire-only reference), delegation fallback
+  (pipe stdin in, relay verbatim), spawn-targets-engine-by-path;
+  per-artifact cold probe re-measurement (the projection above is verified
+  or revised here); platform.md gains the toolchain + no-MVID facts.
+- `wire-skew-guard` — med/moderate · **verify** — deps:
+  captainshim-aot-artifact. Publish-time wire-stamp embed + startup compare;
+  adversarial: fabricate both skew directions in a temp deploy dir, assert
+  never-touches-socket + delegate-and-warn.
+
+**Phase C — cutover**
+- `deploy-two-artifacts` ◆ — med/moderate · **verify** (live: a real hook
+  through the native shim, warm answer in the trail) — deps: Phase B.
+  `/deploy` stages both artifacts, swaps atomically, repoints the hook
+  command at `captainShim`; CLAUDE.md's architecture summary updates here,
+  code-first.
+
+**Critical path:** wire-lib-extraction → captainshim-aot-artifact →
+deploy-two-artifacts.
+
+**Sequencing trap.** The sink seam must land *inside* `wire-lib-extraction`,
+not after: `ShimClient` and the spawner call `Actors.Log` inline today, and
+moving them first with the seam later would give the wire lib an F# reference
+for one commit. The arrow clause — the wire lib references *nothing*, the shim
+references *only* the wire lib — is easiest enforced by never violating it;
+the shim's AOT-cleanliness is exactly that absence.
