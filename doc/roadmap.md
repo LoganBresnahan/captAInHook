@@ -49,6 +49,15 @@ run live*. The framework underneath is what exists today.
   § Implementation plan, amendment plan (6 slices → 3 phases; critical path
   wire-lib-extraction → captainshim-aot-artifact → deploy-two-artifacts).
   Tick slices here as they land.
+- [ ] **13. PreToolUse policy gate** — split out of item 9 as the next build:
+  the hook that justified item 12 gets its payload. First **fail-closed**
+  handler in production (`FailMode.Closed` + `Effect.Decide` on write-class
+  tools) — exercises escalate-and-deny supervision under real traffic for
+  the first time, on the live ~7ms seam that today dispatches zero
+  handlers. No new infrastructure; policy source is a user-editable file
+  under `~/.captainHook/` (hot-reload semantics like harness overrides).
+  Also the real-traffic generator item 5's event stream wants to exist
+  before it's designed.
   Slices landed: `wire-lib-extraction` (2026-07-06; pure move — five files
   `git mv`'d into the new leaf lib, wire log seam bound to `Actors.Log` by
   engine + tests, suite green twice, zero behavior change);
@@ -133,7 +142,13 @@ run live*. The framework underneath is what exists today.
 - [ ] **5. Management API** — HTTP + WebSocket on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId
-  correlation = per-dispatch traces for free).
+  correlation = per-dispatch traces for free). **After item 13** (real
+  dispatch traces to stream, not echo traffic). ⚠ Fires an ADR: an HTTP
+  surface on the daemon under the zero-new-deps invariant (Kestrel is a
+  package — candidates are BCL `HttpListener`, and SSE over it instead of
+  WebSockets for the one-way stream), plus the idle-exit question (does an
+  attached UI hold the daemon open?). Install operations carry item 10's
+  trust model with them.
 - [ ] **6. GUI v1: browser UI** — localhost web app served by the daemon.
   Catalog + one-click install, live dispatch traces, supervision view
   (restarts/escalations as they happen). Web-first per the GUI direction
@@ -152,11 +167,15 @@ run live*. The framework underneath is what exists today.
   feedback instrument: the feedback pyramid is API assertions (bulk) →
   Playwright over the web UI (visual) → TUI capture only to test the TUI.
 - [ ] **9. Real handlers** — the payloads the framework exists for: retriever
-  (forced-RAG on UserPromptSubmit), policy gate (PreToolUse write approval),
-  memory (SessionStart/Stop, cavemem-shaped).
+  (forced-RAG on UserPromptSubmit) and memory (SessionStart/Stop,
+  cavemem-shaped). The policy gate moved forward as **item 13**; these two
+  deliberately wait for item 6 — the retriever needs retrieval infrastructure
+  and both are better built once the GUI can show them running.
 - [ ] **10. Hook trust model** — installing a hook = installing arbitrary code
   that runs on every prompt. The install UX must show exactly what will
-  execute, from where, before touching settings.
+  execute, from where, before touching settings. **Rides WITH items 5–6**
+  (the install operations and install UX are its only real surface), not a
+  phase of its own.
 - [ ] **11. N-runtime harness** — port the core spec to Node and BEAM
   (DESIGN.md's comparison thesis — still the point of the exercise).
 
