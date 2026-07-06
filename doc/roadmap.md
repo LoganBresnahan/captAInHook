@@ -65,7 +65,12 @@ run live*. The framework underneath is what exists today.
   collapsed pipeline; hot reload, no last-good; **no pause mechanism** —
   `default: deny` already says it (API convenience later if friction is
   real). This is the same data item 5's API manages and item 6's GUI
-  edits: file → API → GUI. Slice with /adr-plan when work starts.
+  edits: file → API → GUI.
+  Build order: ADR-0006 § Implementation plan (10 slices → 6 phases;
+  critical path dispatch-policy-file → rule-matcher →
+  event-level-deny-shortcircuit → absent-allow-malformed-noop →
+  evaluator-both-paths → policy-hot-reload; adversarial verify on exactly
+  three slices; no ultracode). Tick slices here as they land.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central
