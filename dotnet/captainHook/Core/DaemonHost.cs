@@ -26,9 +26,15 @@ public static class DaemonHost
     /// too (some other daemon won — mission accomplished); 1 when the
     /// rendezvous itself is unusable. `registry` is the test seam for handler
     /// behavior; production uses the default wiring.
+    /// `idleWindow` (default 30min, env CAPTAINHOOK_IDLE_MS via Program.cs):
+    /// MANDATORY idle-exit — captaind has no bounding parent, so a forgotten
+    /// or superseded daemon must starve and remove itself; this is also the
+    /// version-cutover reaper. `clock` is the monotonic source (TickCount64),
+    /// injectable per the house invariant.
     public static async Task<int> RunAsync(
         RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
-        Registry? registry = null, TimeSpan? drainDeadline = null)
+        Registry? registry = null, TimeSpan? drainDeadline = null,
+        TimeSpan? idleWindow = null, Func<long>? clock = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -89,6 +95,47 @@ public static class DaemonHost
             sctx => { sctx.Cancel = true; drainCts.Cancel(); });
 
         var active = 0;   // in-flight connections; drain waits for 0
+
+        // ---- mandatory idle-exit (decision 4) --------------------------------
+        // Monotonic window; the BASELINE IS PROCESS START (decision 3: a daemon
+        // that wedges before ever serving is still reapable). Activity =
+        // serving connections OR a non-empty background queue — the watchdog
+        // refreshes the stamp while either holds, so background COMPLETION
+        // restarts the window (the session-final memory write keeps the daemon
+        // open, then it gets a full window before exit). The trigger is the
+        // SAME drainCts as SIGTERM: idle-exit and drain agree by construction.
+        var clk = clock ?? (() => Environment.TickCount64);
+        var idleMs = (long)(idleWindow ?? TimeSpan.FromMinutes(30)).TotalMilliseconds;
+        var lastActive = new[] { clk() };
+        var idleTick = TimeSpan.FromMilliseconds(Math.Clamp(idleMs / 8.0, 50, 5000));
+        _ = Task.Run(async () =>
+        {
+            while (!drainCts.IsCancellationRequested)
+            {
+                try { await Task.Delay(idleTick, drainCts.Token); }
+                catch (OperationCanceledException) { return; }
+                if (Volatile.Read(ref active) > 0 || dispatcher.BackgroundPending > 0)
+                {
+                    Volatile.Write(ref lastActive[0], clk());
+                    continue;
+                }
+                var idleFor = clk() - Volatile.Read(ref lastActive[0]);
+                if (idleFor >= idleMs)
+                {
+                    Log.Info("daemon", "daemon.idleExit", new LogFields
+                    {
+                        Data = new Dictionary<string, object>
+                        {
+                            ["idleMs"] = idleFor,
+                            ["windowMs"] = idleMs,
+                        },
+                    });
+                    drainCts.Cancel();
+                    return;
+                }
+            }
+        }, CancellationToken.None);
+
         while (!drainCts.IsCancellationRequested)
         {
             Socket conn;
@@ -103,10 +150,15 @@ public static class DaemonHost
             // serialization inside the dispatcher is what actually orders work
             // (the concurrency-audit slice soaks exactly this).
             Interlocked.Increment(ref active);
+            Volatile.Write(ref lastActive[0], clk());
             _ = Task.Run(async () =>
             {
                 try { await ServeConnectionAsync(conn, harnesses, dispatcher); }
-                finally { Interlocked.Decrement(ref active); }
+                finally
+                {
+                    Volatile.Write(ref lastActive[0], clk());
+                    Interlocked.Decrement(ref active);
+                }
             }, CancellationToken.None);
         }
 

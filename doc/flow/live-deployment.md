@@ -24,9 +24,10 @@ The `/deploy` skill *performs* this; this doc explains what it leaves behind.
  │   spawn captaind (detached) + dispatch in-process (collapsed) │
  └────────┼──────────────────────────────────────────────────────┘
           ▼
-   captaind --daemon  (ONE per content identity, warm forever*)
+   captaind --daemon  (ONE per content identity)
      fd0/1/2 → /dev/null · cwd / · record = the JSONL trail
-     *no idle-exit yet: lives until killed — see Operations
+     exits by itself after the idle window (CAPTAINHOOK_IDLE_MS,
+     default 30min; a non-empty background queue defers it)
 ```
 
 ## The deployed tree
@@ -69,9 +70,9 @@ The `/deploy` skill *performs* this; this doc explains what it leaves behind.
 
 Publishing changed bytes to `~/.captainHook/bin` changes the content
 identity, so the next prompt rendezvouses on a **fresh socket by
-construction** — the old daemon can never serve stale code. But until
-`mandatory-idle-exit` lands, the superseded daemon idles forever: the
-`/deploy` skill reaps it (PID-reuse-guarded kill). A no-op republish
+construction** — the old daemon can never serve stale code. The superseded
+daemon starves and idle-exits within its window on its own; `/deploy` runs
+`doctor` to retire it immediately rather than waiting. A no-op republish
 (deterministic compilation, unchanged source) keeps the identity and the
 warm daemon.
 

@@ -56,7 +56,10 @@ run live*. The framework underneath is what exists today.
   `harness-hot-reload` (2026-07-06; in-place edit — same inode, dir mtime
   unmoved — served on the next hook through a live daemon); `doctor-reaper`
   (2026-07-06; swept 3 stale identities live while sparing the healthy
-  deployed daemon from a dev-tree run) — Phase 4 complete.
+  deployed daemon from a dev-tree run) — Phase 4 complete;
+  `mandatory-idle-exit` (2026-07-06; live daemon survived refreshing hooks,
+  self-reaped 92ms past its window, respawned on the next hook) — Phase 5
+  complete. Remaining: Phase 6 `concurrency-audit-and-soak`.
   ⚠ Until `mandatory-idle-exit` lands, a spawned daemon lives until killed —
   SIGTERM now drains gracefully; kill -9 stays safe.
   Dogfooding: `/deploy` ships the apphost build to the live hooks and

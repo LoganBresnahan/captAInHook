@@ -28,9 +28,15 @@ switch (inv.Mode)
         return 0;
 
     case Mode.Daemon:
-        // captaind: warm once, serve over the socket, drain on SIGTERM.
-        // See Core/DaemonHost.cs.
-        return await DaemonHost.RunAsync();
+    {
+        // captaind: warm once, serve over the socket, drain on SIGTERM or
+        // after the mandatory idle window. See Core/DaemonHost.cs.
+        // CAPTAINHOOK_IDLE_MS is daemon-start configuration (ADR-0004 d1).
+        TimeSpan? idle = null;
+        if (long.TryParse(Environment.GetEnvironmentVariable("CAPTAINHOOK_IDLE_MS"), out var ms) && ms > 0)
+            idle = TimeSpan.FromMilliseconds(ms);
+        return await DaemonHost.RunAsync(idleWindow: idle);
+    }
 
     case Mode.Doctor:
     {
