@@ -117,6 +117,15 @@ order of the `<Compile>` list — dependencies first; `Logging.fs` stays first s
 layers share the `Log` surface. Adding a file means hand-inserting it at the right
 spot.
 
+**Build determinism is load-bearing:** the shim/daemon rendezvous keys on the deploy
+dir's MVIDs, so compiled bytes must be a pure function of source. Two SDK defaults
+break that and every SHIPPED project opts out
+(`EnableSourceControlManagerQueries=false`; the F# lib additionally
+`ProduceReferenceAssembly=false` — fsc ref assemblies are nondeterministic). A new
+shipped project must copy the opt-out AND re-run the verdict probe: clean publish ×2
+at one HEAD + ×1 behind an empty commit ⇒ identical MVIDs (doc/platform.md § Build
+determinism; ADR-0004 d3's 2026-07-06 amendment has the story).
+
 **`dotnet/experiments/`** (akka / csharp / fsharp-actors) is **frozen ADR-0001
 evidence** — outside the build graph, exempt from every gate. Don't build, test,
 reference, or "fix" it; its wall-clock supervisor is the anti-pattern the production
