@@ -57,9 +57,13 @@ run live*. The framework underneath is what exists today.
   handlers. No new infrastructure; policy source is a user-editable file
   under `~/.captainHook/` (hot-reload semantics like harness overrides).
   Also the real-traffic generator item 5's event stream wants to exist
-  before it's designed. Fires a short ADR: the policy file is a new
-  user-facing contract, and a malformed file must degrade to DENY-writes
-  (inverting the fail-open default) — the handler itself is implementation.
+  before it's designed. Design recorded in **ADR-0005** (2026-07-06): one
+  strict JSON policy file (`~/.captainHook/policy.json`, data-selects-
+  code-enforces, first-match-wins); absent ⇒ Noop, malformed ⇒ deny-ALL
+  with the parse error as reason (inverting fail-open — deliberately
+  opposite ADR-0003's warn-and-skip); FailMode.Closed supervision; hot
+  reload per dispatch, no last-good state. The handler itself is
+  implementation — slice with /adr-plan when work starts.
   Slices landed: `wire-lib-extraction` (2026-07-06; pure move — five files
   `git mv`'d into the new leaf lib, wire log seam bound to `Actors.Log` by
   engine + tests, suite green twice, zero behavior change);
