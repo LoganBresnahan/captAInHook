@@ -18,16 +18,9 @@ namespace CaptainHook.Shim;
 // publish per test run.
 public static class ShimMain
 {
-    /// The co-located engine: deploy lays captainShim and captainHook side by
-    /// side in one directory (the identity hash is over that directory's
-    /// managed DLLs, so co-location is also what makes shim and daemon compute
-    /// the same socket).
-    public static string DefaultEnginePath() =>
-        Path.Combine(AppContext.BaseDirectory, "captainHook");
-
     public static async Task<int> RunAsync(
         string[] args, Stream stdin, Stream stdout, TextWriter stderr,
-        string? enginePath = null, string? socketPathOverride = null)
+        string? deployDir = null, string? socketPathOverride = null)
     {
         var inv = Invocation.Parse(args);
         if (inv.Mode is Mode.Daemon or Mode.Doctor or Mode.ActorsDemo)
@@ -40,7 +33,12 @@ public static class ShimMain
             return 1;
         }
 
-        var engine = enginePath ?? DefaultEnginePath();
+        // Deploy lays captainShim and captainHook side by side in ONE
+        // directory: the identity hash is over that directory's managed DLLs,
+        // so co-location is what makes shim and daemon compute the same
+        // socket — and the engine is always exactly here.
+        deployDir ??= AppContext.BaseDirectory;
+        var engine = Path.Combine(deployDir, "captainHook");
         var dispatchId = Guid.NewGuid().ToString("N")[..8];
 
         // Raw stdin bytes, read once: forwarded VERBATIM inside the frame; a
@@ -50,7 +48,22 @@ public static class ShimMain
         await stdin.CopyToAsync(stdinBuf);
         var stdinBytes = stdinBuf.ToArray();
 
-        if (inv.Mode == Mode.Shim)
+        // The wire-stamp skew guard runs BEFORE anything touches the socket:
+        // on a partial deploy this shim's framing and the daemon's differ, so
+        // the only safe move is to never rendezvous — delegate and say why.
+        // No daemon spawn either: skew is an ops error to surface, not to
+        // optimize around.
+        var guard = inv.Mode == Mode.Shim ? SkewGuard.Check(deployDir) : null;
+        if (guard is { Ok: false })
+        {
+            WireLog.Error("shim", "shim.wireSkew", new WireLogFields
+            {
+                DispatchId = dispatchId, Msg = guard.Detail,
+            });
+            await stderr.WriteLineAsync($"captAInHook: {guard.Detail}; dispatching via the engine");
+        }
+
+        if (inv.Mode == Mode.Shim && guard is { Ok: true })
         {
             // Resolve the rendezvous. A failure here (pathological runtime
             // dir) must never cost the user their hook: delegate instead.

@@ -66,7 +66,15 @@ run live*. The framework underneath is what exists today.
   20-run avg against the same daemon — 8.7×, success bar ≤40ms beaten;
   ~11ms of the 16 is the forward span, native procBoot ≈5ms; the sun_path
   overflow path exercised by accident and delegated exactly as designed;
-  AOT toolchain + no-MVID facts recorded in platform.md).
+  AOT toolchain + no-MVID facts recorded in platform.md);
+  `wire-skew-guard` (2026-07-06; zero build machinery — Native AOT preserves
+  `Module.ModuleVersionId`, probed AOT≡IL, so the shim compares what it IS
+  against what the directory advertises; mismatch or missing DLL ⇒ never
+  touch the socket, delegate, `shim.wireSkew` in the trail; pinned by IL
+  tests in both skew directions + a live-socket never-accepted assert, and
+  verified in the native artifact — including catching a REAL skew created
+  mid-verification by copying one artifact without the other, which
+  delegated and answered the hook exactly as designed). Phase B complete.
 
 ## Next
 

@@ -5,24 +5,37 @@ using CaptainHook.Wire;
 
 namespace CaptainHook.Tests;
 
-// captainshim-aot-artifact (ADR-0004 decision 7 amendment): ShimMain is the
-// AOT shim's whole program, tested here in IL form through its injected
-// streams — same seam, same bytes; the native publish only changes the
-// compiler. The delegation fallback is probed with a fake "engine" script so
-// the verbatim-relay rule (stdout bytes, stderr text, exit code) and the
-// at-most-once boundary (FailedAfterDelivery NEVER delegates) are pinned.
+// captainshim-aot-artifact + wire-skew-guard (ADR-0004 decision 7 amendment):
+// ShimMain is the AOT shim's whole program, tested here in IL form through
+// its injected streams — same seam, same bytes; the native publish only
+// changes the compiler. The delegation fallback is probed with a fake
+// "engine" script so the verbatim-relay rule (stdout bytes, stderr text,
+// exit code) and the at-most-once boundary (FailedAfterDelivery NEVER
+// delegates) are pinned; the skew guard is probed with fabricated deploy
+// dirs in both skew directions (wrong wire DLL, missing wire DLL).
 
 public class ShimMainTests
 {
     private static async Task<(int Exit, byte[] Stdout, string Stderr)> RunAsync(
-        string[] args, byte[] stdin, string? engine = null, string? socket = null)
+        string[] args, byte[] stdin, string? deployDir = null, string? socket = null)
     {
         using var stdout = new MemoryStream();
         var stderr = new StringWriter();
         var exit = await ShimMain.RunAsync(args, new MemoryStream(stdin), stdout, stderr,
-            enginePath: engine, socketPathOverride: socket);
+            deployDir: deployDir, socketPathOverride: socket);
         return (exit, stdout.ToArray(), stderr.ToString());
     }
+
+    /// A correct co-located deploy advertises the wire DLL this test run
+    /// actually loaded — the guard must pass exactly like a real atomic
+    /// deploy's would.
+    private static void AdvertiseRealWireDll(string dir) =>
+        File.Copy(typeof(Frame).Assembly.Location, Path.Combine(dir, "captainHookWire.dll"));
+
+    /// A skewed deploy: a VALID managed assembly with the WRONG MVID sitting
+    /// at the wire DLL's name — exactly what a partial copy leaves behind.
+    private static void AdvertiseWrongWireDll(string dir) =>
+        File.Copy(typeof(CaptainHook.Actors.Log).Assembly.Location, Path.Combine(dir, "captainHookWire.dll"));
 
     /// A fake engine: a shell script that proves what reached it — echoes its
     /// argv and stdin into stdout with a marker, writes a stderr line, exits 3.
@@ -38,6 +51,21 @@ public class ShimMainTests
         return path;
     }
 
+    /// A one-shot in-process daemon stand-in listening at `socket`.
+    private static (Task Server, Socket Listener) ServeOnce(string socket, Func<Socket, Task> serve)
+    {
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(socket));
+        listener.Listen(1);
+        var server = Task.Run(async () =>
+        {
+            using var l = listener;
+            using var conn = await l.AcceptAsync();
+            await serve(conn);
+        });
+        return (server, listener);
+    }
+
     private sealed class TempDir : IDisposable
     {
         public string Path { get; } =
@@ -50,27 +78,21 @@ public class ShimMainTests
     public async Task WarmPath_RelaysAnswerVerbatim_NeverTouchesTheEngine()
     {
         using var dir = new TempDir();
+        AdvertiseRealWireDll(dir.Path);          // correct deploy — no engine, warm never needs one
         var socket = Path.Combine(dir.Path, "test.sock");
         var effect = Encoding.UTF8.GetBytes("""{"hookSpecificOutput":{"x":"café ✓"}}""");
 
-        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        listener.Bind(new UnixDomainSocketEndPoint(socket));
-        listener.Listen(1);
-        var server = Task.Run(async () =>
+        var (server, _) = ServeOnce(socket, async conn =>
         {
-            using var l = listener;
-            using var conn = await l.AcceptAsync();
             await using var s = new NetworkStream(conn);
             var req = HookRequest.Decode((await Frame.ReadAsync(s))!);
             Assert.Equal("user-prompt-submit", req.EventName);
             await Frame.WriteAsync(s, new HookResponse(0, effect, "trace").Encode());
         });
 
-        // enginePath points at nothing on purpose: a warm answer must never
-        // need (or touch) the engine.
         var (exit, stdout, stderr) = await RunAsync(
             ["hook", "user-prompt-submit"], "{\"prompt\":\"hi\"}"u8.ToArray(),
-            engine: Path.Combine(dir.Path, "no-such-engine"), socket: socket);
+            deployDir: dir.Path, socket: socket);
 
         Assert.Equal(0, exit);
         Assert.Equal(effect, stdout);          // byte-identical relay
@@ -82,12 +104,13 @@ public class ShimMainTests
     public async Task NoDaemon_DelegatesToEngine_VerbatimRelay_AndAppendsNoDaemonFlag()
     {
         using var dir = new TempDir();
-        var engine = FakeEngine(dir.Path);
-        var socket = Path.Combine(dir.Path, "nobody-home.sock");   // connect will fail → NotDelivered
+        AdvertiseRealWireDll(dir.Path);
+        FakeEngine(dir.Path);
+        var socket = Path.Combine(dir.Path, "nobody-home.sock");   // connect fails → NotDelivered
 
         var (exit, stdout, stderr) = await RunAsync(
             ["hook", "user-prompt-submit", "--harness", "claude-code"], "payload-bytes"u8.ToArray(),
-            engine: engine, socket: socket);
+            deployDir: dir.Path, socket: socket);
 
         Assert.Equal(3, exit);                                     // the engine's exit code, verbatim
         var text = Encoding.UTF8.GetString(stdout);
@@ -97,14 +120,13 @@ public class ShimMainTests
     }
 
     [Fact]
-    public async Task ExplicitNoDaemon_SkipsForwarding_DelegatesWithoutDuplicatingFlag()
+    public async Task ExplicitNoDaemon_SkipsForwardingAndGuard_DelegatesWithoutDuplicatingFlag()
     {
         using var dir = new TempDir();
-        var engine = FakeEngine(dir.Path);
+        FakeEngine(dir.Path);                    // no wire DLL: --no-daemon never consults the guard
 
-        // No socketPathOverride: --no-daemon must never even resolve a socket.
         var (exit, stdout, _) = await RunAsync(
-            ["hook", "post-tool-use", "--no-daemon"], [], engine: engine);
+            ["hook", "post-tool-use", "--no-daemon"], [], deployDir: dir.Path);
 
         Assert.Equal(3, exit);
         Assert.Contains("argv=[hook post-tool-use --no-daemon]", Encoding.UTF8.GetString(stdout));
@@ -114,28 +136,65 @@ public class ShimMainTests
     public async Task FailedAfterDelivery_ExitsOne_ZeroStdout_NeverDelegates()
     {
         using var dir = new TempDir();
-        var engine = FakeEngine(dir.Path);   // would write bytes if (wrongly) delegated to
+        AdvertiseRealWireDll(dir.Path);
+        FakeEngine(dir.Path);                    // would write bytes if (wrongly) delegated to
         var socket = Path.Combine(dir.Path, "test.sock");
 
-        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        listener.Bind(new UnixDomainSocketEndPoint(socket));
-        listener.Listen(1);
-        var server = Task.Run(async () =>
+        var (server, _) = ServeOnce(socket, async conn =>
         {
-            using var l = listener;
-            using var conn = await l.AcceptAsync();
             await using var s = new NetworkStream(conn);
             await Frame.ReadAsync(s);                     // delivery happened…
             conn.Shutdown(SocketShutdown.Both);           // …then no answer
         });
 
         var (exit, stdout, stderr) = await RunAsync(
-            ["hook", "user-prompt-submit"], "{}"u8.ToArray(), engine: engine, socket: socket);
+            ["hook", "user-prompt-submit"], "{}"u8.ToArray(), deployDir: dir.Path, socket: socket);
 
         Assert.Equal(1, exit);
         Assert.Empty(stdout);                             // fake engine untouched — at-most-once held
         Assert.Contains("failed after delivery", stderr);
         await server.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task WireSkew_NeverTouchesTheSocket_DelegatesAndSaysWhy()
+    {
+        using var dir = new TempDir();
+        AdvertiseWrongWireDll(dir.Path);         // partial deploy: wrong MVID at the wire DLL's name
+        FakeEngine(dir.Path);
+        var socket = Path.Combine(dir.Path, "test.sock");
+
+        // A live daemon stand-in that would happily answer: the guard must
+        // keep the shim from ever connecting.
+        var accepted = false;
+        var (_, listener) = ServeOnce(socket, conn => { accepted = true; return Task.CompletedTask; });
+
+        var (exit, stdout, stderr) = await RunAsync(
+            ["hook", "user-prompt-submit"], "skewed"u8.ToArray(), deployDir: dir.Path, socket: socket);
+
+        Assert.Equal(3, exit);                                        // the engine answered, not the daemon
+        Assert.Contains("stdin=[skewed]", Encoding.UTF8.GetString(stdout));
+        Assert.Contains("wire skew", stderr);
+        Assert.Contains("redeploy both artifacts together", stderr);
+        Assert.False(accepted, "the shim connected to the socket despite a wire skew");
+        listener.Dispose();
+    }
+
+    [Fact]
+    public async Task MissingWireDll_FailsGuard_Delegates()
+    {
+        using var dir = new TempDir();
+        FakeEngine(dir.Path);                    // engine present, wire DLL absent: partial deploy
+        var socket = Path.Combine(dir.Path, "test.sock");
+        var (_, listener) = ServeOnce(socket, _ => Task.CompletedTask);
+
+        var (exit, stdout, stderr) = await RunAsync(
+            ["hook", "user-prompt-submit"], "{}"u8.ToArray(), deployDir: dir.Path, socket: socket);
+
+        Assert.Equal(3, exit);
+        Assert.Contains("argv=[", Encoding.UTF8.GetString(stdout));
+        Assert.Contains("partial or missing deploy", stderr);
+        listener.Dispose();
     }
 
     [Fact]
@@ -154,10 +213,11 @@ public class ShimMainTests
     public async Task NoDaemon_NoEngine_ExitsOne_ZeroStdout_SaysDeploy()
     {
         using var dir = new TempDir();
+        AdvertiseRealWireDll(dir.Path);          // guard passes; the DEAD END is engineless + daemonless
         var (exit, stdout, stderr) = await RunAsync(
             ["hook", "user-prompt-submit"], "{}"u8.ToArray(),
-            engine: Path.Combine(dir.Path, "captainHook"),          // absent
-            socket: Path.Combine(dir.Path, "nobody-home.sock"));   // and no daemon
+            deployDir: dir.Path,
+            socket: Path.Combine(dir.Path, "nobody-home.sock"));
 
         Assert.Equal(1, exit);
         Assert.Empty(stdout);

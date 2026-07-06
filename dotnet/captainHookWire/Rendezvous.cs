@@ -48,6 +48,26 @@ public static class ContentIdentity
         return Hash(modules);
     }
 
+    /// Read one assembly's MVID; null when the file is missing, unreadable, or
+    /// carries no managed metadata. The shim's wire-stamp skew guard leans on
+    /// this (ADR-0004 decision 7 amendment): the same read Compute does, for
+    /// one named file, never throwing — absence is an answer, not an error.
+    public static Guid? TryReadMvid(string dllPath)
+    {
+        try
+        {
+            using var stream = File.OpenRead(dllPath);
+            using var pe = new PEReader(stream);
+            if (!pe.HasMetadata) return null;
+            var md = pe.GetMetadataReader();
+            return md.GetGuid(md.GetModuleDefinition().Mvid);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// The pure core: order-insensitive (sorted by file name here, so directory
     /// enumeration order can never change the identity), first 12 hex chars of
     /// SHA-256 over the (name, mvid) lines.
