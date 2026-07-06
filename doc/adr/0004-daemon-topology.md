@@ -48,9 +48,13 @@ layer (the Akka re-evaluation below).
      change now needs a restart (`--replace` / `doctor`, decision 3) or,
      eventually, a management-API push. Harness specs are the deliberate
      exception: to preserve ADR-0003's edit-a-spec-effective-next-hook
-     contract, the daemon `stat`s the `~/.captainHook/harnesses/` override
-     directory per dispatch and reloads on change (one syscall; the embedded
-     defaults are fixed at build).
+     contract, the daemon stamps the `~/.captainHook/harnesses/` override
+     directory per dispatch and reloads on change (a handful of stats —
+     *amended 2026-07-06*: the stamp is per-file (name, mtime, size), not the
+     dir's own mtime, because a strictly in-place overwrite never bumps the
+     parent directory's mtime and a dir-level stat would silently exempt
+     those editors from the contract; verified live. The embedded defaults
+     are fixed at build).
    - *shim* — the existing `hook <event>` invocation, unchanged from the
      host's point of view: connect to the socket, forward a framed request
      (dispatchId, event name, harness name, raw stdin bytes), relay the

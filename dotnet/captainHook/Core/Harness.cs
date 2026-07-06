@@ -328,25 +328,39 @@ internal sealed class GenericJsonAdapter : IResponseAdapter
 
 /// The daemon's harness view (ADR-0004 decision 1): environment is read once
 /// at daemon start, but harness specs keep ADR-0003's contract — edit a spec,
-/// effective next hook. Per dispatch the daemon stats the OVERRIDE DIRECTORY
-/// (one syscall) and rebuilds the registry when its write stamp moves; the
-/// embedded defaults are fixed at build. Add/remove/rename and the usual
-/// editor write-rename all bump the directory stamp; a strictly in-place
-/// overwrite does not — the rare miss the ADR accepts for a one-syscall check.
-/// Stamp comparison is EQUALITY on wall-clock mtimes (change detection, like
-/// content identity), never interval math — the monotonic rule is untouched.
+/// effective next hook. Per dispatch the daemon takes a COMPOSITE STAMP of
+/// the override directory — every *.json's (name, mtime, size), a handful of
+/// stats — and rebuilds the registry when it moves; the embedded defaults are
+/// fixed at build. The composite deliberately upgrades the ADR's
+/// dir-mtime sketch: an IN-PLACE overwrite (`cat > spec.json`) never bumps
+/// the parent directory's mtime on Linux, which would silently exempt a whole
+/// class of editors from the contract; per-file stamps close that hole while
+/// staying trivially cheap. Stamp comparison is EQUALITY on wall-clock
+/// mtimes (change detection, like content identity), never interval math —
+/// the monotonic rule is untouched.
 public sealed class ReloadingHarnessRegistry(string? overrideDir = null)
 {
     private readonly string _dir = HarnessRegistry.ResolveDir(overrideDir);
-    private DateTime _stamp = Stamp(HarnessRegistry.ResolveDir(overrideDir));
     private HarnessRegistry _current = new(overrideDir);
+    private string _stamp = Stamp(HarnessRegistry.ResolveDir(overrideDir));
 
-    private static DateTime Stamp(string dir) =>
-        Directory.Exists(dir) ? new DirectoryInfo(dir).LastWriteTimeUtc : DateTime.MinValue;
+    private static string Stamp(string dir)
+    {
+        if (!Directory.Exists(dir)) return "<absent>";
+        var sb = new System.Text.StringBuilder();
+        foreach (var f in Directory.EnumerateFiles(dir, "*.json").OrderBy(x => x, StringComparer.Ordinal))
+        {
+            var fi = new FileInfo(f);
+            sb.Append(f).Append('|').Append(fi.LastWriteTimeUtc.Ticks).Append('|').Append(fi.Length).Append('\n');
+        }
+        return sb.ToString();
+    }
 
     /// The registry as of now. Benign race under concurrent dispatches: two
     /// callers seeing a fresh stamp both rebuild and one wins the reference
-    /// swap — both registries are valid loads of the same directory.
+    /// swap — both registries are valid loads of the same directory. Write
+    /// order (_current before _stamp) means the worst interleaving serves one
+    /// stale registry for one dispatch, then converges.
     public HarnessRegistry Current
     {
         get
@@ -354,11 +368,17 @@ public sealed class ReloadingHarnessRegistry(string? overrideDir = null)
             var s = Stamp(_dir);
             if (s != _stamp)
             {
+                var fresh = new HarnessRegistry(_dir);
+                var known = fresh.Known;   // force the load NOW, inside the reload story
+                _current = fresh;
                 _stamp = s;
-                _current = new HarnessRegistry(_dir);
                 Log.Info("harness", "harness.reload", new LogFields
                 {
-                    Data = new Dictionary<string, object> { ["dir"] = _dir },
+                    Data = new Dictionary<string, object>
+                    {
+                        ["dir"] = _dir,
+                        ["known"] = string.Join(",", known),
+                    },
                 });
             }
             return _current;

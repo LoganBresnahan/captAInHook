@@ -52,7 +52,9 @@ run live*. The framework underneath is what exists today.
   verified end-to-end); `at-most-once-fallback-guard` (2026-07-05; chaos
   audit: 30 hooks under random daemon SIGKILL — zero double dispatches) —
   Phase 3 complete; `sigterm-drain` (2026-07-06; real SIGTERM landed
-  mid-dispatch — in-flight hook still answered, drained in 62ms).
+  mid-dispatch — in-flight hook still answered, drained in 62ms);
+  `harness-hot-reload` (2026-07-06; in-place edit — same inode, dir mtime
+  unmoved — served on the next hook through a live daemon).
   ⚠ Until `mandatory-idle-exit` lands, a spawned daemon lives until killed —
   SIGTERM now drains gracefully; kill -9 stays safe.
   Dogfooding: `/deploy` ships the apphost build to the live hooks and

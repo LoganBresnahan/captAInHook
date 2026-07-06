@@ -95,8 +95,9 @@ path. Daemon-side (`Core/DaemonHost.cs`): acquire the lock or exit 0, warm up
 — registry, dispatcher, supervised workers, harness specs, all built ONCE —
 then bind (listening ⟺ ready) and serve one dispatch per connection on the
 shared dispatcher, adopting the shim's dispatchId. Harness specs keep
-ADR-0003's edit-a-spec-effective-next-hook contract via one stat of the
-override dir per dispatch (`ReloadingHarnessRegistry`); the rest of
+ADR-0003's edit-a-spec-effective-next-hook contract via a per-file composite
+stamp of the override dir each dispatch (`ReloadingHarnessRegistry` — per-file
+because in-place overwrites never bump the dir's mtime); the rest of
 `CAPTAINHOOK_*` is daemon-start configuration, and the stderr pretty sink
 defaults off in daemon mode (the JSONL file is the record). On SIGTERM/SIGINT
 the daemon DRAINS (decision 4): listener closes first (mid-drain hooks get
