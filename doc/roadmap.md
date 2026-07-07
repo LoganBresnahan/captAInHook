@@ -272,8 +272,13 @@ run live*. The framework underneath is what exists today.
   request; idle-exit answered — requests reset the clock, an open SSE
   stream defers exit (current lock-holder only), the API never spawns a
   daemon. ADR-0004's "management API lands" trigger examined and declined:
-  the hook path keeps one UDS connection per dispatch. Build order: pending
-  `/adr-plan` on ADR-0007; tick slices here as they land.
+  the hook path keeps one UDS connection per dispatch.
+  Build order: ADR-0007 § Implementation plan (2026-07-07; 13 slices → 7
+  phases; critical path api-listener-host → port-config-and-cutover →
+  api-json-discovery → auth-token-origin → put-policy-write →
+  docs-flow-platform; adversarial verify on 6 slices — the port handoff,
+  auth, both SSE slices, idle-defer, and the atomic policy write; no
+  ultracode). Tick slices here as they land.
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine
