@@ -111,6 +111,21 @@ run live*. The framework underneath is what exists today.
   today's behavior, live CLI byte-unchanged; the daemon site + resolver wiring
   are phase 5, reusing `DeniedStdout` so the two paths can't drift). Suite 223
   green twice. Phase 3 complete.
+  `absent-allow-malformed-noop` (2026-07-06; the file tri-state
+  `PolicyResolution.Resolve` — Absent (no file ⇒ allow all, the zero-config
+  default) / Malformed (present but unreadable or unparseable ⇒ deny all
+  loudly, carrying the error; a directory or dangling symlink is Malformed
+  not Absent — ambiguous I/O fails toward quiet, never toward silent grant;
+  no keep-last-good) / Loaded (valid ⇒ evaluate); `Evaluate` maps each case
+  so the two wire sites consume it uniformly. **Adversarial verify (3-skeptic
+  fan-out) earned its keep**: confirmed Resolve never throws + the case
+  mapping is sound, but caught a real SILENT GRANT — a rule event spelled
+  kebab (`user-prompt-submit`, the project's first-class spelling) parsed
+  valid yet never matched the canonical dispatch, turning a deny into a grant;
+  fixed by canonicalizing the event criterion at parse (Harness.Canon) +
+  case-insensitive event match, plus duplicate-JSON-field rejection (strict
+  never-guess). Resolver still unwired — phase 5). Suite 240 green twice.
+  Phase 4 complete.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central

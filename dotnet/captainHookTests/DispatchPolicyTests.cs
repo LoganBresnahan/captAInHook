@@ -145,6 +145,36 @@ public class DispatchPolicyParseTests
         Assert.Contains(errors, e => e.Contains("decison"));
     }
 
+    [Fact]
+    public void EventCriterion_IsCanonicalizedToPascalCase()
+    {
+        // Phase-4 adversarial fix: a kebab-case event (the project's first-class
+        // spelling) is normalized at parse, so it STORES the canonical PascalCase
+        // name and later matches the canonical dispatch.
+        var p = ParseValid("""{ "version": 1, "rules": [ { "event": "user-prompt-submit", "decision": "deny" } ] }""");
+        Assert.Equal("UserPromptSubmit", p.Rules[0].Event);
+    }
+
+    [Fact]
+    public void DuplicateTopLevelField_IsRejected()
+    {
+        // Strict never-guess: two `default`s are ambiguous (System.Text.Json
+        // would silently keep one, a silent-grant risk).
+        var p = Parse("""{ "version": 1, "default": "deny", "default": "allow" }""", out var errors);
+        Assert.Null(p);
+        Assert.Contains(errors, e => e.Contains("duplicate") && e.Contains("default"));
+    }
+
+    [Fact]
+    public void DuplicateRuleField_IsRejected()
+    {
+        var p = Parse(
+            """{ "version": 1, "rules": [ { "event": "Stop", "event": "UserPromptSubmit", "decision": "deny" } ] }""",
+            out var errors);
+        Assert.Null(p);
+        Assert.Contains(errors, e => e.Contains("duplicate") && e.Contains("event"));
+    }
+
     [Theory]
     [InlineData("""{ "version": 1, "rules": [ { "event": "", "decision": "deny" } ] }""")]      // empty
     [InlineData("""{ "version": 1, "rules": [ { "handler": "  ", "decision": "deny" } ] }""")]  // whitespace
@@ -232,6 +262,19 @@ public class DispatchPolicyEvaluateTests
         const string json = """{ "version": 1, "rules": [ { "event": "SessionStart", "decision": "deny" } ] }""";
         Assert.False(Eval(json, "SessionStart").Work);       // denied
         Assert.True(Eval(json, "UserPromptSubmit").Work);    // untouched -> default allow
+    }
+
+    [Theory]
+    [InlineData("user-prompt-submit")]   // kebab — the project's first-class spelling
+    [InlineData("UserPromptSubmit")]     // canonical
+    [InlineData("userpromptsubmit")]     // casing slip
+    public void EventRule_MatchesCanonicalDispatch_RegardlessOfSpelling(string spelling)
+    {
+        // Regression pin for the phase-4 adversarial finding (silent grant): a
+        // deny rule whose event is spelled kebab or off-case must STILL deny the
+        // canonical dispatch, never quietly fail to match and let it through.
+        var json = $$"""{ "version": 1, "rules": [ { "event": "{{spelling}}", "decision": "deny" } ] }""";
+        Assert.False(Eval(json, "UserPromptSubmit").Work);
     }
 
     [Fact]
@@ -353,5 +396,118 @@ public class DispatchPolicyEvaluateTests
         // A project-scoped rule cannot bite an event that carries no cwd.
         var json = """{ "version": 1, "rules": [ { "project": "/home/oof/some-repo", "decision": "deny" } ] }""";
         Assert.True(Eval(json, "UserPromptSubmit", cwd: null).Work);
+    }
+}
+
+/// ADR-0006 decision 4 — the file tri-state, PolicyResolution.Resolve. The
+/// classification is the adversarial surface: both wrong directions are costly,
+/// so every "looks absent but is really present" case (a directory, an empty
+/// file) must land in Malformed, never Absent. Real files in a temp dir —
+/// ~/.captainHook is the LIVE deployment tree (never touched here).
+public class PolicyResolutionTests : IDisposable
+{
+    private readonly string _dir =
+        Path.Combine(Path.GetTempPath(), "captainhook-policy-tests-" + Guid.NewGuid().ToString("N"));
+
+    public PolicyResolutionTests() => Directory.CreateDirectory(_dir);
+    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
+
+    /// Write `content` to a fresh file in the temp dir and resolve it.
+    private PolicyResolution ResolveWith(string content)
+    {
+        var path = Path.Combine(_dir, "dispatch.json");
+        File.WriteAllText(path, content);
+        return PolicyResolution.Resolve(path);
+    }
+
+    [Fact]
+    public void AbsentFile_IsAbsent_AllowsEverything()
+    {
+        // The zero-config default: no file => Absent => work everything. THE
+        // direction that must never be reached by a present-but-broken file.
+        var res = PolicyResolution.Resolve(Path.Combine(_dir, "does-not-exist.json"));
+        Assert.IsType<PolicyResolution.Absent>(res);
+        Assert.True(res.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Fact]
+    public void ValidFile_IsLoaded_AndEvaluates()
+    {
+        var res = ResolveWith("""
+            { "version": 1, "rules": [ { "event": "SessionStart", "decision": "deny" } ] }
+            """);
+        var loaded = Assert.IsType<PolicyResolution.Loaded>(res);
+        Assert.False(loaded.Policy.Evaluate("SessionStart", null, null).Work);
+        Assert.False(res.Evaluate("SessionStart", null, null).Work);   // convenience delegates
+        Assert.True(res.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Theory]
+    [InlineData("")]                                   // empty file — present, no content
+    [InlineData("   \n  \t ")]                          // whitespace only
+    [InlineData("not json at all {")]                  // not JSON
+    [InlineData("[1, 2, 3]")]                           // JSON, but not an object
+    [InlineData("""{ "default": "allow" }""")]         // valid JSON, missing version -> schema-invalid
+    [InlineData("""{ "version": 1, "rules": [ { "decision": "deny" } ] }""")]  // criteria-less rule
+    public void PresentButUnparseable_IsMalformed_NoopsEverythingLoudly(string content)
+    {
+        var res = ResolveWith(content);
+        var malformed = Assert.IsType<PolicyResolution.Malformed>(res);
+        Assert.False(string.IsNullOrWhiteSpace(malformed.Error));   // the fault is named for the trail
+        Assert.False(res.Evaluate("UserPromptSubmit", null, null).Work);   // deny everything
+        Assert.False(res.Evaluate("Stop", null, null).Work);
+    }
+
+    [Fact]
+    public void DirectoryAtPath_IsMalformed_NotAbsent()
+    {
+        // The classic misclassification trap: File.Exists is FALSE for a
+        // directory, so without the explicit guard a directory at the policy
+        // path would read as Absent and silently allow everything. It must be
+        // Malformed (loud) instead.
+        var dirPath = Path.Combine(_dir, "dispatch.json.d");
+        Directory.CreateDirectory(dirPath);
+        var res = PolicyResolution.Resolve(dirPath);
+        var malformed = Assert.IsType<PolicyResolution.Malformed>(res);
+        Assert.Contains("directory", malformed.Error);
+        Assert.False(res.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Fact]
+    public void UnreadableFile_IsMalformed_NotAbsent()
+    {
+        // A present-but-unreadable file (chmod 000) must be Malformed, never
+        // Absent. Best-effort: skipped where the process can read it regardless
+        // (e.g. running as root), which never silently passes — the assertions
+        // only run when the permission actually bites.
+        var path = Path.Combine(_dir, "locked.json");
+        File.WriteAllText(path, """{ "version": 1 }""");
+        try { File.SetUnixFileMode(path, UnixFileMode.None); }
+        catch { return; }   // platform without Unix modes — nothing to assert
+
+        var stillReadable = true;
+        try { File.ReadAllText(path); } catch { stillReadable = false; }
+        if (stillReadable) return;   // root or permissive FS — the branch can't be exercised
+
+        var res = PolicyResolution.Resolve(path);
+        var malformed = Assert.IsType<PolicyResolution.Malformed>(res);
+        Assert.Contains("cannot read", malformed.Error);
+        Assert.False(res.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Fact]
+    public void DanglingSymlink_IsMalformed_NotAbsent()
+    {
+        // Deliberate pin (phase-4 adversarial): a symlink to a missing target is
+        // present-but-unreadable. It is Malformed (deny-loud), NOT Absent — a
+        // file the user pointed at may have carried a restriction, so "can't
+        // read" must fail toward quiet, never toward a silent grant.
+        var link = Path.Combine(_dir, "dangling.json");
+        try { File.CreateSymbolicLink(link, Path.Combine(_dir, "no-such-target.json")); }
+        catch { return; }   // platform without symlink support — nothing to assert
+
+        var res = PolicyResolution.Resolve(link);
+        Assert.IsType<PolicyResolution.Malformed>(res);
+        Assert.False(res.Evaluate("UserPromptSubmit", null, null).Work);
     }
 }
