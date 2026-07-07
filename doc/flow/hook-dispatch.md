@@ -68,6 +68,21 @@ diagnostics are split by audience — humans get the `Trace` summary and pretty
 one-liners on stderr; machines get JSONL in the log file. This is why
 `Logging.fs` structurally cannot write to stdout.
 
+## The dispatch policy gate
+
+Between event-parse and the dispatcher sits captAInHook's own front door
+([ADR-0006](../adr/0006-dispatch-policy.md)): both dispatch sites consult
+`~/.captainHook/dispatch.json` via the one shared `HookRun.PolicyGateFor`. An
+event-level deny (or an unparseable file) short-circuits to a byte-identical
+Noop — no dispatcher built, no budget, no drain — so a policy-skipped hook is
+indistinguishable from an uneventful one except by the trail; otherwise the
+gate's handler exclusions ride into the fan-out (`DispatchAsync`'s
+`excludedHandlers`). Absent file ⇒ allow all; malformed ⇒ deny all, loudly;
+`default: deny` is the pause. The daemon reloads the file per dispatch via
+`ReloadingPolicy`'s `(mtime,size)` stat-gate. Full mechanics — the tri-state,
+the rule language, no-drift, poison-and-advance reload — in
+[dispatch-policy.md](dispatch-policy.md).
+
 ## The shim's warm path (ADR-0004, in progress)
 
 In shim mode (`hook <event>` without `--no-daemon`) the binary first tries the
@@ -227,6 +242,7 @@ relocated.
 | `ContentIdentity`, `RendezvousPaths`, `DaemonRendezvous` (lock/bind) | `dotnet/captainHook/Core/Rendezvous.cs`, `Core/DaemonRendezvous.cs` |
 | `DaemonSpawner` (detached spawn on fallback) | `dotnet/captainHook/Core/DaemonSpawner.cs` |
 | `DaemonHost` (serve loop, daemon-side pipeline), `ReloadingHarnessRegistry` | `dotnet/captainHook/Core/DaemonHost.cs`, `Core/Harness.cs` |
+| dispatch policy gate (the front door — resolve/evaluate/short-circuit, both paths, hot reload) | [dispatch-policy.md](dispatch-policy.md); `Core/DispatchPolicy.cs`, `HookRun.PolicyGateFor` |
 | `Doctor` (reaper: PID-reuse guard + path lineage), `DoctorVerdict` | `dotnet/captainHook/Core/Doctor.cs` |
 | harness resolution, stdin read, dispatchId, stdout write (`HookRun.CollapsedAsync`); Console wiring in `Program.cs` | `dotnet/captainHook/Core/HookRun.cs` |
 | `HarnessSpec` (+`TryParse`), `HarnessRegistry`, `Harness.ParseEvent`/`Canon`, `Harness.ApplyCapabilityGate`, `IResponseAdapter` + `ResponseAdapters` | `dotnet/captainHook/Core/Harness.cs` |
@@ -235,6 +251,6 @@ relocated.
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `doctor.verdict` (src `doctor`) |
+| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `policy.skip/exclude/malformed/reload` (src `policy`); `doctor.verdict` (src `doctor`) |
 | pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `AtMostOnceTests.cs` (commit-marker boundary, mid-write deadline → truncated frame dispatches nothing, one-dispatch-per-id accounting); `SoakTests.cs` (round-trip golden wire; 200-dispatch soak: serialization permutation, queue count, escalation under load); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
-| decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md` |
+| decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md`; `doc/adr/0006-dispatch-policy.md` |

@@ -257,4 +257,63 @@ public class HookRunPolicyDenyTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains("additionalContext", stdout);
     }
+
+    // ---- skip-trail-visibility (phase 6b): every non-happy outcome is on the trail
+
+    [Fact]
+    public async Task EventLevelDeny_EmitsPolicySkip_OnTheTrail()
+    {
+        using var captured = new CapturedLog();
+        await RunAsync(Ups, """{"prompt":"hi"}""", policyPath: PolicyFile(DenyUpsJson));
+        var skip = Assert.Single(captured.Events, e => e.Evt == "policy.skip");
+        Assert.Equal("UserPromptSubmit", skip.Fields.HookEvent);
+    }
+
+    [Fact]
+    public async Task MalformedPolicy_EmitsPolicyMalformed_WithTheError()
+    {
+        using var captured = new CapturedLog();
+        await RunAsync(Ups, """{"prompt":"hi"}""", policyPath: PolicyFile("{ not json"));
+        var bad = Assert.Single(captured.Events, e => e.Evt == "policy.malformed");
+        Assert.Equal("warn", bad.Lvl);
+        Assert.False(string.IsNullOrWhiteSpace(bad.Fields.Msg));   // the parse error rides along
+    }
+
+    [Fact]
+    public async Task HandlerExclusion_EmitsPolicyExclude_NamingTheHandler()
+    {
+        using var captured = new CapturedLog();
+        var excludeEcho = """{ "version": 1, "rules": [ { "handler": "echo", "decision": "deny" } ] }""";
+        await RunAsync(Ups, """{"prompt":"hi"}""", policyPath: PolicyFile(excludeEcho));
+        var excl = Assert.Single(captured.Events, e => e.Evt == "policy.exclude");
+        Assert.Contains("echo", (string)excl.Fields.Data!["excluded"]);
+    }
+
+    [Fact]
+    public async Task HappyProceed_NoExclusions_LeavesNoPolicyTrail()
+    {
+        using var captured = new CapturedLog();
+        await RunAsync(Ups, """{"prompt":"hi"}""", policyPath: PolicyFile("""{ "version": 1 }"""));
+        Assert.DoesNotContain(captured.Events, e => e.Evt.StartsWith("policy."));
+    }
+
+    // ---- default-deny-pause-pin (phase 6c): decision 7's pause, demonstrated
+
+    [Theory]
+    [InlineData("user-prompt-submit")]
+    [InlineData("session-start")]
+    [InlineData("post-tool-use")]
+    [InlineData("stop")]
+    public async Task DefaultDeny_NoopsEveryHook_ThePauseStory(string ev)
+    {
+        // ADR-0006 decision 7: default:deny IS the pause — no separate mechanism.
+        // Every event answers the bare Noop. The daemon path is proven identical
+        // by the phase-5 no-drift cross-check; this pins the collapsed side
+        // across a spread of events.
+        var pause = """{ "version": 1, "default": "deny" }""";
+        var (exit, stdout, _) = await RunAsync(
+            new Invocation(Mode.Collapsed, ev, "claude-code"), "{}", policyPath: PolicyFile(pause));
+        Assert.Equal(0, exit);
+        Assert.Equal("{}", stdout);
+    }
 }

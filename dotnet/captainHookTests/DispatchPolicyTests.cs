@@ -511,3 +511,145 @@ public class PolicyResolutionTests : IDisposable
         Assert.False(res.Evaluate("UserPromptSubmit", null, null).Work);
     }
 }
+
+/// ADR-0006 decision 6 (policy-hot-reload) — ReloadingPolicy's (mtime,size)
+/// stat-gate. The adversarial edge is POISON-AND-ADVANCE: a broken edit must
+/// deny everything loudly (never keep-last-good — ADR-0006's rejected
+/// alternative) AND advance the stamp (never re-parse every dispatch). Pinned
+/// mtimes (File.SetLastWriteTimeUtc), never sleeps — same discipline as
+/// HotReloadTests for the harness registry.
+public class PolicyHotReloadTests : IDisposable
+{
+    private readonly string _dir =
+        Path.Combine(Path.GetTempPath(), "captainhook-policy-reload-" + Guid.NewGuid().ToString("N"));
+    private readonly string _path;
+    private static readonly DateTime T0 = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    public PolicyHotReloadTests()
+    {
+        Directory.CreateDirectory(_dir);
+        _path = Path.Combine(_dir, "dispatch.json");
+    }
+    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
+
+    private void Write(string json, DateTime mtime)
+    {
+        File.WriteAllText(_path, json);
+        File.SetLastWriteTimeUtc(_path, mtime);
+    }
+
+    private static string DenyEvent(string ev) =>
+        $$"""{ "version": 1, "rules": [ { "event": "{{ev}}", "decision": "deny" } ] }""";
+
+    [Fact]
+    public void ValidEdit_EffectiveNextDispatch()
+    {
+        Write(DenyEvent("SessionStart"), T0);
+        var rp = new ReloadingPolicy(_path);
+        Assert.False(rp.Current.Evaluate("SessionStart", null, null).Work);
+        Assert.True(rp.Current.Evaluate("Stop", null, null).Work);
+
+        Write(DenyEvent("Stop"), T0.AddSeconds(1));
+        Assert.True(rp.Current.Evaluate("SessionStart", null, null).Work);   // old rule gone
+        Assert.False(rp.Current.Evaluate("Stop", null, null).Work);          // new rule live
+    }
+
+    [Fact]
+    public void UnchangedFile_ReturnsSameInstance_NoReparse()
+    {
+        Write(DenyEvent("Stop"), T0);
+        var rp = new ReloadingPolicy(_path);
+        Assert.Same(rp.Current, rp.Current);   // stamp equal -> zero re-resolve
+    }
+
+    [Fact]
+    public void GoodToBad_Poisons_DoesNotKeepLastGood()
+    {
+        // THE sharp edge. A valid policy that allows everything, then a broken
+        // edit: the reload must POISON (Malformed => deny all), never keep
+        // serving the last-good policy (ADR-0006's explicitly-rejected alt).
+        Write("""{ "version": 1 }""", T0);   // allow all
+        var rp = new ReloadingPolicy(_path);
+        Assert.True(rp.Current.Evaluate("UserPromptSubmit", null, null).Work);
+
+        Write("{ not json", T0.AddSeconds(1));
+        Assert.IsType<PolicyResolution.Malformed>(rp.Current);
+        Assert.False(rp.Current.Evaluate("UserPromptSubmit", null, null).Work);   // denied, not the old allow
+    }
+
+    [Fact]
+    public void AfterPoison_UnchangedFile_NoReparseStorm()
+    {
+        Write("{ not json", T0);
+        var rp = new ReloadingPolicy(_path);
+        var first = rp.Current;
+        Assert.IsType<PolicyResolution.Malformed>(first);
+        // The stamp ADVANCED on the poison, so an unchanged file re-serves the
+        // cached Malformed — the other half of the sharp edge (no re-parse storm).
+        Assert.Same(first, rp.Current);
+    }
+
+    [Fact]
+    public void BadToGood_Recovers()
+    {
+        Write("{ not json", T0);
+        var rp = new ReloadingPolicy(_path);
+        Assert.IsType<PolicyResolution.Malformed>(rp.Current);
+
+        Write("""{ "version": 1 }""", T0.AddSeconds(1));
+        Assert.IsType<PolicyResolution.Loaded>(rp.Current);
+        Assert.True(rp.Current.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Fact]
+    public void AbsentToPresent_Noticed()
+    {
+        // The daemon may outlive the first-ever creation of dispatch.json.
+        var rp = new ReloadingPolicy(_path);   // file absent at construction
+        Assert.IsType<PolicyResolution.Absent>(rp.Current);
+
+        Write(DenyEvent("UserPromptSubmit"), T0);
+        Assert.False(rp.Current.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Fact]
+    public void PresentToDeleted_RevertsToAbsent_AllowAll()
+    {
+        Write(DenyEvent("UserPromptSubmit"), T0);
+        var rp = new ReloadingPolicy(_path);
+        Assert.False(rp.Current.Evaluate("UserPromptSubmit", null, null).Work);
+
+        File.Delete(_path);
+        Assert.IsType<PolicyResolution.Absent>(rp.Current);
+        Assert.True(rp.Current.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Fact]
+    public void AbsentToDirectory_IsNoticed_Poisons_NotSilentGrant()
+    {
+        // Phase-6 adversarial fix: a directory appearing where the policy file
+        // belongs must flip Absent (allow all) => Malformed (deny all). The
+        // stat-gate must not miss it — FileInfo.Exists is false for a directory,
+        // so Stamp needs Resolve's directory-first precedence or this fails OPEN.
+        var rp = new ReloadingPolicy(_path);   // nothing there yet => Absent
+        Assert.IsType<PolicyResolution.Absent>(rp.Current);
+
+        Directory.CreateDirectory(_path);
+        Assert.IsType<PolicyResolution.Malformed>(rp.Current);
+        Assert.False(rp.Current.Evaluate("UserPromptSubmit", null, null).Work);
+    }
+
+    [Fact]
+    public void InPlaceOverwrite_SameSize_PickedUpViaMtime()
+    {
+        // The case a dir-mtime stamp would miss: same byte length, different
+        // content — only the mtime distinguishes them. (mtime,size) catches it.
+        Write(DenyEvent("Aaaaaaaaaaa"), T0);
+        var rp = new ReloadingPolicy(_path);
+        Assert.False(rp.Current.Evaluate("Aaaaaaaaaaa", null, null).Work);
+
+        Write(DenyEvent("Bbbbbbbbbbb"), T0.AddSeconds(1));   // same-length event name
+        Assert.True(rp.Current.Evaluate("Aaaaaaaaaaa", null, null).Work);
+        Assert.False(rp.Current.Evaluate("Bbbbbbbbbbb", null, null).Work);
+    }
+}

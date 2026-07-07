@@ -49,7 +49,7 @@ run live*. The framework underneath is what exists today.
   § Implementation plan, amendment plan (6 slices → 3 phases; critical path
   wire-lib-extraction → captainshim-aot-artifact → deploy-two-artifacts).
   Tick slices here as they land.
-- [ ] **14. Dispatch policy — captAInHook's own front door** — the product's
+- [x] **14. Dispatch policy — captAInHook's own front door** — the product's
   native policy story, layer 1 of 3 (2026-07-06 reframe: policy governs what
   WE bring, not a second copy of harness permissions). A user-editable
   policy file decides whether an arriving hook gets *worked*: per-event /
@@ -143,6 +143,23 @@ run live*. The framework underneath is what exists today.
   undenied event echoes, malformed⇒`{}`+loud stderr. Load-bearing order
   honored: landed only after phase 4's absent⇒allow default). Suite 245 green
   twice. Phase 5 complete.
+  `policy-hot-reload` + `skip-trail-visibility` + `default-deny-pause-pin`
+  (2026-07-06, the tail. `ReloadingPolicy` — the daemon's per-dispatch
+  (mtime,size) stat-gate over Resolve: poison-AND-advance (a broken edit
+  denies all AND advances the stamp — no keep-last-good, no re-parse storm),
+  unchanged file returns the same instance, collapsed path resolves once.
+  Trail: `policy.skip`/`.exclude`/`.malformed`/`.reload` emitted in the one
+  shared gate (no trail drift), happy path silent. default:deny Noops every
+  hook — decision 7's pause, pinned. **Adversarial verify (skeptic on the
+  reload edge)**: confirmed poison-advance/no-storm/recover all hold, and
+  caught a NEW fail-open — an absent⇒`mkdir` at the path stamped identically
+  to absent so the gate stayed allow-all when Resolve says Malformed; fixed
+  by giving Stamp Resolve's directory-first precedence, regression-pinned.
+  Two other flagged risks (mtime/size stamp collision; unlocked two-field
+  swap) are pre-existing properties `ReloadingHarnessRegistry` already
+  accepts — not introduced here. Flow doc: doc/flow/dispatch-policy.md).
+  Suite green twice. **Item 14 complete — dispatch policy is live on both
+  paths; dogfooding pending /deploy.**
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CaptainHook.Actors;
 
 namespace CaptainHook.Core;
 
@@ -10,13 +11,15 @@ namespace CaptainHook.Core;
 //
 // This file holds the policy core: PARSE (JsonElement -> policy or errors),
 // MATCH (Evaluate: a dispatch -> work-or-not + excluded handlers), the
-// injectable path resolver, and the file TRI-STATE (PolicyResolution.Resolve:
-// absent | malformed | loaded — ADR-0006 decision 4). Everything is pure except
-// PolicyResolution.Resolve, which is the ONE I/O boundary — it reads the file
-// and classifies it. The classification is the adversarial-verify surface:
-// absent-as-malformed would quiet every zero-config user; malformed-as-absent
-// would silently grant execution. Still no live callers — phase 5 wires the
-// resolution into both dispatch sites.
+// injectable path resolver, the file TRI-STATE (PolicyResolution.Resolve:
+// absent | malformed | loaded — ADR-0006 decision 4), and the daemon's
+// per-dispatch stat-gate (ReloadingPolicy, at the bottom). Everything is pure
+// except Resolve (the I/O boundary — reads + classifies the file) and
+// ReloadingPolicy (the (mtime,size) hot-reload wrapper over it). The
+// classification is the adversarial-verify surface: absent-as-malformed would
+// quiet every zero-config user; malformed-as-absent would silently grant
+// execution. Both dispatch sites are wired (phase 5); the daemon reloads via
+// ReloadingPolicy, the collapsed path resolves once.
 //
 // House precedent, followed deliberately: HarnessSpec.TryParse's strict walk
 // (collect every violation, all-or-nothing accept, never throw on bad DATA)
@@ -362,4 +365,72 @@ public abstract record PolicyResolution
         Malformed => new PolicyOutcome(Work: false, None),
         _ => new PolicyOutcome(Work: true, None),   // Absent
     };
+}
+
+/// The daemon's policy view (ADR-0006 decision 6, phase 6): resolve once at
+/// start, then per dispatch take a cheap (mtime,size) stamp of the file and
+/// re-resolve ONLY when it moves — an edit is effective next hook without a
+/// re-parse per hook. A failed reload is NOT special-cased: Resolve never throws
+/// (it returns Malformed), and the swap is UNCONDITIONAL — so a broken edit
+/// POISONS (every hook denied, loudly) AND advances the stamp: no keep-last-good
+/// (ADR-0006 rejects it, the same reason ADR-0005 does), no re-parse storm.
+/// Stamp comparison is EQUALITY on the wall-clock mtime (change detection, like
+/// content identity), never interval math — the monotonic rule is untouched.
+/// Mirrors ReloadingHarnessRegistry; the collapsed path is single-shot and just
+/// resolves once, so only the long-lived daemon needs this.
+public sealed class ReloadingPolicy
+{
+    private readonly string? _path;
+    private PolicyResolution _current;
+    private string _stamp;
+
+    public ReloadingPolicy(string? policyPath)
+    {
+        _path = policyPath;
+        _current = Load(policyPath);
+        _stamp = Stamp(policyPath);
+    }
+
+    private static PolicyResolution Load(string? path) =>
+        path is null ? new PolicyResolution.Absent() : PolicyResolution.Resolve(path);
+
+    private static string Stamp(string? path)
+    {
+        if (path is null) return "<null>";
+        // Mirror Resolve's precedence: a directory is Malformed, not Absent, and
+        // FileInfo.Exists is FALSE for one — so without this a dir appearing where
+        // the file belongs would stamp identically to "absent" and the stat-gate
+        // would never flip Absent(allow-all) → Malformed(deny-all): a silent grant.
+        // (ADR-0006 phase-6 adversarial verify.)
+        if (Directory.Exists(path)) return "<dir>";
+        var fi = new FileInfo(path);
+        return fi.Exists ? $"{fi.LastWriteTimeUtc.Ticks}|{fi.Length}" : "<absent>";
+    }
+
+    /// The resolution as of now. Benign race under concurrent dispatches: two
+    /// callers seeing a fresh stamp both re-resolve and one wins the swap — both
+    /// are valid resolutions of the same file. Write order (_current before
+    /// _stamp) bounds the worst interleaving to one stale-by-one dispatch, then
+    /// it converges.
+    public PolicyResolution Current
+    {
+        get
+        {
+            var s = Stamp(_path);
+            if (s != _stamp)
+            {
+                _current = Load(_path);
+                _stamp = s;
+                Log.Info("policy", "policy.reload", new LogFields
+                {
+                    Data = new Dictionary<string, object>
+                    {
+                        ["path"] = _path ?? "<none>",
+                        ["state"] = _current.GetType().Name,   // Absent | Malformed | Loaded
+                    },
+                });
+            }
+            return _current;
+        }
+    }
 }

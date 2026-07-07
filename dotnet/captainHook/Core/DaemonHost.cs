@@ -71,6 +71,10 @@ public static class DaemonHost
         // ---- warm up: everything expensive happens BEFORE the bind ----------
         var harnesses = new ReloadingHarnessRegistry(harnessDir);
         _ = harnesses.Current.Known;                     // force the initial spec load
+        // Dispatch policy warms with everything else: resolved once here, then
+        // re-read per dispatch only when the file's (mtime,size) moves (ADR-0006
+        // decision 6). Absent when no path is configured (tests) => allow all.
+        var policy = new ReloadingPolicy(policyPath);
         var dispatcher = new Dispatcher(registry ?? HookRun.BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
 
         // Listening ⟺ ready: the first connect a shim ever makes against this
@@ -154,7 +158,7 @@ public static class DaemonHost
             Volatile.Write(ref lastActive[0], clk());
             _ = Task.Run(async () =>
             {
-                try { await ServeConnectionAsync(conn, harnesses, dispatcher, policyPath); }
+                try { await ServeConnectionAsync(conn, harnesses, dispatcher, policy); }
                 finally
                 {
                     Volatile.Write(ref lastActive[0], clk());
@@ -225,7 +229,7 @@ public static class DaemonHost
     /// close. Failures are the CONNECTION's problem, never the daemon's — log
     /// and carry on serving.
     private static async Task ServeConnectionAsync(
-        Socket conn, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, string? policyPath)
+        Socket conn, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy)
     {
         using var _ = conn;
         await using var stream = new NetworkStream(conn, ownsSocket: false);
@@ -249,7 +253,7 @@ public static class DaemonHost
                 return;
             }
 
-            var res = await DispatchOneAsync(req, harnesses, dispatcher, policyPath);
+            var res = await DispatchOneAsync(req, harnesses, dispatcher, policy);
             await Frame.WriteAsync(stream, res.Encode());
         }
         catch (Exception ex)
@@ -264,7 +268,7 @@ public static class DaemonHost
     /// construction hoisted: resolve spec (reloading registry), parse, dispatch
     /// on the SHARED dispatcher under the shim's dispatchId, gate, serialize.
     private static async Task<HookResponse> DispatchOneAsync(
-        HookRequest req, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, string? policyPath)
+        HookRequest req, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy)
     {
         HarnessSpec spec;
         try
@@ -286,9 +290,10 @@ public static class DaemonHost
         // Dispatch policy (ADR-0006): the SAME shared gate the collapsed path
         // calls, at the identical seam — an event-level deny (or a Malformed
         // file) answers a byte-identical Noop without dispatching; otherwise the
-        // handler exclusions ride into the fan-out. Resolved per dispatch so an
-        // edit is effective next hook (phase 6 adds the stat-gate).
-        var gate = HookRun.PolicyGateFor(policyPath, spec, evt, req.DispatchId);
+        // handler exclusions ride into the fan-out. policy.Current is the
+        // stat-gated resolution — an edit is effective next hook, no re-parse
+        // per hook (ReloadingPolicy).
+        var gate = HookRun.PolicyGateFor(policy.Current, spec, evt, req.DispatchId);
         if (gate.IsShortCircuit)
             return new HookResponse(0, Encoding.UTF8.GetBytes(gate.DeniedStdout!), gate.TraceLine!);
 

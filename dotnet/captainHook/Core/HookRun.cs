@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CaptainHook.Actors;
 using CaptainHook.Handlers;
 using CaptainHook.Wire;
 
@@ -129,19 +130,40 @@ public static class HookRun
 
     /// The pure gate over an already-resolved policy — Work=false (event-level
     /// deny OR a Malformed file) short-circuits to a byte-identical Noop plus a
-    /// trace line (the Malformed case names the fault; rich policy.malformed
-    /// JSONL is phase 6); Work=true proceeds, carrying the handler exclusions.
+    /// trace line (the Malformed case names the fault); Work=true proceeds,
+    /// carrying the handler exclusions. Every non-happy outcome leaves a
+    /// structured trail line (policy.skip / policy.malformed / policy.exclude) —
+    /// emitted HERE, in the one shared gate, so the daemon and collapsed trails
+    /// cannot drift either. The plain proceed-with-no-exclusions path is silent.
     public static PolicyGate PolicyGateFor(PolicyResolution resolution, HarnessSpec spec, HookEvent evt, string? dispatchId)
     {
         var outcome = resolution.Evaluate(evt.Type, evt.Cwd, evt.SessionId);
         if (outcome.Work)
+        {
+            if (outcome.ExcludedHandlers.Count > 0)
+                Log.Info("policy", "policy.exclude", PolicyFields(evt, dispatchId,
+                    data: new Dictionary<string, object> { ["excluded"] = string.Join(",", outcome.ExcludedHandlers) }));
             return PolicyGate.Proceed(outcome.ExcludedHandlers);
+        }
 
-        var trace = resolution is PolicyResolution.Malformed m
-            ? $"[captAInHook] {evt.Type}  policy: MALFORMED ({m.Error}) — every hook denied"
-            : $"[captAInHook] {evt.Type}  policy: dispatch denied (event-level)";
+        string trace;
+        if (resolution is PolicyResolution.Malformed m)
+        {
+            // Decision 4: unparseable policy Noops every hook LOUDLY.
+            trace = $"[captAInHook] {evt.Type}  policy: MALFORMED ({m.Error}) — every hook denied";
+            Log.Warn("policy", "policy.malformed", PolicyFields(evt, dispatchId, msg: m.Error));
+        }
+        else
+        {
+            trace = $"[captAInHook] {evt.Type}  policy: dispatch denied (event-level)";
+            Log.Info("policy", "policy.skip", PolicyFields(evt, dispatchId));
+        }
         return PolicyGate.ShortCircuit(DeniedStdout(spec, evt, dispatchId), trace);
     }
+
+    private static LogFields PolicyFields(HookEvent evt, string? dispatchId,
+                                          string? msg = null, IDictionary<string, object>? data = null) =>
+        new() { DispatchId = dispatchId, SessionId = evt.SessionId, HookEvent = evt.Type, Msg = msg, Data = data };
 }
 
 /// The result of the policy gate at a wire site. A short-circuit carries the
