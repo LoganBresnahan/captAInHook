@@ -174,3 +174,66 @@ public class DispatcherFailureTests
         Assert.Equal(0, dispatcher.BackgroundPending);
     }
 }
+
+/// ADR-0006 handler-level exclusion (decision 2 / N3) — smoke tests for the
+/// per-dispatch excluded-names filter. The full N3 pin (excluded fail-closed
+/// contributes nothing, survivors keep registration-order merge, the excluded
+/// Worker is never restarted) is exclusion-ordering-failmode-pins, phase 2;
+/// these just prove the mechanism drops the named handler and is dead by
+/// default.
+public class HandlerExclusionTests
+{
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(2);
+
+    [Fact]
+    public async Task ExcludedHandler_DoesNotRun_SurvivorsMergeInRegistrationOrder()
+    {
+        var reg = new Registry().On("UserPromptSubmit",
+            TestHandler.Returning("a", new Effect.Inject("first")),
+            TestHandler.Returning("skip", new Effect.Inject("SKIPPED")),
+            TestHandler.Returning("b", new Effect.Inject("second")));
+
+        var result = await new Dispatcher(reg, Budget)
+            .DispatchAsync(Ev(), excludedHandlers: new HashSet<string> { "skip" });
+
+        // "As if unregistered for this dispatch": the excluded handler's inject
+        // is absent, and the survivors still concatenate in registration order.
+        Assert.Equal("first\nsecond", Assert.IsType<Effect.Inject>(result.Merged).Text);
+    }
+
+    [Fact]
+    public async Task ExcludedFailClosedHandler_ContributesNoDeny()
+    {
+        // The N3 crux, smoke-tested: a fail-closed handler that WOULD deny on
+        // failure contributes nothing when excluded, because it is filtered
+        // pre-fan-out and never runs. Fresh registry per dispatcher so the two
+        // are fully independent.
+        Registry Reg() => new Registry().On("UserPromptSubmit",
+            TestHandler.Returning("ok", new Effect.Inject("hi")),
+            TestHandler.Throwing("gate", FailMode.Closed));
+
+        // Baseline proves the exclusion is load-bearing: the gate throws under
+        // fail-closed, so the un-excluded dispatch denies.
+        var denied = await new Dispatcher(Reg(), Budget).DispatchAsync(Ev());
+        Assert.Equal(Verdict.Deny, Assert.IsType<Effect.Decide>(denied.Merged).Verdict);
+
+        // Excluded, the gate is silent and the inject survives.
+        var allowed = await new Dispatcher(Reg(), Budget)
+            .DispatchAsync(Ev(), excludedHandlers: new HashSet<string> { "gate" });
+        Assert.Equal("hi", Assert.IsType<Effect.Inject>(allowed.Merged).Text);
+    }
+
+    [Fact]
+    public async Task NullOrEmptyExclusion_IsTodaysBehavior_ByteIdentical()
+    {
+        var reg = new Registry().On("UserPromptSubmit",
+            TestHandler.Returning("a", new Effect.Inject("x")));
+        var d = new Dispatcher(reg, Budget);
+
+        // Both the default-null path and an empty set are the pre-slice
+        // behavior: nothing filtered.
+        Assert.Equal("x", Assert.IsType<Effect.Inject>((await d.DispatchAsync(Ev())).Merged).Text);
+        Assert.Equal("x", Assert.IsType<Effect.Inject>(
+            (await d.DispatchAsync(Ev(), excludedHandlers: new HashSet<string>())).Merged).Text);
+    }
+}

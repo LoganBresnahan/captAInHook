@@ -71,6 +71,19 @@ run live*. The framework underneath is what exists today.
   event-level-deny-shortcircuit → absent-allow-malformed-noop →
   evaluator-both-paths → policy-hot-reload; adversarial verify on exactly
   three slices; no ultracode). Tick slices here as they land.
+  Slices landed: `dispatch-policy-file` (2026-07-06; the `DispatchPolicy`
+  model + strict parser under `Core/`, on `HarnessSpec.TryParse`'s precedent
+  — collect-every-violation, all-or-nothing, never throw on bad DATA —
+  tightened so unknown fields, an unknown/missing `version`, `ask`, and
+  criteria-less rules are all MALFORMED per ADR-0006 decision 1;
+  `ResolvePath` injectable-path idiom + the `CAPTAINHOOK_DISPATCH_FILE`
+  override; 24 parse tests; no matcher and no tri-state yet — those wrap it
+  in phases 2/4); `handler-level-exclusion` (2026-07-06; an optional
+  order-preserving excluded-names filter on `DispatchAsync`, pre-fan-out so
+  an excluded fail-closed handler contributes no deny, snapshot registry +
+  supervised Worker left untouched — filtered never restarted; default-null
+  path byte-identical, dead until wired; smoke-tested). Both land as one
+  session (disjoint code); Phase 1 complete.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central

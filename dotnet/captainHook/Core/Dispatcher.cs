@@ -110,10 +110,23 @@ public sealed class Dispatcher
         }
     }
 
-    public async Task<DispatchResult> DispatchAsync(HookEvent e, string? dispatchId = null)
+    public async Task<DispatchResult> DispatchAsync(HookEvent e, string? dispatchId = null,
+                                                    IReadOnlySet<string>? excludedHandlers = null)
     {
-        var handlers = _runners.TryGetValue(e.Type, out var list)
+        var registered = _runners.TryGetValue(e.Type, out var list)
             ? (IReadOnlyList<Runner>)list : Array.Empty<Runner>();
+        // Handler-level exclusion (ADR-0006 decision 2 / N3): drop named
+        // handlers from THIS dispatch's view — "as if unregistered for this
+        // dispatch". Order-preserving (.Where over the registration-ordered
+        // list, which Merge depends on), and pre-fan-out, so an excluded
+        // fail-closed handler never runs and therefore contributes no Deny.
+        // The snapshot registry and each excluded handler's supervised Worker
+        // are untouched — filtered, never restarted (a restart wipes state).
+        // DEAD until the evaluator wires it in (phases 3+): the default null
+        // path is today's behavior, byte-identical.
+        var handlers = excludedHandlers is { Count: > 0 }
+            ? registered.Where(r => !excludedHandlers.Contains(r.Name)).ToList()
+            : registered;
         var trace = new Trace(e.Type, _budget, handlers.Count);
 
         // Structured trail alongside the human Trace: dispatch.start now, and a
