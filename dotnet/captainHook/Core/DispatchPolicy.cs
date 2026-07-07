@@ -8,13 +8,12 @@ namespace CaptainHook.Core;
 // short-circuited to a valid Noop. The hook is ALWAYS answered — policy only
 // chooses between "worked" and "valid Noop on the wire" (ADR-0006 decision 3).
 //
-// This file is the pure core: JsonElement -> policy or errors, plus the
-// injectable path resolver. It has NO callers yet — dead until the evaluator
-// wires it in (phases 3+). It deliberately stops short of:
-//   * the MATCHER (given an event, which decision) — rule-matcher, phase 2;
-//   * the absent/malformed TRI-STATE — absent-allow-malformed-noop, phase 4.
-// Both wrap this parser; keeping them out keeps this slice a pure parser with
-// a loud-by-design failure mode.
+// This file is the pure core: PARSE (JsonElement -> policy or errors), MATCH
+// (Evaluate: a dispatch -> work-or-not + excluded handlers), and the injectable
+// path resolver. It has NO callers yet — dead until the evaluator wires it in
+// (phases 3+). It deliberately stops short of the absent/malformed TRI-STATE
+// (absent-allow-malformed-noop, phase 4), which wraps TryParse; keeping that
+// out keeps the whole failure story in one place downstream.
 //
 // House precedent, followed deliberately: HarnessSpec.TryParse's strict walk
 // (collect every violation, all-or-nothing accept, never throw on bad DATA)
@@ -37,6 +36,13 @@ public enum PolicyDecision { Allow, Deny }
 public sealed record PolicyRule(
     string? Event, string? Handler, string? Project, string? Session,
     PolicyDecision Decision);
+
+/// The result of evaluating a policy against one dispatch. Work=false is an
+/// event-level deny — the whole dispatch short-circuits to a valid Noop, no
+/// worker asked (ADR-0006 decision 2). Work=true means proceed, dropping
+/// ExcludedHandlers (the handler-level denies) from the fan-out — the set hands
+/// straight to Dispatcher.DispatchAsync's excludedHandlers parameter.
+public sealed record PolicyOutcome(bool Work, IReadOnlySet<string> ExcludedHandlers);
 
 /// A parsed policy: the baseline decision for unmatched dispatches, plus the
 /// ordered rules (first match wins — the matcher enforces order).
@@ -169,6 +175,72 @@ public sealed record DispatchPolicy(
     /// `got "maybe"` for a bad string but `got 2` / `got true` for a bad type.
     private static string RawText(JsonElement e) =>
         e.ValueKind == JsonValueKind.String ? $"\"{e.GetString()}\"" : e.GetRawText();
+
+    private static readonly IReadOnlySet<string> NoExclusions = new HashSet<string>();
+
+    /// First-match-wins evaluation (ADR-0006 decisions 1-2). One rule list, two
+    /// questions. Handler-LESS rules answer "is the whole dispatch WORKED?" —
+    /// the first matching rule wins, else Default; a deny there short-circuits
+    /// and no handler question is asked. Handler-NAMED rules answer, per
+    /// handler, "is THIS handler excluded?" — the first rule naming that handler
+    /// and matching wins, so an earlier allow SHIELDS it from a later deny.
+    /// Criteria within a rule AND together; a handler-rule's `handler` field is
+    /// the SUBJECT it decides, not a criterion compared against the dispatch.
+    public PolicyOutcome Evaluate(string eventType, string? cwd, string? sessionId)
+    {
+        // Event level: the first handler-less rule that matches this dispatch.
+        var decision = Default;
+        foreach (var rule in Rules)
+            if (rule.Handler is null && Matches(rule, eventType, cwd, sessionId))
+            {
+                decision = rule.Decision;
+                break;
+            }
+        if (decision == PolicyDecision.Deny)
+            return new PolicyOutcome(Work: false, NoExclusions);
+
+        // Handler level: per named handler, the first matching handler-rule
+        // decides — allow shields, deny excludes. `decided` enforces
+        // first-match-wins per handler; `excluded` collects only the denies.
+        HashSet<string>? excluded = null;
+        HashSet<string>? decided = null;
+        foreach (var rule in Rules)
+        {
+            if (rule.Handler is null || !Matches(rule, eventType, cwd, sessionId)) continue;
+            decided ??= new HashSet<string>();
+            if (!decided.Add(rule.Handler)) continue;   // a later rule for a decided handler is dead
+            if (rule.Decision == PolicyDecision.Deny)
+                (excluded ??= new HashSet<string>()).Add(rule.Handler);
+        }
+        return new PolicyOutcome(Work: true, excluded ?? NoExclusions);
+    }
+
+    /// Event / project / session criteria, AND'd (ADR-0006 decision 1). The
+    /// handler criterion is deliberately NOT checked here — the caller routes on
+    /// rule.Handler's presence (absent => event-level, present => handler-level).
+    private static bool Matches(PolicyRule rule, string eventType, string? cwd, string? sessionId)
+    {
+        if (rule.Event is not null && rule.Event != eventType) return false;
+        if (rule.Session is not null && rule.Session != sessionId) return false;
+        if (rule.Project is not null && !ProjectContains(rule.Project, cwd)) return false;
+        return true;
+    }
+
+    /// Path-prefix containment (ADR-0006 decision 1: "a project contains its
+    /// subdirectories"). cwd matches when it EQUALS project or sits strictly
+    /// beneath it — a literal string prefix on a separator boundary, no
+    /// realpath / no symlink resolution. Trailing separators are trimmed so
+    /// "/repo" and "/repo/" behave identically, and the separator-boundary
+    /// check is precisely what stops "/repo" from matching "/repo2". Ordinal,
+    /// case-sensitive: POSIX cwd is the platform (doc/platform.md).
+    private static bool ProjectContains(string project, string? cwd)
+    {
+        if (cwd is null) return false;   // a project-scoped rule can't match a cwd-less event
+        var sep = Path.DirectorySeparatorChar;
+        var p = project.TrimEnd(sep);
+        var c = cwd.TrimEnd(sep);
+        return c == p || c.StartsWith(p + sep, StringComparison.Ordinal);
+    }
 
     /// The policy file this process reads: explicit, else the env var, else
     /// ~/.captainHook/dispatch.json. Mirrors HarnessRegistry.ResolveDir so the

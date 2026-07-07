@@ -237,3 +237,97 @@ public class HandlerExclusionTests
             (await d.DispatchAsync(Ev(), excludedHandlers: new HashSet<string>())).Merged).Text);
     }
 }
+
+/// ADR-0006 N3 pins — the adversarial pass for handler-level exclusion's
+/// interaction with registration order and fail modes (the ADR names this the
+/// slice that pins N3). "As if unregistered for this dispatch": an excluded
+/// handler contributes NOTHING — not its effect, not its fail-mode deny — and
+/// the machinery around it (merge order, the supervised Worker's state) is left
+/// undisturbed.
+public class ExclusionSemanticsPins
+{
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(2);
+    private static IReadOnlySet<string> Exclude(params string[] names) => new HashSet<string>(names);
+
+    [Fact]
+    public async Task ExcludingMiddleHandler_SurvivorsKeepRegistrationOrder()
+    {
+        var reg = new Registry().On("UserPromptSubmit",
+            TestHandler.Returning("a", new Effect.Inject("1")),
+            TestHandler.Returning("mid", new Effect.Inject("MID")),
+            TestHandler.Returning("b", new Effect.Inject("2")),
+            TestHandler.Returning("c", new Effect.Inject("3")));
+
+        var result = await new Dispatcher(reg, Budget).DispatchAsync(Ev(), excludedHandlers: Exclude("mid"));
+
+        // The hole a middle exclusion leaves closes without reordering — Merge's
+        // registration-order concatenation is undisturbed.
+        Assert.Equal("1\n2\n3", Assert.IsType<Effect.Inject>(result.Merged).Text);
+    }
+
+    [Fact]
+    public async Task ExcludedFailClosedGate_ContributesNoDeny_AmongSurvivors()
+    {
+        // Strengthened N3: a fail-closed gate sitting BETWEEN two survivors. Its
+        // fail-mode deny would win the whole merge (deny beats everything) — but
+        // excluded, it never runs, so the survivors' injects merge cleanly.
+        Registry Reg() => new Registry().On("UserPromptSubmit",
+            TestHandler.Returning("front", new Effect.Inject("front")),
+            TestHandler.Throwing("gate", FailMode.Closed),
+            TestHandler.Returning("back", new Effect.Inject("back")));
+
+        var denied = await new Dispatcher(Reg(), Budget).DispatchAsync(Ev());
+        Assert.Equal(Verdict.Deny, Assert.IsType<Effect.Decide>(denied.Merged).Verdict);
+
+        var worked = await new Dispatcher(Reg(), Budget).DispatchAsync(Ev(), excludedHandlers: Exclude("gate"));
+        Assert.Equal("front\nback", Assert.IsType<Effect.Inject>(worked.Merged).Text);
+    }
+
+    [Fact]
+    public async Task ExcludedHandler_SupervisedWorker_IsNeverRestarted_StatePersists()
+    {
+        // The sharp N3 pin: exclusion FILTERS, it does not restart. A restart
+        // re-runs the factory and wipes handler state (ConvergenceTests pins that
+        // reset happens on a real crash-restart). Here the same stateful worker
+        // must survive being skipped, its counter continuing — proof the
+        // exclusion left the Worker untouched rather than tearing it down.
+        var reg = new Registry()
+            .On("UserPromptSubmit", "stateful", () => new StatefulHandler(() => false));
+        var d = new Dispatcher(reg, Budget);
+
+        // Run it: counter -> 1.
+        Assert.Equal("calls=1", Assert.IsType<Effect.Inject>((await d.DispatchAsync(Ev())).Merged).Text);
+        // Exclude it: never asked, so it does not advance — merged Noop (no
+        // other handler registered for the event).
+        Assert.IsType<Effect.Noop>((await d.DispatchAsync(Ev(), excludedHandlers: Exclude("stateful"))).Merged);
+        // Run it again: the counter CONTINUES to 2. Had exclusion restarted the
+        // worker, a fresh instance would answer calls=1.
+        Assert.Equal("calls=2", Assert.IsType<Effect.Inject>((await d.DispatchAsync(Ev())).Merged).Text);
+    }
+
+    [Fact]
+    public async Task ExcludingEveryHandler_IsAnEmptyFanOut_NotAnError()
+    {
+        var reg = new Registry().On("UserPromptSubmit",
+            TestHandler.Returning("a", new Effect.Inject("x")),
+            TestHandler.Returning("b", new Effect.Inject("y")));
+
+        var result = await new Dispatcher(reg, Budget).DispatchAsync(Ev(), excludedHandlers: Exclude("a", "b"));
+
+        // Identical shape to an event with no registered handlers: a clean Noop.
+        Assert.IsType<Effect.Noop>(result.Merged);
+    }
+
+    [Fact]
+    public async Task ExcludingUnregisteredName_IsHarmless()
+    {
+        var reg = new Registry().On("UserPromptSubmit",
+            TestHandler.Returning("a", new Effect.Inject("x")));
+
+        // A name absent from the fan-out simply never matches the filter — the
+        // evaluator may pass handler-deny names for handlers this event doesn't
+        // have, with no special-casing.
+        var result = await new Dispatcher(reg, Budget).DispatchAsync(Ev(), excludedHandlers: Exclude("ghost"));
+        Assert.Equal("x", Assert.IsType<Effect.Inject>(result.Merged).Text);
+    }
+}

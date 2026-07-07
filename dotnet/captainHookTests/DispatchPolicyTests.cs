@@ -193,3 +193,165 @@ public class DispatchPolicyParseTests
         Assert.Equal("/custom/dispatch.json", DispatchPolicy.ResolvePath("/custom/dispatch.json"));
     }
 }
+
+/// ADR-0006 decisions 1-2 — the matcher. Two questions from one rule list:
+/// handler-LESS rules decide whether the whole dispatch is WORKED (first match
+/// wins, else default); handler-NAMED rules decide, per handler, which are
+/// EXCLUDED. The one sharp edge is the project path-prefix boundary — its own
+/// theory below.
+public class DispatchPolicyEvaluateTests
+{
+    private static PolicyOutcome Eval(string json, string ev, string? cwd = null, string? session = null)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var p = DispatchPolicy.TryParse(doc.RootElement, out var errors);
+        Assert.True(p is not null, $"policy invalid: {string.Join("; ", errors)}");
+        return p!.Evaluate(ev, cwd, session);
+    }
+
+    [Fact]
+    public void NoRules_DefaultAllow_WorksEverythingWithNoExclusions()
+    {
+        var o = Eval("""{ "version": 1 }""", "UserPromptSubmit");
+        Assert.True(o.Work);
+        Assert.Empty(o.ExcludedHandlers);
+    }
+
+    [Fact]
+    public void DefaultDeny_NoRules_NoopsEverything()
+    {
+        // ADR-0006 decision 7: default:deny IS the pause — every dispatch is an
+        // event-level deny.
+        Assert.False(Eval("""{ "version": 1, "default": "deny" }""", "UserPromptSubmit").Work);
+        Assert.False(Eval("""{ "version": 1, "default": "deny" }""", "Stop").Work);
+    }
+
+    [Fact]
+    public void EventLevelDeny_ShortCircuits_OnlyForThatEvent()
+    {
+        const string json = """{ "version": 1, "rules": [ { "event": "SessionStart", "decision": "deny" } ] }""";
+        Assert.False(Eval(json, "SessionStart").Work);       // denied
+        Assert.True(Eval(json, "UserPromptSubmit").Work);    // untouched -> default allow
+    }
+
+    [Fact]
+    public void EventLevel_FirstMatchWins()
+    {
+        // Two handler-less rules for the same event: the FIRST decides.
+        Assert.False(Eval("""
+            { "version": 1, "rules": [
+                { "event": "Stop", "decision": "deny" },
+                { "event": "Stop", "decision": "allow" } ] }
+            """, "Stop").Work);
+        Assert.True(Eval("""
+            { "version": 1, "rules": [
+                { "event": "Stop", "decision": "allow" },
+                { "event": "Stop", "decision": "deny" } ] }
+            """, "Stop").Work);
+    }
+
+    [Fact]
+    public void DefaultDeny_WithAllowRule_SelectivelyEnablesOneEvent()
+    {
+        // "Deny everything except Stop" — a handler-less allow rule overrides
+        // the deny baseline for exactly its event.
+        const string json = """
+            { "version": 1, "default": "deny", "rules": [ { "event": "Stop", "decision": "allow" } ] }
+            """;
+        Assert.True(Eval(json, "Stop").Work);
+        Assert.False(Eval(json, "UserPromptSubmit").Work);
+    }
+
+    [Fact]
+    public void HandlerDeny_ExcludesThatHandler_DispatchStillWorks()
+    {
+        var o = Eval("""{ "version": 1, "rules": [ { "handler": "echo", "decision": "deny" } ] }""", "UserPromptSubmit");
+        Assert.True(o.Work);
+        Assert.Equal(new[] { "echo" }, o.ExcludedHandlers);
+    }
+
+    [Fact]
+    public void HandlerAllow_ShieldsFromLaterDeny_PerHandlerFirstMatch()
+    {
+        // rule 0 allows echo on Stop; rule 1 denies echo everywhere. First
+        // match per handler wins.
+        const string json = """
+            { "version": 1, "rules": [
+                { "handler": "echo", "event": "Stop", "decision": "allow" },
+                { "handler": "echo", "decision": "deny" } ] }
+            """;
+        Assert.Empty(Eval(json, "Stop").ExcludedHandlers);              // rule 0 shields
+        Assert.Equal(new[] { "echo" }, Eval(json, "UserPromptSubmit").ExcludedHandlers);  // rule 1 bites
+    }
+
+    [Fact]
+    public void MultipleHandlerDenies_AllExcluded()
+    {
+        var o = Eval("""
+            { "version": 1, "rules": [
+                { "handler": "a", "decision": "deny" },
+                { "handler": "b", "decision": "deny" } ] }
+            """, "UserPromptSubmit");
+        Assert.True(o.Work);
+        Assert.Equal(new[] { "a", "b" }, o.ExcludedHandlers.OrderBy(h => h, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void EventLevelDeny_ShortCircuits_BeforeHandlerQuestion()
+    {
+        // A handler allow rule is MOOT when a handler-less rule denies the whole
+        // dispatch — Work=false, no exclusions computed.
+        var o = Eval("""
+            { "version": 1, "rules": [
+                { "handler": "echo", "decision": "allow" },
+                { "event": "Stop", "decision": "deny" } ] }
+            """, "Stop");
+        Assert.False(o.Work);
+        Assert.Empty(o.ExcludedHandlers);
+    }
+
+    [Fact]
+    public void SessionCriterion_IsExactMatch()
+    {
+        const string json = """{ "version": 1, "rules": [ { "session": "abc123", "decision": "deny" } ] }""";
+        Assert.False(Eval(json, "UserPromptSubmit", session: "abc123").Work);  // exact hit
+        Assert.True(Eval(json, "UserPromptSubmit", session: "abc124").Work);   // no partial
+        Assert.True(Eval(json, "UserPromptSubmit", session: null).Work);       // no session, no match
+    }
+
+    [Fact]
+    public void CriteriaWithinARule_AndTogether()
+    {
+        // event AND project must BOTH hold for the rule to bite.
+        const string json = """
+            { "version": 1, "rules": [ { "event": "Stop", "project": "/foo", "decision": "deny" } ] }
+            """;
+        Assert.False(Eval(json, "Stop", cwd: "/foo").Work);                 // both match
+        Assert.True(Eval(json, "Stop", cwd: "/bar").Work);                  // project misses
+        Assert.True(Eval(json, "UserPromptSubmit", cwd: "/foo").Work);      // event misses
+    }
+
+    [Theory]
+    // project, cwd, expected Work — false means the project-deny rule matched.
+    [InlineData("/home/oof/some-repo", "/home/oof/some-repo", false)]        // cwd == project
+    [InlineData("/home/oof/some-repo", "/home/oof/some-repo/sub/x", false)]  // strict subdirectory
+    [InlineData("/home/oof/some-repo", "/home/oof/some-repo2", true)]        // sibling — the classic prefix trap
+    [InlineData("/home/oof/some-repo", "/home/oof/some-repoX", true)]        // sibling, no separator boundary
+    [InlineData("/home/oof/some-repo", "/home/oof", true)]                   // parent, not contained
+    [InlineData("/home/oof/some-repo", "/elsewhere", true)]                  // unrelated
+    [InlineData("/home/oof/some-repo/", "/home/oof/some-repo", false)]       // trailing sep on project trimmed
+    [InlineData("/home/oof/some-repo", "/home/oof/some-repo/", false)]       // trailing sep on cwd trimmed
+    public void ProjectPrefix_BoundaryIsSeparatorAware(string project, string cwd, bool expectedWork)
+    {
+        var json = $$"""{ "version": 1, "rules": [ { "project": "{{project}}", "decision": "deny" } ] }""";
+        Assert.Equal(expectedWork, Eval(json, "UserPromptSubmit", cwd: cwd).Work);
+    }
+
+    [Fact]
+    public void ProjectRule_WithNoCwd_DoesNotMatch()
+    {
+        // A project-scoped rule cannot bite an event that carries no cwd.
+        var json = """{ "version": 1, "rules": [ { "project": "/home/oof/some-repo", "decision": "deny" } ] }""";
+        Assert.True(Eval(json, "UserPromptSubmit", cwd: null).Work);
+    }
+}

@@ -84,6 +84,21 @@ run live*. The framework underneath is what exists today.
   supervised Worker left untouched — filtered never restarted; default-null
   path byte-identical, dead until wired; smoke-tested). Both land as one
   session (disjoint code); Phase 1 complete.
+  `rule-matcher` (2026-07-06; `DispatchPolicy.Evaluate` → `PolicyOutcome`
+  {Work, ExcludedHandlers} — two questions from one rule list: handler-less
+  rules decide event-level work/short-circuit (first-match-wins, else
+  default), handler-named rules decide per-handler exclusion
+  (first-match-per-handler, allow shields a later deny); the sharp edge —
+  project path-prefix — is separator-boundary-aware so `/repo` never matches
+  `/repo2`, trims trailing separators, matches cwd==project and strict
+  subdirs, literal prefix / no realpath; still no callers, wired in phase 5)
+  and `exclusion-ordering-failmode-pins` (2026-07-06; the N3 adversarial
+  pass, test-only: an excluded fail-closed gate contributes no deny among
+  survivors, a middle exclusion leaves registration-order merge intact, and
+  the sharp one — an excluded handler's supervised Worker is never
+  restarted, its stateful counter continuing across the skip; plus
+  exclude-all⇒Noop and exclude-unregistered⇒harmless edges). Suite 218 green
+  twice. Phase 2 complete.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central
