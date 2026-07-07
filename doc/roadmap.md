@@ -159,7 +159,11 @@ run live*. The framework underneath is what exists today.
   swap) are pre-existing properties `ReloadingHarnessRegistry` already
   accepts — not introduced here. Flow doc: doc/flow/dispatch-policy.md).
   Suite green twice. **Item 14 complete — dispatch policy is live on both
-  paths; dogfooding pending /deploy.**
+  paths.** Deployed 2026-07-06 and verified on the live daemon: deny-
+  SessionStart hot-reloaded in (denied ⇒ `{}` while UserPromptSubmit still
+  echoed), file removed ⇒ SessionStart echoes again — hot reload both
+  directions with `policy.reload`/`policy.skip` in the trail; clean allow-all
+  state (no `dispatch.json`) restored. Dogfooding live.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central
