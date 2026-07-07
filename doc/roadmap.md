@@ -251,16 +251,30 @@ run live*. The framework underneath is what exists today.
   honored cancellations restart without counting — changed deliberately.
   Pinned by ClassificationTests.cs; mechanics in
   doc/flow/actor-supervision.md.
-- [ ] **5. Management API** — HTTP + WebSocket on the daemon: inventory of
+- [ ] **5. Management API** — HTTP + SSE on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId
   correlation = per-dispatch traces for free). **After item 14** — the API's
   write surface IS item 14's policy/registry data (file → API → GUI), and
-  the event stream wants real dispatch traces. ⚠ Fires an ADR: an HTTP
-  surface on the daemon under the zero-new-deps invariant (Kestrel is a
-  package — candidates are BCL `HttpListener`, and SSE over it instead of
-  WebSockets for the one-way stream), plus the idle-exit question (does an
-  attached UI hold the daemon open?). Install operations carry item 10's
+  the event stream wants real dispatch traces. The ADR it fires is fired:
+  design recorded in **ADR-0007** (2026-07-07) — BCL `HttpListener`
+  loopback-only in daemon mode (no new project; the zero-new-deps answer —
+  Kestrel and even the ASP.NET FrameworkReference rejected); fixed default
+  port 4665 + `api.json` discovery file, drain-start port handoff across
+  identity cutover (the port is a singleton the versioned socket never
+  was); SSE over a stat-poll tail of the JSONL trail file (both emitters'
+  halves — an in-process tee would miss the shim and collapsed dispatches),
+  byte-offset event ids for lossless reconnect, bounded-channel drop-oldest
+  + gap marker per subscriber; writes v1 = `PUT /policy` only, validated by
+  the same strict parser and atomic-renamed so hot reload makes API writes
+  ≡ hand edits (install ops deferred to ride with items 6+10, ADR-0006 N1);
+  per-daemon bearer token (0600 `api.json`) + Origin checks on every
+  request; idle-exit answered — requests reset the clock, an open SSE
+  stream defers exit (current lock-holder only), the API never spawns a
+  daemon. ADR-0004's "management API lands" trigger examined and declined:
+  the hook path keeps one UDS connection per dispatch. Build order: pending
+  `/adr-plan` on ADR-0007; tick slices here as they land.
+  Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine
   daemons exactly as today, with policy distribution / config / telemetry
