@@ -69,7 +69,7 @@ public class InvocationParseTests
 public class HookRunCollapsedTests
 {
     private static async Task<(int Exit, string Stdout, string Stderr)> RunAsync(
-        Invocation inv, string stdinJson)
+        Invocation inv, string stdinJson, DispatchPolicy? policy = null)
     {
         // Point the registry's override layer at a nonexistent dir so the user's
         // real ~/.captainHook is never involved (embedded defaults only).
@@ -77,7 +77,7 @@ public class HookRunCollapsedTests
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
         var exit = await HookRun.CollapsedAsync(
-            inv, new StringReader(stdinJson), stdout, stderr, harnessDir: harnessDir);
+            inv, new StringReader(stdinJson), stdout, stderr, harnessDir: harnessDir, policy: policy);
         return (exit, stdout.ToString(), stderr.ToString());
     }
 
@@ -117,5 +117,93 @@ public class HookRunCollapsedTests
 
         Assert.Equal(0, exit);   // fail-open: garbage payload degrades to {}
         Assert.Equal(JsonValueKind.Object, JsonDocument.Parse(outText).RootElement.ValueKind);
+    }
+}
+
+/// ADR-0006 Phase 3 (event-level-deny-shortcircuit) — driven through the real
+/// collapsed pipeline with injected streams. The invariant-1 property: a
+/// policy-denied hook's STDOUT is byte-indistinguishable from an uneventful
+/// hook's, while dispatch is skipped entirely. The daemon site gets the same
+/// wiring in phase 5 (via the shared HookRun.DeniedStdout).
+public class HookRunPolicyDenyTests
+{
+    private static Invocation Ups => new(Mode.Collapsed, "user-prompt-submit", "claude-code");
+
+    private static async Task<(int Exit, string Stdout, string Stderr)> RunAsync(
+        Invocation inv, string stdinJson, DispatchPolicy? policy = null)
+    {
+        var harnessDir = Path.Combine(Path.GetTempPath(), "captainhook-no-such-dir-" + Guid.NewGuid().ToString("N"));
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var exit = await HookRun.CollapsedAsync(
+            inv, new StringReader(stdinJson), stdout, stderr, harnessDir: harnessDir, policy: policy);
+        return (exit, stdout.ToString(), stderr.ToString());
+    }
+
+    /// A policy that denies the whole UserPromptSubmit dispatch (event-level).
+    private static DispatchPolicy DenyUps => new(PolicyDecision.Allow,
+        [new PolicyRule("UserPromptSubmit", null, null, null, PolicyDecision.Deny)]);
+
+    [Fact]
+    public async Task EventLevelDeny_StdoutIsByteIdenticalToUneventfulHook()
+    {
+        // Baseline — a genuinely uneventful hook: Stop has no registered handler,
+        // so the dispatch merges to Noop and emits the bare wire form.
+        var uneventful = await RunAsync(new Invocation(Mode.Collapsed, "stop", "claude-code"), "{}");
+        Assert.Equal("{}", uneventful.Stdout);
+
+        // Control — WITHOUT policy, UserPromptSubmit echoes: it is NOT inert.
+        var worked = await RunAsync(Ups, """{"prompt":"hi"}""");
+        Assert.Contains("additionalContext", worked.Stdout);
+
+        // The SAME UserPromptSubmit under an event-level deny emits bytes a
+        // harness cannot distinguish from the uneventful hook (invariant 1).
+        var denied = await RunAsync(Ups, """{"prompt":"hi"}""", policy: DenyUps);
+        Assert.Equal(0, denied.Exit);
+        Assert.Equal("{}", denied.Stdout);                  // the bare Noop form
+        Assert.Equal(uneventful.Stdout, denied.Stdout);     // == an uneventful hook
+        Assert.NotEqual(worked.Stdout, denied.Stdout);      // and the deny is what silenced it
+    }
+
+    [Fact]
+    public async Task EventLevelDeny_SkipsDispatchEntirely_NoWorkerAsked()
+    {
+        using var captured = new CapturedLog();
+
+        await RunAsync(Ups, """{"prompt":"hi"}""", policy: DenyUps);
+
+        // The dispatcher always logs dispatch.start when it runs (Dispatcher.cs).
+        // Its ABSENCE proves the short-circuit returned before building the
+        // dispatcher — no worker asked, no budget spent.
+        Assert.DoesNotContain(captured.Events, e => e.Evt == "dispatch.start");
+    }
+
+    [Fact]
+    public async Task EventLevelDeny_TraceGoesToStderr_NotStdout()
+    {
+        // Decision 3: the harness can tell a skip from an uneventful hook ONLY by
+        // our trail — which rides stderr, never stdout.
+        var denied = await RunAsync(Ups, """{"prompt":"hi"}""", policy: DenyUps);
+        Assert.Equal("{}", denied.Stdout);
+        Assert.Contains("policy", denied.Stderr);
+    }
+
+    [Fact]
+    public async Task AllowPolicy_DoesNotShortCircuit_DispatchRunsNormally()
+    {
+        // A policy that evaluates to Work=true leaves the pipeline untouched.
+        var allow = new DispatchPolicy(PolicyDecision.Allow, []);
+        var (exit, stdout, _) = await RunAsync(Ups, """{"prompt":"hi"}""", policy: allow);
+        Assert.Equal(0, exit);
+        Assert.Contains("additionalContext", stdout);   // dispatched, echoed
+    }
+
+    [Fact]
+    public async Task NullPolicy_IsTodaysBehavior()
+    {
+        // The default (no policy) path is byte-unchanged from before the slice.
+        var (exit, stdout, _) = await RunAsync(Ups, """{"prompt":"hi"}""");
+        Assert.Equal(0, exit);
+        Assert.Contains("additionalContext", stdout);
     }
 }

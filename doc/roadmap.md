@@ -99,6 +99,18 @@ run live*. The framework underneath is what exists today.
   restarted, its stateful counter continuing across the skip; plus
   exclude-all⇒Noop and exclude-unregistered⇒harmless edges). Suite 218 green
   twice. Phase 2 complete.
+  `event-level-deny-shortcircuit` (2026-07-06; first wire-touching slice —
+  a `DispatchPolicy?` on `HookRun.CollapsedAsync`, evaluated after
+  `ParseEvent` and BEFORE the dispatcher is built: `Work==false` answers a
+  valid Noop through the shared `DeniedStdout` gate+serialize tail, no worker
+  asked / no budget spent / no background drain. Byte-identity to an
+  uneventful hook holds by construction — the Noop rides the identical tail a
+  worked dispatch's Noop takes — and is both unit-pinned and driven: a real
+  collapsed run under a deny policy emits exactly `{}`, == the uneventful
+  baseline, ≠ the echo, with the skip visible only on stderr. Default null =
+  today's behavior, live CLI byte-unchanged; the daemon site + resolver wiring
+  are phase 5, reusing `DeniedStdout` so the two paths can't drift). Suite 223
+  green twice. Phase 3 complete.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central

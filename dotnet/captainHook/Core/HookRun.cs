@@ -41,7 +41,8 @@ public static class HookRun
     public static async Task<int> CollapsedAsync(
         Invocation inv,
         TextReader stdin, TextWriter stdout, TextWriter stderr,
-        ColdStartProbe? probe = null, string? harnessDir = null, string? dispatchId = null)
+        ColdStartProbe? probe = null, string? harnessDir = null, string? dispatchId = null,
+        DispatchPolicy? policy = null)
     {
         // Resolve the harness BEFORE touching stdin/stdout: an unknown name must
         // put a clear error on stderr and NOTHING on stdout (the host parses stdout).
@@ -67,6 +68,23 @@ public static class HookRun
         // One short dispatchId per invocation: every structured log line this run
         // emits carries it, so a digest can stitch the whole dispatch back together.
         dispatchId ??= Guid.NewGuid().ToString("N")[..8];
+
+        // Dispatch policy (ADR-0006): an event-level deny short-circuits BEFORE
+        // the dispatcher is even built — answered as a valid Noop, no worker
+        // asked, no budget spent, and (unlike the normal path below) no
+        // CompleteBackgroundAsync because nothing was dispatched. The Noop rides
+        // the SAME gate+serialize tail (DeniedStdout) the worked path uses, so
+        // its stdout is byte-identical to an uneventful hook by construction
+        // (invariant 1). Default null = no policy consulted (today's behavior);
+        // phase 5 resolves and passes the policy here and at the daemon's
+        // identical seam.
+        if (policy is not null && !policy.Evaluate(evt.Type, evt.Cwd, evt.SessionId).Work)
+        {
+            stdout.Write(DeniedStdout(spec, evt, dispatchId));
+            await stderr.WriteLineAsync($"[captAInHook] {evt.Type}  policy: dispatch denied (event-level) — Noop");
+            return 0;
+        }
+
         var dispatcher = new Dispatcher(BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
         probe?.DispatcherBuilt();
         var result = await dispatcher.DispatchAsync(evt, dispatchId);
@@ -86,5 +104,17 @@ public static class HookRun
 
         probe?.Emit(dispatchId);   // -> JSONL/stderr, never stdout; after the effect is written
         return 0;
+    }
+
+    /// The stdout of a policy-denied dispatch: a valid Noop through the SAME
+    /// gate+serialize tail a worked dispatch uses (ADR-0006 decision 3). Because
+    /// a real dispatch that merges to Noop takes this exact route, the denied
+    /// answer is byte-identical to an uneventful hook — invariant 1 holds by
+    /// construction. BOTH dispatch sites (this collapsed path and, in phase 5,
+    /// DaemonHost.DispatchOneAsync) call this one helper so they cannot drift.
+    public static string DeniedStdout(HarnessSpec spec, HookEvent evt, string? dispatchId = null)
+    {
+        var noop = Harness.ApplyCapabilityGate(spec, evt, new Effect.Noop(), dispatchId);
+        return ResponseAdapters.Get(spec.ResponseAdapter).Serialize(evt, noop);
     }
 }
