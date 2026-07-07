@@ -127,3 +127,80 @@ public class DaemonRaceTests
         Assert.Equal(0, await first.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 }
+
+// ADR-0006 Phase 5 (evaluator-both-paths) — dispatch policy on the DAEMON path,
+// and the adversarial no-drift check: the same policy file + event must produce
+// byte-identical answers on the daemon and collapsed paths (both route through
+// the one shared HookRun.PolicyGateFor). A real daemon reading a real policy
+// file per dispatch, driven over the real ShimClient wire.
+public class DaemonPolicyTests : IAsyncLifetime
+{
+    private readonly TempRuntimeDir _dir = new();
+    private readonly CancellationTokenSource _stop = new();
+    private readonly string _policyDir =
+        Path.Combine(Path.GetTempPath(), "captainhook-daemon-policy-" + Guid.NewGuid().ToString("N"));
+    private Task<int>? _daemon;
+    private string _policyPath = "";
+
+    private string Sock => _dir.Paths.SocketPath;
+    private static string NoHarnessDir => Path.Combine("/tmp", "chk-none-" + Guid.NewGuid().ToString("N")[..8]);
+
+    public async Task InitializeAsync()
+    {
+        Directory.CreateDirectory(_policyDir);
+        _policyPath = Path.Combine(_policyDir, "dispatch.json");
+        // Deny UserPromptSubmit at the event level; leave everything else alone.
+        File.WriteAllText(_policyPath,
+            """{ "version": 1, "rules": [ { "event": "UserPromptSubmit", "decision": "deny" } ] }""");
+
+        _daemon = Task.Run(() => DaemonHost.RunAsync(_dir.Paths, NoHarnessDir, _stop.Token, policyPath: _policyPath));
+        await PollUntilAsync(async () =>
+        {
+            var probe = await ShimClient.TryForwardAsync(Sock,
+                new HookRequest("probe000", "session-start", "claude-code", "{}"u8.ToArray()));
+            return probe is ForwardOutcome.Answered;
+        }, TimeSpan.FromSeconds(15), "daemon starts listening");
+    }
+
+    public async Task DisposeAsync()
+    {
+        _stop.Cancel();
+        if (_daemon is not null)
+            Assert.Equal(0, await _daemon.WaitAsync(TimeSpan.FromSeconds(10)));
+        _dir.Dispose();
+        try { Directory.Delete(_policyDir, recursive: true); } catch { }
+    }
+
+    [Fact]
+    public async Task EventLevelDeny_DaemonAnswersByteIdenticalNoop_AndCollapsedAgrees()
+    {
+        // Daemon path: the denied UserPromptSubmit answers the bare Noop form,
+        // byte-identical to an uneventful hook (invariant 1), produced daemon-side.
+        var outcome = await ShimClient.TryForwardAsync(Sock, new HookRequest(
+            "deny0001", "user-prompt-submit", "claude-code", Encoding.UTF8.GetBytes("""{"prompt":"hi"}""")));
+        var a = Assert.IsType<ForwardOutcome.Answered>(outcome);
+        Assert.Equal(0, a.ExitCode);
+        Assert.Equal("{}", Encoding.UTF8.GetString(a.StdoutBytes));
+
+        // NO-DRIFT: the collapsed path, given the SAME file and event, must
+        // answer byte-identically — both sites route through HookRun.PolicyGateFor.
+        using var so = new StringWriter();
+        using var se = new StringWriter();
+        await HookRun.CollapsedAsync(
+            new Invocation(Mode.Collapsed, "user-prompt-submit", "claude-code"),
+            new StringReader("""{"prompt":"hi"}"""), so, se,
+            harnessDir: NoHarnessDir, policyPath: _policyPath);
+        Assert.Equal(Encoding.UTF8.GetString(a.StdoutBytes), so.ToString());
+    }
+
+    [Fact]
+    public async Task UndeniedEvent_StillEchoes_TheDenyIsEventScoped()
+    {
+        // SessionStart is not denied by this policy, so the daemon still echoes —
+        // proving the deny is a per-event decision, not a blanket daemon-off.
+        var outcome = await ShimClient.TryForwardAsync(Sock, new HookRequest(
+            "allow001", "session-start", "claude-code", "{}"u8.ToArray()));
+        var a = Assert.IsType<ForwardOutcome.Answered>(outcome);
+        Assert.Contains("additionalContext", Encoding.UTF8.GetString(a.StdoutBytes));
+    }
+}

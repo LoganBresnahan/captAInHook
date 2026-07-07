@@ -42,7 +42,7 @@ public static class HookRun
         Invocation inv,
         TextReader stdin, TextWriter stdout, TextWriter stderr,
         ColdStartProbe? probe = null, string? harnessDir = null, string? dispatchId = null,
-        DispatchPolicy? policy = null)
+        string? policyPath = null)
     {
         // Resolve the harness BEFORE touching stdin/stdout: an unknown name must
         // put a clear error on stderr and NOTHING on stdout (the host parses stdout).
@@ -69,25 +69,25 @@ public static class HookRun
         // emits carries it, so a digest can stitch the whole dispatch back together.
         dispatchId ??= Guid.NewGuid().ToString("N")[..8];
 
-        // Dispatch policy (ADR-0006): an event-level deny short-circuits BEFORE
-        // the dispatcher is even built — answered as a valid Noop, no worker
-        // asked, no budget spent, and (unlike the normal path below) no
-        // CompleteBackgroundAsync because nothing was dispatched. The Noop rides
-        // the SAME gate+serialize tail (DeniedStdout) the worked path uses, so
-        // its stdout is byte-identical to an uneventful hook by construction
-        // (invariant 1). Default null = no policy consulted (today's behavior);
-        // phase 5 resolves and passes the policy here and at the daemon's
-        // identical seam.
-        if (policy is not null && !policy.Evaluate(evt.Type, evt.Cwd, evt.SessionId).Work)
+        // Dispatch policy (ADR-0006): the ONE shared gate both wire sites call
+        // (this and DaemonHost.DispatchOneAsync) so they cannot drift. A
+        // short-circuit answers a valid Noop BEFORE the dispatcher is built — no
+        // worker asked, no budget spent, and (unlike the normal path below) no
+        // CompleteBackgroundAsync, because nothing was dispatched. Otherwise the
+        // gate's handler exclusions ride into the fan-out. policyPath null =
+        // Absent = allow all (today's behavior); Program.cs passes the resolved
+        // default path.
+        var gate = PolicyGateFor(policyPath, spec, evt, dispatchId);
+        if (gate.IsShortCircuit)
         {
-            stdout.Write(DeniedStdout(spec, evt, dispatchId));
-            await stderr.WriteLineAsync($"[captAInHook] {evt.Type}  policy: dispatch denied (event-level) — Noop");
+            stdout.Write(gate.DeniedStdout!);
+            await stderr.WriteLineAsync(gate.TraceLine);
             return 0;
         }
 
         var dispatcher = new Dispatcher(BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
         probe?.DispatcherBuilt();
-        var result = await dispatcher.DispatchAsync(evt, dispatchId);
+        var result = await dispatcher.DispatchAsync(evt, dispatchId, gate.Excluded);
         probe?.Dispatched();
 
         // Single-shot: drain background work before exit (the queue itself is
@@ -110,11 +110,48 @@ public static class HookRun
     /// gate+serialize tail a worked dispatch uses (ADR-0006 decision 3). Because
     /// a real dispatch that merges to Noop takes this exact route, the denied
     /// answer is byte-identical to an uneventful hook — invariant 1 holds by
-    /// construction. BOTH dispatch sites (this collapsed path and, in phase 5,
-    /// DaemonHost.DispatchOneAsync) call this one helper so they cannot drift.
+    /// construction. BOTH dispatch sites call this one helper so they can't drift.
     public static string DeniedStdout(HarnessSpec spec, HookEvent evt, string? dispatchId = null)
     {
         var noop = Harness.ApplyCapabilityGate(spec, evt, new Effect.Noop(), dispatchId);
         return ResponseAdapters.Get(spec.ResponseAdapter).Serialize(evt, noop);
     }
+
+    /// The dispatch-policy gate (ADR-0006 phase 5): the SINGLE shared entry both
+    /// wire sites call, so the daemon and collapsed paths cannot drift when most
+    /// runs exercise only one. Resolves the file at `policyPath` (null => Absent
+    /// => allow all), then gates. Resolve runs per call — hot reload is free;
+    /// phase 6 adds the (mtime,size) stat-gate to skip the re-parse.
+    public static PolicyGate PolicyGateFor(string? policyPath, HarnessSpec spec, HookEvent evt, string? dispatchId) =>
+        PolicyGateFor(
+            policyPath is null ? new PolicyResolution.Absent() : PolicyResolution.Resolve(policyPath),
+            spec, evt, dispatchId);
+
+    /// The pure gate over an already-resolved policy — Work=false (event-level
+    /// deny OR a Malformed file) short-circuits to a byte-identical Noop plus a
+    /// trace line (the Malformed case names the fault; rich policy.malformed
+    /// JSONL is phase 6); Work=true proceeds, carrying the handler exclusions.
+    public static PolicyGate PolicyGateFor(PolicyResolution resolution, HarnessSpec spec, HookEvent evt, string? dispatchId)
+    {
+        var outcome = resolution.Evaluate(evt.Type, evt.Cwd, evt.SessionId);
+        if (outcome.Work)
+            return PolicyGate.Proceed(outcome.ExcludedHandlers);
+
+        var trace = resolution is PolicyResolution.Malformed m
+            ? $"[captAInHook] {evt.Type}  policy: MALFORMED ({m.Error}) — every hook denied"
+            : $"[captAInHook] {evt.Type}  policy: dispatch denied (event-level)";
+        return PolicyGate.ShortCircuit(DeniedStdout(spec, evt, dispatchId), trace);
+    }
+}
+
+/// The result of the policy gate at a wire site. A short-circuit carries the
+/// byte-identical Noop stdout and the trace line to emit (the dispatcher is
+/// never built); otherwise Excluded names the handlers to drop from the
+/// fan-out (empty = none). One type, both sites — the anti-drift seam.
+public sealed record PolicyGate(string? DeniedStdout, string? TraceLine, IReadOnlySet<string> Excluded)
+{
+    private static readonly IReadOnlySet<string> None = new HashSet<string>();
+    public static PolicyGate Proceed(IReadOnlySet<string> excluded) => new(null, null, excluded);
+    public static PolicyGate ShortCircuit(string stdout, string trace) => new(stdout, trace, None);
+    public bool IsShortCircuit => DeniedStdout is not null;
 }

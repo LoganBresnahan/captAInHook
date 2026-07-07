@@ -40,7 +40,9 @@ switch (inv.Mode)
         TimeSpan? idle = null;
         if (long.TryParse(Environment.GetEnvironmentVariable("CAPTAINHOOK_IDLE_MS"), out var ms) && ms > 0)
             idle = TimeSpan.FromMilliseconds(ms);
-        return await DaemonHost.RunAsync(idleWindow: idle);
+        // Dispatch policy: the daemon reads the resolved path per dispatch
+        // (ADR-0006 decision 5). The file is optional — absent => allow all.
+        return await DaemonHost.RunAsync(idleWindow: idle, policyPath: DispatchPolicy.ResolvePath());
     }
 
     case Mode.Doctor:
@@ -106,9 +108,11 @@ switch (inv.Mode)
 
         return await HookRun.CollapsedAsync(inv,
             new StringReader(System.Text.Encoding.UTF8.GetString(stdinBytes)),
-            Console.Out, Console.Error, probe, dispatchId: dispatchId);
+            Console.Out, Console.Error, probe, dispatchId: dispatchId,
+            policyPath: DispatchPolicy.ResolvePath());
     }
 
     default: // Mode.Collapsed (--no-daemon)
-        return await HookRun.CollapsedAsync(inv, Console.In, Console.Out, Console.Error, probe);
+        return await HookRun.CollapsedAsync(inv, Console.In, Console.Out, Console.Error, probe,
+            policyPath: DispatchPolicy.ResolvePath());
 }

@@ -35,7 +35,7 @@ public static class DaemonHost
     public static async Task<int> RunAsync(
         RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
         Registry? registry = null, TimeSpan? drainDeadline = null,
-        TimeSpan? idleWindow = null, Func<long>? clock = null)
+        TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -154,7 +154,7 @@ public static class DaemonHost
             Volatile.Write(ref lastActive[0], clk());
             _ = Task.Run(async () =>
             {
-                try { await ServeConnectionAsync(conn, harnesses, dispatcher); }
+                try { await ServeConnectionAsync(conn, harnesses, dispatcher, policyPath); }
                 finally
                 {
                     Volatile.Write(ref lastActive[0], clk());
@@ -225,7 +225,7 @@ public static class DaemonHost
     /// close. Failures are the CONNECTION's problem, never the daemon's — log
     /// and carry on serving.
     private static async Task ServeConnectionAsync(
-        Socket conn, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher)
+        Socket conn, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, string? policyPath)
     {
         using var _ = conn;
         await using var stream = new NetworkStream(conn, ownsSocket: false);
@@ -249,7 +249,7 @@ public static class DaemonHost
                 return;
             }
 
-            var res = await DispatchOneAsync(req, harnesses, dispatcher);
+            var res = await DispatchOneAsync(req, harnesses, dispatcher, policyPath);
             await Frame.WriteAsync(stream, res.Encode());
         }
         catch (Exception ex)
@@ -264,7 +264,7 @@ public static class DaemonHost
     /// construction hoisted: resolve spec (reloading registry), parse, dispatch
     /// on the SHARED dispatcher under the shim's dispatchId, gate, serialize.
     private static async Task<HookResponse> DispatchOneAsync(
-        HookRequest req, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher)
+        HookRequest req, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, string? policyPath)
     {
         HarnessSpec spec;
         try
@@ -283,9 +283,18 @@ public static class DaemonHost
         catch { payload = JsonSerializer.Deserialize<JsonElement>("{}"); }
         var evt = Harness.ParseEvent(spec, req.EventName, payload);
 
+        // Dispatch policy (ADR-0006): the SAME shared gate the collapsed path
+        // calls, at the identical seam — an event-level deny (or a Malformed
+        // file) answers a byte-identical Noop without dispatching; otherwise the
+        // handler exclusions ride into the fan-out. Resolved per dispatch so an
+        // edit is effective next hook (phase 6 adds the stat-gate).
+        var gate = HookRun.PolicyGateFor(policyPath, spec, evt, req.DispatchId);
+        if (gate.IsShortCircuit)
+            return new HookResponse(0, Encoding.UTF8.GetBytes(gate.DeniedStdout!), gate.TraceLine!);
+
         // The shim minted the id; adopt it — one id stitches the shim half and
         // this half into one story in the trail (ADR-0004 decision 2).
-        var result = await dispatcher.DispatchAsync(evt, req.DispatchId);
+        var result = await dispatcher.DispatchAsync(evt, req.DispatchId, gate.Excluded);
 
         var final = Harness.ApplyCapabilityGate(spec, evt, result.Merged, req.DispatchId);
         var stdout = ResponseAdapters.Get(spec.ResponseAdapter).Serialize(evt, final);

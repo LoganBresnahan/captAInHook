@@ -126,6 +126,23 @@ run live*. The framework underneath is what exists today.
   case-insensitive event match, plus duplicate-JSON-field rejection (strict
   never-guess). Resolver still unwired — phase 5). Suite 240 green twice.
   Phase 4 complete.
+  `evaluator-both-paths` (2026-07-06; **the go-live slice**. One shared
+  `HookRun.PolicyGateFor` — resolve+evaluate → a `PolicyGate` that either
+  short-circuits to the byte-identical `DeniedStdout` Noop or proceeds with
+  the handler exclusions — called at the IDENTICAL seam (after ParseEvent,
+  before the dispatcher) in BOTH `HookRun.CollapsedAsync` and
+  `DaemonHost.DispatchOneAsync`; `policyPath` threaded RunAsync→serve→dispatch,
+  Program.cs feeds all three prod entry points (daemon, shim-fallback,
+  collapsed) from the same `DispatchPolicy.ResolvePath()`. Resolved
+  per-dispatch (content edit effective next hook; phase 6 adds the stat-gate).
+  Adversarial verify — no-drift: a cross-path test drives the same policy
+  file+event through the real daemon (over ShimClient) and the collapsed
+  pipeline and asserts byte-identical answers; a 2-skeptic fan-out confirmed
+  no decision drift and no ungoverned dispatch route (all three shim routes +
+  both prod pipelines gated); driven live through the real CLI — deny⇒`{}`,
+  undenied event echoes, malformed⇒`{}`+loud stderr. Load-bearing order
+  honored: landed only after phase 4's absent⇒allow default). Suite 245 green
+  twice. Phase 5 complete.
 - [ ] **13. PreToolUse policy gate** — *demoted to a secondary payload*
   (2026-07-06): tool-call gating overlaps harness-native permissions; its
   differentiated value (dynamic decisions, portability, central
