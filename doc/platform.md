@@ -20,6 +20,19 @@ verified the day a real run touches them.
 | AF_UNIX exists on Windows 10 1803+ | .NET's `UnixDomainSocketEndPoint` supports it; same length cap. Named pipes are the Windows-native alternative if AF_UNIX gaps appear. | Keeps the wire design portable in principle; see the Windows caveat below for what is *not* portable. |
 | `connect()` succeeding ≠ peer healthy | A listening socket's backlog accepts connects even if the accept loop is wedged or draining. | ADR-0004 decision 2's shim-side deadline spanning connect + request + response. |
 
+## Loopback TCP & managed `HttpListener` (management API)
+
+The management API (ADR-0007) rides the *managed* `HttpListener` — on Unix
+there is no http.sys; the BCL ships its own socket-level implementation, "the
+least-loved corner of the BCL" (ADR-0007 N5). Bind-boundary facts probed
+2026-07-07 (Linux/WSL2, .NET 10) for the singleton-port cutover:
+
+| Fact | Detail | What leans on it |
+| --- | --- | --- |
+| An active listener blocks a second bind — no co-bind | Cross-process: `HttpListenerException` "Address already in use" (kernel EADDRINUSE; SO_REUSEPORT is not set). In-process: `HttpListenerException` "conflicts with an existing registration" from the managed prefix table, before any syscall. | ADR-0007 d2's port-is-a-singleton premise: a successor *cannot* steal, only wait for the incumbent's drain-start release. `ApiHost` retry loop catches `HttpListenerException`; pinned by `ApiRetryBindTests.StartRetrying_NeverStealsAnActivelyHeldPort`. |
+| TIME_WAIT residue does NOT block a **.NET→.NET** rebind | Served-and-closed connections leave `127.0.0.1:<port>` TIME_WAIT entries (60s on Linux). The mechanism is NOT `HttpListener` (its managed listener sets no socket options — verified in dotnet/runtime source): the **.NET Unix PAL sets SO_REUSEADDR unconditionally on every TCP bind** (`SystemNative_Bind`, pal_networking.c). And Linux only honors it pairwise (kernel-probed 2026-07-07): a bind over server-close TIME_WAIT needs reuse on BOTH the new socket AND the listener that created the residue; client-close residue never blocks. Both daemons are .NET ⇒ both halves hold ⇒ rebind in ms (probed: 17ms through live worst-case residue). | Handoff latency = release→bind, not release→2·MSL — but only across .NET incumbents. A **non-.NET** prior occupant of the port that closed server-side can block the bind up to ~60s; the retry loop's slow cadence absorbs exactly that (warn, never fatal). Pinned by `ApiRetryBindTests.Rebind_ThroughTimeWaitResidue_IsImmediate` — which guards the **PAL default**: if it ever reds, hunt in Socket/PAL, not `HttpListener`. |
+| Loopback bind is unprivileged | No urlacl/reservation step on Unix (that is http.sys ceremony); any user binds ≥1024. Ports <1024 still need root — the failure surfaces as the same bind exception, i.e. warn + slow retry, never fatal. | The API existing with zero install-time OS setup (ADR-0007 d1); `ApiHost.ResolvePort` accepting any 1..65535 without a privilege check. |
+
 ## Runtime directories
 
 | Fact | Detail | What leans on it |

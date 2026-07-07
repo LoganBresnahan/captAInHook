@@ -288,6 +288,28 @@ run live*. The framework underneath is what exists today.
   production until port-config wires Program.cs; the shim never sees it,
   aot-boundary rule 1 intact; zero new deps (HttpListener is BCL). 5 tests,
   suite 267 green twice).
+  `port-config-and-cutover` (2026-07-07; Phase 2 — the API goes LIVE in
+  production: Program.cs resolves `ApiHost.ResolvePort` (default 4665, env
+  `CAPTAINHOOK_API_PORT`, 0 disables, malformed falls to default) into the
+  daemon; N1's singleton-port handoff lands as `ApiHost.StartRetrying` —
+  one sync bind attempt, fast 100ms→1s backoff spanning the incumbent's
+  drain deadline, one `api.bindBlocked` warn past it, then a 5s cadence
+  that never gives up until Stop, so a deploy-superseded incumbent that
+  lingers to idle-exit still hands the port over; the incumbent's release
+  stays at drain start (the Phase-1 `api?.Stop()` seam, now also halting
+  in-flight retries via a gate double-check so a draining daemon never
+  re-grabs the port); bind failure is never fatal and hooks serve
+  throughout. Platform facts probed and recorded (doc/platform.md § Loopback
+  TCP): no co-bind cross- or in-process, TIME_WAIT does not block a
+  .NET→.NET rebind (the .NET Unix PAL sets SO_REUSEADDR on every TCP bind;
+  Linux honors it pairwise, so a non-.NET prior occupant can cost ~60s —
+  absorbed by the slow retry), loopback binds unprivileged. 18 new tests
+  incl. a two-real-daemons cutover proof (successor binds while the
+  incumbent still drains a straggler) and a TIME_WAIT rebind pin; suite 285
+  green twice; adversarially verified per the plan — the verify pass then
+  hardened Stop/Dispose (a concurrent-Dispose ODE), made the trail's
+  stopped→listening cutover order deterministic, silenced a misleading
+  post-stop warn, and corrected the platform-fact attribution above).
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine

@@ -1,3 +1,4 @@
+using CaptainHook.Api;
 using CaptainHook.Core;
 using CaptainHook.Wire;
 
@@ -42,7 +43,11 @@ switch (inv.Mode)
             idle = TimeSpan.FromMilliseconds(ms);
         // Dispatch policy: the daemon reads the resolved path per dispatch
         // (ADR-0006 decision 5). The file is optional — absent => allow all.
-        return await DaemonHost.RunAsync(idleWindow: idle, policyPath: DispatchPolicy.ResolvePath());
+        // Management API port (ADR-0007 decision 2): 4665 unless
+        // CAPTAINHOOK_API_PORT moves it; 0 disables. Resolution is silent
+        // like IDLE_MS above — malformed falls back to the default.
+        return await DaemonHost.RunAsync(idleWindow: idle, policyPath: DispatchPolicy.ResolvePath(),
+            apiPort: ApiHost.ResolvePort(Environment.GetEnvironmentVariable("CAPTAINHOOK_API_PORT")));
     }
 
     case Mode.Doctor:

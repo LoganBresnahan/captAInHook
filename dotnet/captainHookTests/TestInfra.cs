@@ -79,6 +79,11 @@ internal static class TestUtil
         catch (TimeoutException) { return -1; }
     }
 
+    /// A harness-override dir that does not exist: the registry falls back to
+    /// the embedded specs, and nothing under ~/.captainHook is ever touched.
+    public static string NoHarnessDir() =>
+        Path.Combine("/tmp", "chk-none-" + Guid.NewGuid().ToString("N")[..8]);
+
     /// Grab a free loopback TCP port for a test HttpListener. HttpListener has
     /// no ephemeral-port (":0") mode, so bind-then-release a TcpListener to learn
     /// a currently-unused port. A tiny TOCTOU window, acceptable for tests.

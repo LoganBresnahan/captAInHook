@@ -93,13 +93,18 @@ public static class DaemonHost
         });
 
         // Management API (ADR-0007): a loopback HttpListener beside this UDS
-        // serve loop, started only when a port is supplied — and only now, after
-        // the socket bind, because the API is a face on a serving daemon. Off in
-        // production until the port-config slice wires Program.cs (default 4665 /
-        // CAPTAINHOOK_API_PORT / 0-disable); tests pass an explicit port. Isolated
-        // from the dispatch path by construction — its own listener and tasks,
-        // sharing no mutable state with the serve loop below.
-        using var api = apiPort is int apiP ? ApiHost.Start(apiP) : null;
+        // serve loop, started only when a port arrives — and only now, after
+        // the socket bind, because the API is a face on a serving daemon.
+        // Production passes ApiHost.ResolvePort's answer via Program.cs
+        // (default 4665 / CAPTAINHOOK_API_PORT / 0-disable); tests pass an
+        // explicit port or none. The port is a global singleton (N1) — a
+        // draining incumbent may still hold it — so this retry-binds: fast
+        // attempts spanning the incumbent's drain deadline, then a warn and a
+        // slow cadence, never fatal. Isolated from the dispatch path by
+        // construction — its own listener and tasks, sharing no mutable state
+        // with the serve loop below.
+        var drainBudget = drainDeadline ?? TimeSpan.FromSeconds(10);
+        using var api = apiPort is int apiP ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget) : null;
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
         // one linked source, one code path. ctx.Cancel = true claims the
@@ -182,26 +187,27 @@ public static class DaemonHost
         // Close the listener first: new connects get refused, so their shims
         // fall back to collapsed — no hook waits on a dying daemon.
         listener.Close();
-        // Drain start for the API too: stop answering it while in-flight hooks
-        // finish. The port-cutover slice grows this into terminating open SSE
-        // streams so the successor can retry-bind the singleton port within the
-        // drain window (`using var api` still disposes at method exit as backstop).
+        // The API's half of the N1 port handoff: releasing the singleton port
+        // HERE — drain start, not exit — is what lets a successor's retry-bind
+        // land while this daemon finishes in-flight hooks. Stop() also halts a
+        // still-retrying bind so a draining daemon never grabs the port back.
+        // The SSE slice grows this into terminating open streams (`using var
+        // api` still disposes at method exit as backstop).
         api?.Stop();
-        var deadline = drainDeadline ?? TimeSpan.FromSeconds(10);
         Log.Info("daemon", "daemon.drainStart", new LogFields
         {
             Data = new Dictionary<string, object>
             {
                 ["active"] = Volatile.Read(ref active),
                 ["backgroundPending"] = dispatcher.BackgroundPending,
-                ["deadlineMs"] = deadline.TotalMilliseconds,
+                ["deadlineMs"] = drainBudget.TotalMilliseconds,
             },
         });
 
         // Phase 1: in-flight dispatches. Their responses must still be relayed
         // — an accepted request is a promise. Monotonic deadline (Stopwatch).
         var sw = Stopwatch.StartNew();
-        while (Volatile.Read(ref active) > 0 && sw.Elapsed < deadline)
+        while (Volatile.Read(ref active) > 0 && sw.Elapsed < drainBudget)
             await Task.Delay(20, CancellationToken.None);
 
         // Phase 2: the Background queue — work that by design outlives its
@@ -209,7 +215,7 @@ public static class DaemonHost
         // exactly what lives here). In-flight is zero (or timed out), so no
         // new enqueues can arrive: completing the queue IS the drain.
         var drained = false;
-        var remaining = deadline - sw.Elapsed;
+        var remaining = drainBudget - sw.Elapsed;
         if (Volatile.Read(ref active) == 0 && remaining > TimeSpan.Zero)
         {
             try
