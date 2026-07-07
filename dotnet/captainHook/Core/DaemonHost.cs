@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using CaptainHook.Actors;
+using CaptainHook.Api;
 using CaptainHook.Wire;
 
 namespace CaptainHook.Core;
@@ -35,7 +36,8 @@ public static class DaemonHost
     public static async Task<int> RunAsync(
         RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
         Registry? registry = null, TimeSpan? drainDeadline = null,
-        TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null)
+        TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
+        int? apiPort = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -89,6 +91,15 @@ public static class DaemonHost
                 ["pid"] = Environment.ProcessId,
             },
         });
+
+        // Management API (ADR-0007): a loopback HttpListener beside this UDS
+        // serve loop, started only when a port is supplied — and only now, after
+        // the socket bind, because the API is a face on a serving daemon. Off in
+        // production until the port-config slice wires Program.cs (default 4665 /
+        // CAPTAINHOOK_API_PORT / 0-disable); tests pass an explicit port. Isolated
+        // from the dispatch path by construction — its own listener and tasks,
+        // sharing no mutable state with the serve loop below.
+        using var api = apiPort is int apiP ? ApiHost.Start(apiP) : null;
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
         // one linked source, one code path. ctx.Cancel = true claims the
@@ -171,6 +182,11 @@ public static class DaemonHost
         // Close the listener first: new connects get refused, so their shims
         // fall back to collapsed — no hook waits on a dying daemon.
         listener.Close();
+        // Drain start for the API too: stop answering it while in-flight hooks
+        // finish. The port-cutover slice grows this into terminating open SSE
+        // streams so the successor can retry-bind the singleton port within the
+        // drain window (`using var api` still disposes at method exit as backstop).
+        api?.Stop();
         var deadline = drainDeadline ?? TimeSpan.FromSeconds(10);
         Log.Info("daemon", "daemon.drainStart", new LogFields
         {

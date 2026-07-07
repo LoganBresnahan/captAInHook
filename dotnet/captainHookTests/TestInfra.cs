@@ -78,6 +78,17 @@ internal static class TestUtil
         try { return await c.GetCountAsync(); }
         catch (TimeoutException) { return -1; }
     }
+
+    /// Grab a free loopback TCP port for a test HttpListener. HttpListener has
+    /// no ephemeral-port (":0") mode, so bind-then-release a TcpListener to learn
+    /// a currently-unused port. A tiny TOCTOU window, acceptable for tests.
+    public static int FreeTcpPort()
+    {
+        var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        l.Start();
+        try { return ((System.Net.IPEndPoint)l.LocalEndpoint).Port; }
+        finally { l.Stop(); }
+    }
 }
 
 /// Deterministic monotonic clock for supervisor tests: time advances ONLY when

@@ -279,6 +279,15 @@ run live*. The framework underneath is what exists today.
   docs-flow-platform; adversarial verify on 6 slices — the port handoff,
   auth, both SSE slices, idle-defer, and the atomic policy write; no
   ultracode). Tick slices here as they land.
+  Slices landed: `api-listener-host` (2026-07-07; Phase 1 — the loopback
+  `HttpListener` management-API host in a new `Api/` area (`ApiHost` +
+  reflection-STJ `ApiJson`), accept-and-hand-off loop that serves requests
+  concurrently, `/api/v1` router skeleton that 404s every unwired route as
+  JSON, started after `BindWhenWarm` beside the UDS serve loop via a new
+  `DaemonHost.RunAsync(apiPort:)` seam and stopped at drain start — off in
+  production until port-config wires Program.cs; the shim never sees it,
+  aot-boundary rule 1 intact; zero new deps (HttpListener is BCL). 5 tests,
+  suite 267 green twice).
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine
