@@ -29,4 +29,12 @@
     <EmbeddedResource Include="harnesses/*.json" />
   </ItemGroup>
 
+  <!-- The management-API auth decision (ApiAuthGate) is internal — a security
+       control, not public surface — but its pure logic is unit-tested directly
+       (ADR-0007 auth-token-origin) rather than only through HttpListener, whose
+       Host-prefix match already refuses a foreign Host before the gate. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="captainHookTests" />
+  </ItemGroup>
+
 </Project>

@@ -10,21 +10,20 @@ namespace CaptainHook.Tests;
 
 // api-listener-host (ADR-0007 Phase 1): the loopback management-API listener
 // stands up beside the UDS serve loop, routes /api/v1/* (no endpoints wired yet,
-// so every route 404s as JSON), serves requests CONCURRENTLY, and tears down at
-// drain. Endpoints, auth, and SSE are later slices — none appear here.
+// so an AUTHORIZED request 404s as JSON), serves requests CONCURRENTLY, and
+// tears down at drain. Requests here carry the bearer token (api.Token) — the
+// auth gate landed in Phase 3; the gate's own behavior is pinned in ApiAuthTests.
 public class ApiHostTests
 {
     [Fact]
     public async Task Listener_Routes404Json_ForEveryUnwiredRoute()
     {
         using var api = ApiHost.Start(FreeTcpPort());
-        using var client = new HttpClient();
 
-        var resp = await client.GetAsync($"http://127.0.0.1:{api.Port}/api/v1/status");
-        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
-        Assert.Equal("application/json", resp.Content.Headers.ContentType?.MediaType);
+        var (status, body) = await ApiGetAsync(api.Port, api.Token, "/api/v1/status");
+        Assert.Equal(HttpStatusCode.NotFound, status);
 
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        using var doc = JsonDocument.Parse(body);
         Assert.Equal("not_found", doc.RootElement.GetProperty("error").GetString());
         Assert.Equal("/api/v1/status", doc.RootElement.GetProperty("path").GetString());
     }
@@ -39,12 +38,11 @@ public class ApiHostTests
         // the moment a long-lived response exists: the SSE slice must add the
         // test where a stream is held open WHILE another request answers.
         using var api = ApiHost.Start(FreeTcpPort());
-        using var client = new HttpClient();
 
         var results = await Task.WhenAll(Enumerable.Range(0, 20)
-            .Select(i => client.GetAsync($"http://127.0.0.1:{api.Port}/api/v1/probe{i}")));
+            .Select(i => ApiGetAsync(api.Port, api.Token, $"/api/v1/probe{i}")));
 
-        Assert.All(results, r => Assert.Equal(HttpStatusCode.NotFound, r.StatusCode));
+        Assert.All(results, r => Assert.Equal(HttpStatusCode.NotFound, r.Status));
     }
 
     [Fact]
@@ -103,28 +101,34 @@ public class ApiHostInDaemonTests : IAsyncLifetime
             "both0001", "user-prompt-submit", "claude-code", "{}"u8.ToArray()));
         Assert.IsType<ForwardOutcome.Answered>(outcome);
 
-        // ...and the HTTP API answers on its own port at the same time.
-        using var client = new HttpClient();
-        var resp = await client.GetAsync($"http://127.0.0.1:{_apiPort}/api/v1/status");
-        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+        // ...and the HTTP API answers on its own port at the same time — proving
+        // the auth path end to end through a REAL daemon: the token comes only
+        // from the 0600 api.json (the sole credential source), tokenless is 401,
+        // and the discovered token passes the gate to the 404 router.
+        var disc = ApiDiscovery.TryRead(_dir.Paths.ApiJsonPath);
+        Assert.NotNull(disc);
+        Assert.Equal(_apiPort, disc!.Port);
+
+        using (var noauth = new HttpClient())
+            Assert.Equal(HttpStatusCode.Unauthorized,
+                (await noauth.GetAsync($"http://127.0.0.1:{_apiPort}/api/v1/status")).StatusCode);
+
+        var (status, _) = await ApiGetAsync(_apiPort, disc.Token, "/api/v1/status");
+        Assert.Equal(HttpStatusCode.NotFound, status);
     }
 
     [Fact]
     public async Task Api_TearsDown_WhenTheDaemonDrains()
     {
-        // Ensure the API is live first.
-        using (var client0 = new HttpClient())
-            Assert.Equal(HttpStatusCode.NotFound,
-                (await client0.GetAsync($"http://127.0.0.1:{_apiPort}/api/v1/status")).StatusCode);
+        // Live first (any HTTP status proves the listener is bound).
+        Assert.True(await ApiPortAnswersAsync(_apiPort));
 
         // Trigger drain, wait for a clean exit, then the API port is dead.
         _stop.Cancel();
         Assert.Equal(0, await _daemon!.WaitAsync(TimeSpan.FromSeconds(10)));
         _daemon = null;   // DisposeAsync must not await it again
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-        await Assert.ThrowsAnyAsync<Exception>(() =>
-            client.GetAsync($"http://127.0.0.1:{_apiPort}/api/v1/status"));
+        Assert.False(await ApiPortAnswersAsync(_apiPort), "API port dead after drain");
     }
 }
 
@@ -175,9 +179,8 @@ public class ApiRetryBindTests
         using var api = ApiHost.StartRetrying(FreeTcpPort(), fastWindow: TimeSpan.FromSeconds(10));
         Assert.True(api.IsListening);
 
-        using var client = new HttpClient();
-        var resp = await client.GetAsync($"http://127.0.0.1:{api.Port}/api/v1/status");
-        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+        var (status, _) = await ApiGetAsync(api.Port, api.Token, "/api/v1/status");
+        Assert.Equal(HttpStatusCode.NotFound, status);
     }
 
     [Fact]
@@ -205,9 +208,8 @@ public class ApiRetryBindTests
             await PollUntilAsync(() => Task.FromResult(api.IsListening),
                 TimeSpan.FromSeconds(10), "retry-bind lands after the port frees");
 
-            using var client = new HttpClient();
-            var resp = await client.GetAsync($"http://127.0.0.1:{port}/api/v1/status");
-            Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+            var (status, _) = await ApiGetAsync(port, api.Token, "/api/v1/status");
+            Assert.Equal(HttpStatusCode.NotFound, status);
 
             Assert.Single(captured.Events, e => e.Evt == "api.bindBlocked");
             Assert.Single(captured.Events, e => e.Evt == "api.bindContended");
@@ -234,9 +236,10 @@ public class ApiRetryBindTests
         Assert.True(holder.IsListening);
         Assert.False(contender.IsListening);
 
-        using var client = new HttpClient();
-        var resp = await client.GetAsync($"http://127.0.0.1:{port}/api/v1/status");
-        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);   // the holder still answers
+        // The holder still answers — with ITS token (the contender never bound,
+        // so it never published one).
+        var (status, _) = await ApiGetAsync(port, holder.Token, "/api/v1/status");
+        Assert.Equal(HttpStatusCode.NotFound, status);
     }
 
     [Fact]
@@ -321,9 +324,9 @@ public class ApiCutoverTests
             await PollUntilAsync(async () => await ShimClient.TryForwardAsync(dirA.Paths.SocketPath,
                     new HookRequest("cutprb01", "session-start", "claude-code", "{}"u8.ToArray()))
                 is ForwardOutcome.Answered, TimeSpan.FromSeconds(15), "incumbent serving");
-            using (var c = new HttpClient())
-                Assert.Equal(HttpStatusCode.NotFound,
-                    (await c.GetAsync($"http://127.0.0.1:{port}/api/v1/x")).StatusCode);
+            // Liveness, not auth: any HTTP status proves A holds the port. This
+            // test is about the port handoff; the gate is pinned in ApiAuthTests.
+            Assert.True(await ApiPortAnswersAsync(port), "incumbent's API port answers");
 
             // Successor B: same port, its own identity — its sync attempt loses
             // to A, so it goes into background retry (api.bindContended proves
@@ -355,16 +358,9 @@ public class ApiCutoverTests
 
             // The acquire half: B's retry lands and the same port answers again
             // under new management while A still drains the silent connection.
-            await PollUntilAsync(async () =>
-            {
-                try
-                {
-                    using var c = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-                    return (await c.GetAsync($"http://127.0.0.1:{port}/api/v1/x")).StatusCode
-                        == HttpStatusCode.NotFound;
-                }
-                catch (Exception) { return false; }
-            }, TimeSpan.FromSeconds(10), "successor bound the released port");
+            // (Answers = bound; A's listener is Stop()ed, so only B can answer.)
+            await PollUntilAsync(() => ApiPortAnswersAsync(port),
+                TimeSpan.FromSeconds(10), "successor bound the released port");
 
             // Handoff order, pinned by enqueue order (not wall clock, which a
             // starved machine can stretch): A enqueues api.stopped BEFORE it

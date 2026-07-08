@@ -20,16 +20,26 @@ public sealed record ApiDiscovery(int Port, string Token, int Pid, string Versio
     // Web defaults: camelCase, matching every other JSON the API emits (ApiJson).
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
 
-    /// Write `d` to `path` as 0600 JSON. Create-then-chmod has a sub-millisecond
-    /// window at the umask default before the tighten; acceptable because the
-    /// runtime dir itself is already 0700 (DaemonRendezvous), so no other user
-    /// can open the file even during that window — defense in depth, not the
-    /// only wall. Throws on I/O failure; the caller decides whether that is
-    /// fatal (ApiHost: log-and-degrade, never un-bind).
+    /// Write `d` to `path` as 0600 JSON, 0600 AT BIRTH — never WriteAllText-
+    /// then-chmod, whose window leaves the secret token at the umask default
+    /// (0644) long enough for a co-located user to race open() and steal it
+    /// (the runtime dir is NOT reliably 0700 — CreateDirectory can't retighten a
+    /// pre-existing dir, and the log layer may have made it 0755 first). Delete
+    /// any stale file so UnixCreateMode — which applies only on CREATE — governs
+    /// the new one; this is exactly the co-located lock file's create-time-0600
+    /// pattern (DaemonRendezvous). Throws on I/O failure; the caller decides
+    /// whether that is fatal (ApiHost: log-and-degrade, never un-bind).
     public static void Write(string path, ApiDiscovery d)
     {
-        File.WriteAllText(path, JsonSerializer.Serialize(d, Options));
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);   // 0600
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(d, Options);
+        File.Delete(path);   // so the create (not a truncate) applies UnixCreateMode
+        using var fs = new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write,
+            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,   // 0600, no window
+        });
+        fs.Write(bytes);
     }
 
     /// Read a discovery file, or null when it is absent/unreadable/malformed —

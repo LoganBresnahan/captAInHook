@@ -52,6 +52,30 @@ public class LockBindTests
     }
 
     [Fact]
+    public void Acquire_Tightens_APreExisting0755RuntimeDir_To0700()
+    {
+        // The trust root (ADR-0004 d3, ADR-0007 d6): the rendezvous dir must be
+        // 0700 so a co-located user cannot traverse in and read the trail or the
+        // token. The log layer may have created it 0755 on an earlier hook, and
+        // CreateDirectory's mode arg is IGNORED for a pre-existing dir — so
+        // TryAcquire must retighten explicitly.
+        using var tmp = new TempRuntimeDir();
+        Directory.CreateDirectory(tmp.Path);
+        File.SetUnixFileMode(tmp.Path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);   // 0755, as the log layer leaves it
+        Assert.True(File.GetUnixFileMode(tmp.Path).HasFlag(UnixFileMode.OtherRead), "precondition: world-traversable");
+
+        using var rv = DaemonRendezvous.TryAcquire(tmp.Paths);
+        Assert.NotNull(rv);
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(tmp.Path));   // 0700: no group/other bits
+    }
+
+    [Fact]
     public void SecondAcquire_WhileHeld_LosesTheRace()
     {
         using var tmp = new TempRuntimeDir();

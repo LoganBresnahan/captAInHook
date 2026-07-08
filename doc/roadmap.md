@@ -321,6 +321,22 @@ run live*. The framework underneath is what exists today.
   its successor's file; `doctor` reaps a stale one once the lock proves the
   owner dead. No gate yet — the token is published, nothing is checked. 8
   tests; suite 292 green twice).
+  `auth-token-origin` (2026-07-07; Phase 3b — the credential gate on the
+  WHOLE TCP surface, before the router, so even the unwired 404 is
+  unreachable without the token. `ApiAuthGate` (a pure, directly unit-tested
+  internal seam) checks, in order: Host = the exact loopback authority
+  (rebind), Origin present ⇒ must be ours / absent ⇒ allowed so curl works
+  (CSRF), bearer token constant-time compared via `FixedTimeEquals` (authn);
+  401 carries `WWW-Authenticate: Bearer`. The token is the api.json one, the
+  sole credential. Platform-composed: managed `HttpListener` prefix-matches
+  on Host, so a foreign Host 404s at the listener BEFORE the gate (rebind
+  defense's first layer, recorded in platform.md); the API answers 127.0.0.1
+  only (localhost would need a second prefix — deferred). The engine csproj
+  gains one `InternalsVisibleTo` so the security logic is tested directly,
+  not only through HttpListener's quirks. 22 auth tests (15 pure-gate + 7
+  HTTP) plus every prior HTTP test updated to present the token; suite green
+  twice; adversarially verified per the plan. Endpoints (Phase 4) inherit
+  the gate for free.
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine

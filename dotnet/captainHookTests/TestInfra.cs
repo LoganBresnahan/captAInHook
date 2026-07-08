@@ -84,6 +84,35 @@ internal static class TestUtil
     public static string NoHarnessDir() =>
         Path.Combine("/tmp", "chk-none-" + Guid.NewGuid().ToString("N")[..8]);
 
+    /// Authenticated GET against the management API (ADR-0007): attaches the
+    /// bearer token the gate requires on every request. A default client sends a
+    /// loopback Host and no Origin, so token-only is a valid authorized request.
+    /// Returns status + body, read before the client is disposed.
+    public static async Task<(System.Net.HttpStatusCode Status, string Body)> ApiGetAsync(
+        int port, string token, string path)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}{path}");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        var resp = await client.SendAsync(req);
+        return (resp.StatusCode, await resp.Content.ReadAsStringAsync());
+    }
+
+    /// True if the API port answers with ANY HTTP status (the listener is
+    /// bound), false if the connection is refused/times out (no listener). For
+    /// liveness/cutover tests that assert port-BINDING, not authorization — a
+    /// 401 still proves the listener handled the request.
+    public static async Task<bool> ApiPortAnswersAsync(int port)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            _ = await client.GetAsync($"http://127.0.0.1:{port}/api/v1/x");
+            return true;
+        }
+        catch (Exception) { return false; }
+    }
+
     /// Grab a free loopback TCP port for a test HttpListener. HttpListener has
     /// no ephemeral-port (":0") mode, so bind-then-release a TcpListener to learn
     /// a currently-unused port. A tiny TOCTOU window, acceptable for tests.

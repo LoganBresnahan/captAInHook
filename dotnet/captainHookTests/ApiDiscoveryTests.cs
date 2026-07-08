@@ -123,6 +123,25 @@ public class ApiDiscoveryTests
     }
 
     [Fact]
+    public void Write_Is0600AtBirth_EvenOverAStaleWorldReadableFile()
+    {
+        // A crashed predecessor can leave a stale api.json at the umask default
+        // (0644). The atomic write (delete + create-0600) must NOT inherit those
+        // loose bits — the token is never world-readable, not even in a window.
+        using var dir = LiveDir();
+        var path = dir.Paths.ApiJsonPath;
+        File.WriteAllText(path, "{\"stale\":true}");
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite |
+            UnixFileMode.GroupRead | UnixFileMode.OtherRead);   // 0644
+        Assert.True(File.GetUnixFileMode(path).HasFlag(UnixFileMode.OtherRead), "precondition: stale file world-readable");
+
+        ApiDiscovery.Write(path, new ApiDiscovery(4665, "sekret", 123, "ver"));
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+        Assert.Equal("sekret", ApiDiscovery.TryRead(path)!.Token);
+    }
+
+    [Fact]
     public void TryRead_NullsOnMissingAndMalformed()
     {
         using var dir = LiveDir();

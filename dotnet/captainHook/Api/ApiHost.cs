@@ -47,10 +47,11 @@ namespace CaptainHook.Api;
 // flips `_listening` true, deleted when Stop flips it false, so a client never
 // reads a port+token for a listener that has already handed the port off.
 //
-// Endpoints and the auth GATE are later slices (ADR-0007 § Implementation
-// plan): the token is minted and published here, but every route still 404s
-// and nothing is yet checked — auth-token-origin adds the check and must land
-// before any endpoint is exposed.
+// Auth (auth-token-origin, ADR-0007 decision 6): every request clears the
+// Host + Origin + bearer-token gate (ApiAuthGate) BEFORE the router, so the
+// whole TCP surface is credentialed — the gate is live even though this slice
+// still wires no endpoints (an authorized request 404s; an unauthorized one
+// never reaches the router). Endpoints (Phase 4) inherit the gate for free.
 public sealed class ApiHost : IDisposable
 {
     /// "HOOK" on a phone keypad (ADR-0007 decision 2) — fixed so the GUI's URL
@@ -60,6 +61,7 @@ public sealed class ApiHost : IDisposable
     private readonly object _gate = new();               // orders bind-install vs Stop
     private readonly CancellationTokenSource _stop = new();
     private readonly RendezvousPaths? _rendezvous;       // null in pure-listener tests: no discovery file
+    private readonly ApiAuthGate _auth;                  // the pure Host/Origin/token decision
     private HttpListener? _http;                          // installed under _gate once bound
     private bool _listening;
     private volatile bool _stopping;
@@ -72,6 +74,7 @@ public sealed class ApiHost : IDisposable
         // encoding ambiguity. Minted once per host — a superseded daemon's token
         // dies with it (the successor mints its own; ADR-0007 decision 6).
         Token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+        _auth = new ApiAuthGate(port, Token);
     }
 
     /// The configured loopback port — fixed up front; whether it is currently
@@ -289,17 +292,25 @@ public sealed class ApiHost : IDisposable
         }
     }
 
-    // Router skeleton: no endpoints wired in this slice, so every route is Not
-    // Found. The read endpoints (Phase 4) hang GET /status,/policy,/harnesses,
-    // /handlers off this method-plus-path shape; the auth gate (auth-token-origin)
-    // wraps it. The shape — one place, reflection-STJ body, JSON errors — is set
-    // here so those slices only add cases.
-    private static async Task HandleAsync(HttpListenerContext ctx)
+    // Every request clears the auth gate BEFORE the router sees it, then the
+    // router answers. No endpoints are wired in this slice, so an authorized
+    // request still 404s — but an unauthorized one never reaches the router.
+    // The read endpoints (Phase 4) hang GET /status,/policy,/harnesses,/handlers
+    // off the method-plus-path shape below; they inherit this gate for free.
+    private async Task HandleAsync(HttpListenerContext ctx)
     {
         try
         {
+            var req = ctx.Request;
+            if (_auth.Evaluate(req.UserHostName, req.Headers["Origin"], req.Headers["Authorization"]) is { } rej)
+            {
+                if (rej.Status == 401)
+                    ctx.Response.AddHeader("WWW-Authenticate", "Bearer");   // RFC 7235
+                await ApiJson.WriteAsync(ctx.Response, rej.Status, new { error = rej.Error });
+                return;
+            }
             await ApiJson.WriteAsync(ctx.Response, 404,
-                new { error = "not_found", path = ctx.Request.Url?.AbsolutePath ?? "" });
+                new { error = "not_found", path = req.Url?.AbsolutePath ?? "" });
         }
         catch (Exception ex)
         {
