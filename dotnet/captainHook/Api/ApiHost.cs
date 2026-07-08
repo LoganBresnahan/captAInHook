@@ -64,19 +64,27 @@ public sealed class ApiHost : IDisposable
     private readonly RendezvousPaths? _rendezvous;       // null in pure-listener tests: no discovery file
     private readonly ApiAuthGate _auth;                  // the pure Host/Origin/token decision
     private readonly ApiReadModel? _read;                // null => read endpoints 404 (no daemon behind us)
+    private readonly ApiPolicyWriter? _writer;           // null => PUT /policy 404s (no writable path)
     private readonly SseOptions? _sse;                   // null => /events 404s (no trail to tail)
     private readonly Action? _onRequest;                 // the daemon's idle-clock stamp (decision 7)
+
+    /// A policy body larger than this is refused with 413 before any parse — a
+    /// dispatch policy is KiB at most, so this only bounds a hostile/broken client
+    /// streaming unbounded bytes into memory on the loopback surface.
+    private const int MaxPolicyBytes = 1 << 20;   // 1 MiB
     private HttpListener? _http;                          // installed under _gate once bound
     private int _openStreams;                            // live SSE subscriptions (the idle-defer signal)
     private bool _listening;
     private volatile bool _stopping;
 
     private ApiHost(
-        int port, RendezvousPaths? rendezvous, ApiReadModel? readModel, SseOptions? sse, Action? onRequest)
+        int port, RendezvousPaths? rendezvous, ApiReadModel? readModel, ApiPolicyWriter? writer,
+        SseOptions? sse, Action? onRequest)
     {
         Port = port;
         _rendezvous = rendezvous;
         _read = readModel;
+        _writer = writer;
         _sse = sse;
         _onRequest = onRequest;
         // 256 bits from the CSPRNG, hex so it survives a header and JSON without
@@ -128,9 +136,9 @@ public sealed class ApiHost : IDisposable
     /// clock with it (ADR-0007 decision 7).
     public static ApiHost Start(
         int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null,
-        SseOptions? sse = null, Action? onRequest = null)
+        ApiPolicyWriter? writer = null, SseOptions? sse = null, Action? onRequest = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, sse, onRequest);
+        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest);
         if (host.TryBindOnce() is { } err) ExceptionDispatchInfo.Capture(err).Throw();
         _ = Task.Run(host.AcceptLoopAsync);
         return host;
@@ -146,10 +154,10 @@ public sealed class ApiHost : IDisposable
     /// backs the read endpoints; `sse` names the trail /events tails.
     public static ApiHost StartRetrying(
         int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null,
-        ApiReadModel? readModel = null, SseOptions? sse = null, Action? onRequest = null,
-        TimeSpan? slowRetry = null)
+        ApiReadModel? readModel = null, ApiPolicyWriter? writer = null, SseOptions? sse = null,
+        Action? onRequest = null, TimeSpan? slowRetry = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, sse, onRequest);
+        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest);
         if (host.TryBindOnce() is not { } err)
         {
             _ = Task.Run(host.AcceptLoopAsync);
@@ -348,20 +356,26 @@ public sealed class ApiHost : IDisposable
         }
     }
 
-    // The read surface (ADR-0007 decision 3): GET /api/v1/{status,policy,
-    // harnesses,handlers}, each rendered from the ApiReadModel — the same live
-    // objects the dispatch path uses. With no read model (a pure-listener test:
-    // no daemon behind us) every route 404s. GET /policy carries a content-hash
-    // ETag header (put-policy-write's If-Match token, Phase 6). GET /events is
-    // the SSE trail tail (decision 5) — a LONG-LIVED response, which is exactly
-    // why the accept loop never awaits handlers. Unknown route or wrong method
-    // → 404. Writes (PUT /policy) are Phase 6.
+    // The API surface: GET /api/v1/{status,policy,harnesses,handlers} (decision
+    // 3) rendered from the ApiReadModel — the same live objects the dispatch path
+    // uses; GET /events, the SSE trail tail (decision 5); and PUT /policy, the one
+    // write verb (decision 4). Each capability is gated on the collaborator that
+    // backs it (no read model / writer / sse => that route 404s: a pure-listener
+    // test has no daemon behind it). GET /policy carries a content-hash ETag
+    // header — the token PUT /policy's If-Match consumes. GET /events is a
+    // LONG-LIVED response, which is exactly why the accept loop never awaits
+    // handlers. Unknown route or wrong method → 404.
     private async Task RouteAsync(HttpListenerContext ctx)
     {
         var path = ctx.Request.Url?.AbsolutePath ?? "";
         if (_sse is not null && ctx.Request.HttpMethod == "GET" && path == "/api/v1/events")
         {
             await ServeEventsAsync(ctx);
+            return;
+        }
+        if (_writer is not null && ctx.Request.HttpMethod == "PUT" && path == "/api/v1/policy")
+        {
+            await ServePolicyPutAsync(ctx);
             return;
         }
         if (_read is not null && ctx.Request.HttpMethod == "GET")
@@ -385,6 +399,86 @@ public sealed class ApiHost : IDisposable
             }
         }
         await ApiJson.WriteAsync(ctx.Response, 404, new { error = "not_found", path });
+    }
+
+    // PUT /api/v1/policy (put-policy-write, ADR-0007 decision 4): the API as
+    // editor of the file. Read the body (bounded — a policy is KiB, and this is
+    // the one route that consumes a request entity), hand it to the writer, and
+    // map its closed outcome set 1:1 to HTTP. The atomic write and the strict
+    // validation live in ApiPolicyWriter (directly unit-tested); this method is
+    // only the HTTP shell.
+    private async Task ServePolicyPutAsync(HttpListenerContext ctx)
+    {
+        byte[]? body;
+        try { body = await ReadBodyAsync(ctx.Request, MaxPolicyBytes, _stop.Token); }
+        catch (OperationCanceledException)
+        {
+            // The daemon is draining while we read the body — a routine cutover,
+            // not a handler error (mirrors ServeEventsAsync's OCE swallow). The
+            // file is untouched (the read precedes the write); the client retries
+            // on the successor. Answer 503 best-effort — the socket may already be
+            // gone with the listener.
+            try { await ApiJson.WriteAsync(ctx.Response, 503, new { error = "draining" }); }
+            catch { /* peer/listener already gone */ }
+            return;
+        }
+        if (body is null)
+        {
+            await ApiJson.WriteAsync(ctx.Response, 413,
+                new { error = "payload_too_large", limit = MaxPolicyBytes });
+            return;
+        }
+
+        switch (_writer!.Write(body, ctx.Request.Headers["If-Match"]))
+        {
+            case PolicyWriteOutcome.Written w:
+                // The tag we WROTE is authoritative for the client's next If-Match.
+                ctx.Response.AddHeader("ETag", w.Etag);
+                // Echo the freshly-resolved policy so the GUI re-renders from one
+                // round-trip (mirrors GET). _read is always present when _writer
+                // is — DaemonHost wires both from the same policyPath — but a
+                // concurrent PUT could make _read.Policy()'s body reflect a newer
+                // file than the ETag header; benign under the guarded-not-locked
+                // contract (d4), and the header stays the tag this PUT installed.
+                object echo = _read is not null ? _read.Policy() : new { ok = true, etag = w.Etag };
+                await ApiJson.WriteAsync(ctx.Response, 200, echo);
+                return;
+            case PolicyWriteOutcome.Invalid inv:
+                await ApiJson.WriteAsync(ctx.Response, 422,
+                    new { error = "invalid_policy", violations = inv.Violations });
+                return;
+            case PolicyWriteOutcome.Mismatch m:
+                if (m.Current is not null) ctx.Response.AddHeader("ETag", m.Current);
+                await ApiJson.WriteAsync(ctx.Response, 412,
+                    new { error = "etag_mismatch", current = m.Current });
+                return;
+            case PolicyWriteOutcome.Failed f:
+                await ApiJson.WriteAsync(ctx.Response, 500,
+                    new { error = "write_failed", detail = f.Message });
+                return;
+            default:
+                // PolicyWriteOutcome is a closed DU; a new case reaching here is a
+                // programming error, not a request one. Throw rather than fall
+                // through to a silent empty response (HandleAsync logs + aborts).
+                throw new InvalidOperationException("unhandled policy write outcome");
+        }
+    }
+
+    // Read the request body into memory with a hard cap, independent of the
+    // client's declared Content-Length (which a hostile client can lie about):
+    // returns null the moment the stream exceeds `cap`, so the caller answers 413
+    // without having buffered more than `cap` + one chunk.
+    private static async Task<byte[]?> ReadBodyAsync(HttpListenerRequest req, int cap, CancellationToken ct)
+    {
+        using var ms = new MemoryStream();
+        var buf = new byte[8192];
+        int n;
+        while ((n = await req.InputStream.ReadAsync(buf, ct)) > 0)
+        {
+            if (ms.Length + n > cap) return null;
+            ms.Write(buf, 0, n);
+        }
+        return ms.ToArray();
     }
 
     // GET /api/v1/events (sse-trail-tail, ADR-0007 decision 5): a live SSE tail

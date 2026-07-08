@@ -98,6 +98,24 @@ internal static class TestUtil
         return (resp.StatusCode, await resp.Content.ReadAsStringAsync());
     }
 
+    /// Authenticated PUT against the management API (put-policy-write, ADR-0007
+    /// decision 4): bearer token plus an optional If-Match precondition header.
+    /// Returns status, body, and the response ETag (null when absent), read
+    /// before the client is disposed.
+    public static async Task<(System.Net.HttpStatusCode Status, string Body, string? Etag)> ApiPutAsync(
+        int port, string token, string path, string body, string? ifMatch = null)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var req = new HttpRequestMessage(HttpMethod.Put, $"http://127.0.0.1:{port}{path}")
+        {
+            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        if (ifMatch is not null) req.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        var resp = await client.SendAsync(req);
+        return (resp.StatusCode, await resp.Content.ReadAsStringAsync(), resp.Headers.ETag?.ToString());
+    }
+
     /// True if the API port answers with ANY HTTP status (the listener is
     /// bound), false if the connection is refused/times out (no listener). For
     /// liveness/cutover tests that assert port-BINDING, not authorization — a

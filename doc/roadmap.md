@@ -279,6 +279,12 @@ run live*. The framework underneath is what exists today.
   docs-flow-platform; adversarial verify on 6 slices — the port handoff,
   auth, both SSE slices, idle-defer, and the atomic policy write; no
   ultracode). Tick slices here as they land.
+  Phase 7 requirement (`docs-flow-platform`): the flow doc MUST carry a
+  ground-truth table of `TrailCursor`'s edge behaviors — oversized-line skip
+  (lines ≥ `maxBytes` are dropped, not delivered, and surfaced as a gap;
+  the 128KiB read window is a hard limit), truncation-reset, and
+  alignment-self-heal — so the tailer's sharp edges have a discoverable home,
+  not just the Phase-5 close-out prose below + test names.
   Slices landed: `api-listener-host` (2026-07-07; Phase 1 — the loopback
   `HttpListener` management-API host in a new `Api/` area (`ApiHost` +
   reflection-STJ `ApiJson`), accept-and-hand-off loop that serves requests
@@ -444,6 +450,33 @@ run live*. The framework underneath is what exists today.
   instant Stop begins, so the handoff is unharmed), recorded in
   platform.md. Both pinned: supersession-reaps-despite-a-forgotten-tab,
   Stop-bounded-under-a-wedged-writer.
+  `put-policy-write` (2026-07-08; Phase 6, the last critical-path slice — the
+  ONE write verb: `PUT /api/v1/policy`, the API as EDITOR OF THE FILE, not
+  owner of state. `ApiPolicyWriter` validates the body with the daemon's OWN
+  strict `DispatchPolicy.TryParse` (refuse to write what the daemon would
+  refuse to load), honors `If-Match` when supplied (the content-hash ETag
+  Phase 4 built), and installs ATOMICALLY — temp+rename in the TARGET'S OWN
+  directory, the `GetTempFileName()`+`Move` cross-device trap sidestepped — so
+  `ReloadingPolicy`'s stat-gate makes it effective on the next dispatch exactly
+  as a hand-edit does. A closed `PolicyWriteOutcome` DU maps 1:1 to HTTP:
+  200+ETag / 422 violations / 412 If-Match mismatch / 413 over-cap / 500 I/O;
+  the write inherits the Phase-3 auth gate, null policy path ⇒ 404. Wired
+  through DaemonHost beside the read model (same `policyPath`). 20 tests incl.
+  a concurrent-reader ATOMICITY probe (a hook stat-gating the file mid-write
+  never sees a torn/absent state — the exact hazard a non-atomic write would
+  flash) and an END-TO-END in-daemon proof (a live PUT of `default:deny`
+  short-circuits the next real UDS hook to a Noop — the ADR's mandatory
+  hot-path verify, now a committed guard). Suite 358 → 378 green twice.
+  Adversarially verified: the two named sharp edges (cross-device atomicity,
+  ETag round-trip) SURVIVED; fixes landed for a BOM asymmetry (the daemon's
+  loader strips a leading BOM, so the writer must too — else a spurious 422 on
+  content the daemon would load, and a broken round-trip), a drain-race
+  `api.handlerError` (OCE now → 503, mirroring the SSE swallow), and a
+  non-exhaustive outcome switch. One MODERATE routed to follow-up, not
+  scope-crept: the `(mtime,size)` stat-gate can miss a same-length change on a
+  COARSE-mtime FS — probe-confirmed unreachable on ext4/APFS/NTFS, a
+  pre-existing ADR-0006 property; the write API just makes it programmatically
+  reachable (scratch.md + platform.md).)
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine

@@ -121,6 +121,12 @@ public static class DaemonHost
         var readModel = new ApiReadModel(
             paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick);
 
+        // The write surface (ADR-0007 d4) edits the SAME policyPath the read model
+        // reports and `policy` (ReloadingPolicy) stat-gates — so a PUT lands on the
+        // next dispatch with zero coordination. Null path (no file to edit) => no
+        // writer => PUT /policy 404s, exactly as the reads report "absent".
+        var policyWriter = policyPath is not null ? new ApiPolicyWriter(policyPath) : null;
+
         // The SSE feed tails the SAME trail file both emitters append (ADR-0007
         // decision 5): CAPTAINHOOK_LOG or the default, resolved here at daemon
         // start like the rest of the environment. `sse` is the test seam (the
@@ -129,7 +135,8 @@ public static class DaemonHost
         // watchdog's am-I-still-the-current-deploy probe — see below.
         using var api = apiPort is int apiP
             ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths,
-                readModel: readModel, sse: sse ?? new SseOptions(WireJsonl.DefaultLogPath()),
+                readModel: readModel, writer: policyWriter,
+                sse: sse ?? new SseOptions(WireJsonl.DefaultLogPath()),
                 onRequest: () => Volatile.Write(ref lastActive[0], clk()))
             : null;
         superseded ??= MakeSupersededProbe();
