@@ -37,7 +37,7 @@ public static class DaemonHost
         RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
         Registry? registry = null, TimeSpan? drainDeadline = null,
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
-        int? apiPort = null)
+        int? apiPort = null, string? trailPath = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -118,8 +118,15 @@ public static class DaemonHost
         var readModel = new ApiReadModel(
             paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick);
 
+        // The SSE feed tails the SAME trail file both emitters append (ADR-0007
+        // decision 5): CAPTAINHOOK_LOG or the default, resolved here at daemon
+        // start like the rest of the environment. `trailPath` is the test seam
+        // (the suite swaps the Log sink, so tests hand-append a temp trail).
+        var sse = new SseOptions(trailPath ?? WireJsonl.DefaultLogPath());
+
         using var api = apiPort is int apiP
-            ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths, readModel: readModel)
+            ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths,
+                readModel: readModel, sse: sse)
             : null;
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —

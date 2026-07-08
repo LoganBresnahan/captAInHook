@@ -356,6 +356,30 @@ run live*. The framework underneath is what exists today.
   without the token) and 404 an unknown route; a pure listener with no read
   model 404s them all. 8 endpoint tests over real Core objects + the
   daemon-integration `/status` at 200; suite green twice.
+  `sse-trail-tail` (2026-07-08; Phase 5, first slice — the live stream:
+  `GET /api/v1/events` is SSE over a stat-poll tail of the JSONL trail file
+  (decision 5) — the file, not an in-process tee, so both emitters' halves
+  and collapsed dispatches all flow. `TrailCursor` owns the sharp edges: only
+  complete lines are ever emitted (bytes past the last `\n` re-read next
+  poll, so a concurrent O_APPEND can never surface half-written), event id =
+  byte offset after the line (`Last-Event-ID` resumes with zero dup/loss —
+  byte-split before UTF-8 decode, so multi-byte content can't skew ids; a
+  mid-line resume offset self-heals forward to the next boundary rather than
+  emitting garbage), truncation/replacement resets the id space with an
+  explicit `reset` event, an absent file is quiet-not-error. The tailer is
+  SCHEMA-BLIND — ships opaque newline-delimited lines, parses nothing — so
+  N4's third-consumer coupling shrinks to "newline-delimited". Per-subscriber
+  `TrailSubscription` (poll task → channel → writer with comment heartbeats —
+  the heartbeat doubles as the dead-client probe); streams run on the ApiHost
+  stop token, so drain-start `Stop()` now terminates open streams (the
+  Phase-2 stub, cashed) and `OpenStreams` tracks them (finally-decremented;
+  the idle-defer slice reads it next). Channel is unbounded THIS slice —
+  `sse-backpressure` bounds it. Auth-gated like every route; browser
+  EventSource can't send the bearer header, so item 6's GUI uses
+  fetch-streaming (noted in code). 19 tests incl. byte-offset ids over real
+  HTTP, exact resume, live-end default, Stop teardown, heartbeat dead-client
+  release, and the Phase-1 debt cashed: an open stream while other requests
+  answer. Suite green twice; adversarial verify per plan.)
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine

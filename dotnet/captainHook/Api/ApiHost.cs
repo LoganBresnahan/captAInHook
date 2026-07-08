@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using System.Text;
 using CaptainHook.Actors;
 using CaptainHook.Wire;
 
@@ -63,15 +64,18 @@ public sealed class ApiHost : IDisposable
     private readonly RendezvousPaths? _rendezvous;       // null in pure-listener tests: no discovery file
     private readonly ApiAuthGate _auth;                  // the pure Host/Origin/token decision
     private readonly ApiReadModel? _read;                // null => read endpoints 404 (no daemon behind us)
+    private readonly SseOptions? _sse;                   // null => /events 404s (no trail to tail)
     private HttpListener? _http;                          // installed under _gate once bound
+    private int _openStreams;                            // live SSE subscriptions (the idle-defer signal)
     private bool _listening;
     private volatile bool _stopping;
 
-    private ApiHost(int port, RendezvousPaths? rendezvous, ApiReadModel? readModel)
+    private ApiHost(int port, RendezvousPaths? rendezvous, ApiReadModel? readModel, SseOptions? sse)
     {
         Port = port;
         _rendezvous = rendezvous;
         _read = readModel;
+        _sse = sse;
         // 256 bits from the CSPRNG, hex so it survives a header and JSON without
         // encoding ambiguity. Minted once per host — a superseded daemon's token
         // dies with it (the successor mints its own; ADR-0007 decision 6).
@@ -87,6 +91,12 @@ public sealed class ApiHost : IDisposable
     /// the auth gate (next slice) will require. Tests without a rendezvous read
     /// it here; production clients read it from the 0600 file.
     public string Token { get; }
+
+    /// Live SSE subscriptions. The daemon's idle watchdog reads this: an open
+    /// stream is an attached observer and defers idle-exit (ADR-0007 decision 7)
+    /// — for the CURRENT lock-holder only, because Stop() at drain start
+    /// terminates every stream and zeroes this.
+    public int OpenStreams => Volatile.Read(ref _openStreams);
 
     /// True while the listener is bound and accepting. False before a retrying
     /// bind lands and after Stop().
@@ -110,9 +120,11 @@ public sealed class ApiHost : IDisposable
     /// (when supplied) is where the 0600 api.json is written on bind and removed
     /// on stop; null skips the file (pure-listener tests read Token directly).
     /// `readModel` backs the read endpoints; null => they 404 (no daemon state).
-    public static ApiHost Start(int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null)
+    /// `sse` names the trail file /events tails; null => /events 404s.
+    public static ApiHost Start(
+        int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null, SseOptions? sse = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel);
+        var host = new ApiHost(port, rendezvous, readModel, sse);
         if (host.TryBindOnce() is { } err) ExceptionDispatchInfo.Capture(err).Throw();
         _ = Task.Run(host.AcceptLoopAsync);
         return host;
@@ -125,12 +137,12 @@ public sealed class ApiHost : IDisposable
     /// warn, then `slowRetry` (default 5s) forever until Stop. Never throws:
     /// bind failure is a warn, never fatal (ADR-0007 N1). `rendezvous` carries
     /// the api.json path + identity to publish once the bind lands; `readModel`
-    /// backs the read endpoints.
+    /// backs the read endpoints; `sse` names the trail /events tails.
     public static ApiHost StartRetrying(
         int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null,
-        ApiReadModel? readModel = null, TimeSpan? slowRetry = null)
+        ApiReadModel? readModel = null, SseOptions? sse = null, TimeSpan? slowRetry = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel);
+        var host = new ApiHost(port, rendezvous, readModel, sse);
         if (host.TryBindOnce() is not { } err)
         {
             _ = Task.Run(host.AcceptLoopAsync);
@@ -329,11 +341,18 @@ public sealed class ApiHost : IDisposable
     // harnesses,handlers}, each rendered from the ApiReadModel — the same live
     // objects the dispatch path uses. With no read model (a pure-listener test:
     // no daemon behind us) every route 404s. GET /policy carries a content-hash
-    // ETag header (put-policy-write's If-Match token, Phase 6). Unknown route or
-    // wrong method → 404. Writes (PUT /policy) are Phase 6.
+    // ETag header (put-policy-write's If-Match token, Phase 6). GET /events is
+    // the SSE trail tail (decision 5) — a LONG-LIVED response, which is exactly
+    // why the accept loop never awaits handlers. Unknown route or wrong method
+    // → 404. Writes (PUT /policy) are Phase 6.
     private async Task RouteAsync(HttpListenerContext ctx)
     {
         var path = ctx.Request.Url?.AbsolutePath ?? "";
+        if (_sse is not null && ctx.Request.HttpMethod == "GET" && path == "/api/v1/events")
+        {
+            await ServeEventsAsync(ctx);
+            return;
+        }
         if (_read is not null && ctx.Request.HttpMethod == "GET")
         {
             switch (path)
@@ -357,11 +376,75 @@ public sealed class ApiHost : IDisposable
         await ApiJson.WriteAsync(ctx.Response, 404, new { error = "not_found", path });
     }
 
-    /// Stop accepting AND stop retrying (idempotent). DaemonHost calls this at
-    /// DRAIN START: the port frees for the successor's retry-bind while the
-    /// incumbent finishes in-flight hooks — the N1 handoff's release half. This
-    /// is also the seam the SSE slice grows into terminating open streams, so a
-    /// draining daemon can never be pinned alive by a subscriber (decision 7).
+    // GET /api/v1/events (sse-trail-tail, ADR-0007 decision 5): a live SSE tail
+    // of the JSONL trail file. Runs for the CONNECTION's lifetime inside this
+    // request's own task; ends on client hang-up or Stop() — the same `_stop`
+    // the drain path cancels, so a draining daemon terminates every stream at
+    // drain start (never pinned alive by a subscriber; decision 7's
+    // current-lock-holder-only edge). `Last-Event-ID` resumes at that byte
+    // offset; without it the stream starts at the file's current end ("from
+    // now"). Note for item 6's GUI: browser EventSource cannot send the bearer
+    // header — use fetch-streaming (which can) and hand-roll reconnect off the
+    // last received id.
+    private async Task ServeEventsAsync(HttpListenerContext ctx)
+    {
+        long? lastId = long.TryParse(ctx.Request.Headers["Last-Event-ID"], out var v) && v >= 0
+            ? v : null;
+
+        var resp = ctx.Response;
+        resp.StatusCode = 200;
+        resp.ContentType = "text/event-stream";
+        resp.AddHeader("Cache-Control", "no-store");
+        resp.KeepAlive = true;
+        var output = resp.OutputStream;
+
+        Interlocked.Increment(ref _openStreams);
+        try
+        {
+            // Reconnect hint first — also the first flush, which commits the
+            // response headers so the client sees the stream is live.
+            await WriteFrameAsync(output, "retry: 1000\n\n", _stop.Token);
+
+            var subscription = new TrailSubscription(_sse!.TrailPath, lastId, _sse.Poll, _sse.Heartbeat);
+            await subscription.RunAsync(
+                (e, ct) => WriteFrameAsync(output, Frame(e), ct), _stop.Token);
+        }
+        finally
+        {
+            // The idle-defer watchdog trusts this counter with the daemon's
+            // LIFETIME: a leaked increment is an immortal daemon that defeats
+            // the version-cutover reaper — hence the finally.
+            Interlocked.Decrement(ref _openStreams);
+            try { resp.Close(); } catch { /* peer already gone */ }
+        }
+    }
+
+    /// One SseEvent as a text/event-stream frame. Trail lines are shipped as
+    /// opaque `data:` payloads (JSONL is single-line by construction — no
+    /// embedded newlines to escape) with the byte offset as `id:`; a reset
+    /// re-anchors the client's Last-Event-ID to 0 (the id space restarted);
+    /// heartbeats are comments — EventSource ignores them, dead sockets don't.
+    private static string Frame(SseEvent e) => e switch
+    {
+        SseEvent.Line l => $"id: {l.Id}\ndata: {l.Text}\n\n",
+        SseEvent.Reset => "event: reset\nid: 0\ndata: {}\n\n",
+        SseEvent.Heartbeat => ": hb\n\n",
+        _ => throw new InvalidOperationException($"unrenderable SSE event {e.GetType().Name}"),
+    };
+
+    private static async Task WriteFrameAsync(Stream output, string frame, CancellationToken ct)
+    {
+        await output.WriteAsync(Encoding.UTF8.GetBytes(frame), ct);
+        await output.FlushAsync(ct);
+    }
+
+    /// Stop accepting, stop retrying, AND terminate every open SSE stream
+    /// (idempotent). DaemonHost calls this at DRAIN START: the port frees for
+    /// the successor's retry-bind while the incumbent finishes in-flight hooks
+    /// — the N1 handoff's release half — and canceling `_stop` ends each
+    /// subscription's writer loop, so a draining daemon is never pinned alive
+    /// by a subscriber (decision 7's current-lock-holder-only edge; the
+    /// EventSource reconnect then lands on the successor).
     public void Stop()
     {
         HttpListener? bound;
