@@ -37,7 +37,7 @@ public static class DaemonHost
         RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
         Registry? registry = null, TimeSpan? drainDeadline = null,
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
-        int? apiPort = null, SseOptions? sse = null)
+        int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -125,14 +125,14 @@ public static class DaemonHost
         // decision 5): CAPTAINHOOK_LOG or the default, resolved here at daemon
         // start like the rest of the environment. `sse` is the test seam (the
         // suite swaps the Log sink, so tests hand-append a temp trail and
-        // tighten the poll/heartbeat cadences).
-        sse ??= new SseOptions(WireJsonl.DefaultLogPath());
-
+        // tighten the poll/heartbeat cadences). `superseded` (test seam) is the
+        // watchdog's am-I-still-the-current-deploy probe — see below.
         using var api = apiPort is int apiP
             ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths,
-                readModel: readModel, sse: sse,
+                readModel: readModel, sse: sse ?? new SseOptions(WireJsonl.DefaultLogPath()),
                 onRequest: () => Volatile.Write(ref lastActive[0], clk()))
             : null;
+        superseded ??= MakeSupersededProbe();
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
         // one linked source, one code path. ctx.Cancel = true claims the
@@ -163,6 +163,31 @@ public static class DaemonHost
             {
                 try { await Task.Delay(idleTick, drainCts.Token); }
                 catch (OperationCanceledException) { return; }
+                catch (ObjectDisposedException) { return; }   // photo-finish vs RunAsync's exit
+
+                // A superseded daemon must never be kept alive by its API face
+                // alone (ADR-0007 d7, 2026-07-08 amendment): drain is what
+                // terminates SSE streams, and the defer/stamp would otherwise
+                // BLOCK the idle-exit that leads to drain — a forgotten tab
+                // pinning a stale daemon on the singleton port forever, the
+                // adversarial verify's immortal-daemon loop. So on quiet ticks
+                // (no hooks in flight — a daemon serving hooks is current by
+                // definition: shims compute the socket from the deployed
+                // identity) a daemon WITH an API re-fingerprints its own deploy
+                // dir; a mismatch means the deploy moved on — drain now, which
+                // ends the streams, releases the port, and the tab's reconnect
+                // lands on the successor exactly as decision 2 promised.
+                if (api is not null && stats.Active == 0 && dispatcher.BackgroundPending == 0
+                    && superseded())
+                {
+                    Log.Info("daemon", "daemon.superseded", new LogFields
+                    {
+                        Msg = "deploy dir no longer matches this daemon's identity — draining",
+                    });
+                    try { drainCts.Cancel(); } catch (ObjectDisposedException) { /* already exiting */ }
+                    return;
+                }
+
                 if (stats.Active > 0 || dispatcher.BackgroundPending > 0 || (api?.OpenStreams ?? 0) > 0)
                 {
                     Volatile.Write(ref lastActive[0], clk());
@@ -179,7 +204,7 @@ public static class DaemonHost
                             ["windowMs"] = idleMs,
                         },
                     });
-                    drainCts.Cancel();
+                    try { drainCts.Cancel(); } catch (ObjectDisposedException) { /* already exiting */ }
                     return;
                 }
             }
@@ -218,9 +243,13 @@ public static class DaemonHost
         // The API's half of the N1 port handoff: releasing the singleton port
         // HERE — drain start, not exit — is what lets a successor's retry-bind
         // land while this daemon finishes in-flight hooks. Stop() also halts a
-        // still-retrying bind so a draining daemon never grabs the port back.
-        // The SSE slice grows this into terminating open streams (`using var
-        // api` still disposes at method exit as backstop).
+        // still-retrying bind so a draining daemon never grabs the port back,
+        // and cancels every SSE writer's token — THAT (plus each writer's own
+        // resp.Close) is what ends open streams; the listener teardown itself
+        // terminates nothing and is run bounded-background inside Stop because
+        // it BLOCKS behind a write wedged on a stalled client (doc/platform.md
+        // § Loopback TCP — a synchronous call here would wedge the whole drain
+        // before daemon.drainStart and never release the version lock).
         api?.Stop();
         Log.Info("daemon", "daemon.drainStart", new LogFields
         {
@@ -273,6 +302,26 @@ public static class DaemonHost
             });
         }
         return 0;   // `using rv` unlinks socket + pidfile; the lock file stays
+    }
+
+    /// The watchdog's am-I-still-the-current-deploy probe (ADR-0007 d7,
+    /// 2026-07-08 amendment): fingerprint THIS PROCESS's deploy dir at start,
+    /// re-fingerprint on quiet ticks, and compare start-vs-now of the SAME dir
+    /// — deliberately never `paths.Version`, which tests override ("testver")
+    /// and would false-fire on every test daemon. Unable-to-fingerprint (dir
+    /// mid-swap, unreadable) is never "superseded": reaping the CURRENT daemon
+    /// on a transient read is the worse error; the next tick retries.
+    private static Func<bool> MakeSupersededProbe()
+    {
+        string? atStart;
+        try { atStart = ContentIdentity.Compute(AppContext.BaseDirectory); }
+        catch { atStart = null; }
+        return () =>
+        {
+            if (atStart is null) return false;
+            try { return ContentIdentity.Compute(AppContext.BaseDirectory) != atStart; }
+            catch { return false; }
+        };
     }
 
     /// One connection = one dispatch: read a request frame, dispatch, answer,

@@ -375,6 +375,63 @@ public class SseBackpressureTests
     }
 
     [Fact]
+    public async Task ASkipGap_MaySurfaceBeforeOlderBufferedLines_CountStaysExact()
+    {
+        // The documented positional semantics of a SKIP gap (vs an eviction
+        // gap): an oversized line is skipped at the poll FRONTIER, but the gap
+        // marker surfaces before the writer's next dequeue — which can be an
+        // OLDER buffered line. Positional imprecision, exact count, recovery
+        // via reconnect unharmed.
+        using var trail = new TempTrail();
+        trail.Append("L0");
+
+        var stall = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<SseEvent>();
+        using var cts = new CancellationTokenSource();
+        var sub = new TrailSubscription(trail.Path, lastEventId: 0,
+            poll: TimeSpan.FromMilliseconds(20), heartbeat: TimeSpan.FromSeconds(30), capacity: 8);
+
+        var run = sub.RunAsync(async (e, _) =>
+        {
+            var stallNow = false;
+            lock (events) { events.Add(e); stallNow = events.Count == 1; }
+            if (stallNow) await stall.Task;   // writer parked holding L0
+        }, cts.Token);
+
+        // While parked: A..D buffer (capacity 8, no evictions), then a monster
+        // line is skipped at the frontier (dropped=1), then "tail" buffers.
+        await PollUntilAsync(() =>
+        {
+            lock (events) { if (events.Count == 0) return Task.FromResult(false); }
+            trail.Append("A", "B", "C", "D");
+            trail.Append(new string('x', 200 * 1024));
+            trail.Append("tail");
+            return Task.FromResult(true);
+        }, TimeSpan.FromSeconds(5), "writer parked on L0");
+        await PollUntilAsync(() => Task.FromResult(sub.DroppedSoFar == 1),
+            TimeSpan.FromSeconds(10), "the monster was skipped and counted");
+
+        stall.TrySetResult();
+        await PollUntilAsync(() =>
+        {
+            lock (events) return Task.FromResult(events.OfType<SseEvent.Line>().Count() == 6);
+        }, TimeSpan.FromSeconds(10), "all buffered lines delivered");
+        cts.Cancel();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        lock (events)
+        {
+            var meaningful = events.Where(e => e is not SseEvent.Heartbeat).ToList();
+            // Gap first (out-of-band, checked before the next dequeue), THEN the
+            // older buffered lines — the documented early-surfacing.
+            Assert.Equal("L0", Assert.IsType<SseEvent.Line>(meaningful[0]).Text);
+            Assert.Equal(1, Assert.IsType<SseEvent.Gap>(meaningful[1]).Dropped);
+            Assert.Equal(["A", "B", "C", "D", "tail"],
+                meaningful.Skip(2).Cast<SseEvent.Line>().Select(l => l.Text).ToArray());
+        }
+    }
+
+    [Fact]
     public async Task Reset_ClearsTheBuffer_AndSupersedesAnyPendingGap()
     {
         using var trail = new TempTrail();
@@ -442,8 +499,12 @@ public class SseBackpressureTests
         using var trail = new TempTrail();
         var events = new List<SseEvent>();
         using var cts = new CancellationTokenSource();
+        // Capacity 32 > any batch below: even a GC-pause-starved writer beat
+        // cannot overflow the buffer, so "no gap" is structural, not a timing
+        // bet (the adversarial verify flagged capacity-4 as a flake vector —
+        // a stalled beat would make this consumer "slow" by definition).
         var sub = new TrailSubscription(trail.Path, lastEventId: 0,
-            poll: TimeSpan.FromMilliseconds(15), heartbeat: TimeSpan.FromSeconds(30), capacity: 4);
+            poll: TimeSpan.FromMilliseconds(15), heartbeat: TimeSpan.FromSeconds(30), capacity: 32);
 
         var run = sub.RunAsync((e, _) =>
         {
@@ -560,6 +621,47 @@ public class SseIdleDeferTests
 
         clock.Advance(TimeSpan.FromSeconds(5));   // t=17; idle-for = 11s >= 10s
         Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));
+    }
+
+    [Fact]
+    public async Task ASupersededDaemon_ReapsItself_DespiteAForgottenTab()
+    {
+        // The immortal-daemon loop, closed (ADR-0007 d7 amendment): drain is
+        // what terminates streams, and the stream's defer used to block the
+        // idle-exit that leads to drain — so a forgotten tab could pin a stale
+        // daemon on the singleton port forever. Now a quiet-tick supersession
+        // probe (deploy-dir fingerprint) drains the daemon regardless of the
+        // open stream. FakeClock stays FROZEN throughout: the reap must need
+        // no window arithmetic at all.
+        using var dir = new TempRuntimeDir();
+        using var trail = new TempTrail();
+        var clock = new FakeClock();
+        var apiPort = FreeTcpPort();
+        var isSuperseded = 0;
+        var sse = new SseOptions(trail.Path,
+            Poll: TimeSpan.FromMilliseconds(30), Heartbeat: TimeSpan.FromMilliseconds(80));
+        var daemon = Task.Run(() => DaemonHost.RunAsync(dir.Paths, NoHarnessDir(), CancellationToken.None,
+            new Registry(), drainDeadline: TimeSpan.FromSeconds(5), idleWindow: Window,
+            clock: clock.Now, apiPort: apiPort, sse: sse,
+            superseded: () => Volatile.Read(ref isSuperseded) == 1));
+        await PollUntilAsync(async () =>
+            await ShimClient.TryForwardAsync(dir.Paths.SocketPath,
+                new HookRequest("warmup02", "session-start", "claude-code", "{}"u8.ToArray()))
+                is ForwardOutcome.Answered,
+            TimeSpan.FromSeconds(15), "daemon up");
+
+        await using var client = new SseClient();
+        Assert.Equal(HttpStatusCode.OK, await client.OpenAsync(apiPort, TokenOf(dir)));
+
+        // Current identity + open stream: deferred, deterministically alive.
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => daemon.WaitAsync(TimeSpan.FromMilliseconds(1500)));
+
+        // The deploy moves on: the very defer that held the daemon open must
+        // no longer count — drain fires, terminates the tab's stream, exits.
+        Volatile.Write(ref isSuperseded, 1);
+        Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.Null(await client.ReadFrameAsync(TimeSpan.FromSeconds(5)));   // the stream was ended
     }
 
     [Fact]
@@ -829,6 +931,57 @@ public class ApiSseHttpTests
         Assert.Null(await client.ReadFrameAsync(TimeSpan.FromSeconds(10)));   // stream ended
         await PollUntilAsync(() => Task.FromResult(api.OpenStreams == 0),
             TimeSpan.FromSeconds(5), "stream counter released");
+        api.Dispose();
+    }
+
+    [Fact]
+    public async Task Stop_IsBounded_EvenWithAWriterWedgedOnAZeroWindowClient()
+    {
+        // The adversarial verify's probe-proven platform fact: on Linux the
+        // managed HttpListener's Stop()/Close() BLOCK behind a write wedged on
+        // a client that stopped reading — a synchronous teardown would turn
+        // one stalled subscriber into an unkillable daemon that never releases
+        // the version lock. Stop() must return bounded and the port must free
+        // (the probe showed it frees the instant Stop begins, even wedged).
+        using var trail = new TempTrail();
+        var port = FreeTcpPort();
+        var api = ApiHost.Start(port, sse: new SseOptions(trail.Path, Poll: TimeSpan.FromMilliseconds(20)));
+
+        // A raw zero-window-ish client: tiny receive buffer, sends a valid
+        // authorized /events request, reads a little, then never reads again.
+        using var wedge = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.InterNetwork,
+            System.Net.Sockets.SocketType.Stream,
+            System.Net.Sockets.ProtocolType.Tcp)
+        { ReceiveBufferSize = 4096 };
+        await wedge.ConnectAsync(IPAddress.Loopback, port);
+        var req = "GET /api/v1/events HTTP/1.1\r\n"
+                + $"Host: 127.0.0.1:{port}\r\n"
+                + $"Authorization: Bearer {api.Token}\r\n\r\n";
+        await wedge.SendAsync(Encoding.ASCII.GetBytes(req));
+        var buf = new byte[1024];
+        await wedge.ReceiveAsync(buf);   // headers + retry hint, then we go silent
+
+        await PollUntilAsync(() => Task.FromResult(api.OpenStreams == 1),
+            TimeSpan.FromSeconds(5), "wedge subscriber registered");
+
+        // Flood the trail far past every socket buffer: the writer is now (or
+        // will be) parked inside a WriteAsync the token cannot cancel.
+        for (var i = 0; i < 40; i++)
+            trail.Append(Enumerable.Range(0, 50).Select(_ => new string('z', 1000)).ToArray());
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        api.Stop();
+        sw.Stop();
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5),
+            $"Stop must never block on a wedged subscriber (took {sw.Elapsed.TotalSeconds:F1}s)");
+
+        // The port is free for a successor despite the wedged connection.
+        await PollUntilAsync(() =>
+        {
+            try { ApiHost.Start(port).Dispose(); return Task.FromResult(true); }
+            catch (Exception) { return Task.FromResult(false); }
+        }, TimeSpan.FromSeconds(10), "the port freed while the old write was wedged");
         api.Dispose();
     }
 

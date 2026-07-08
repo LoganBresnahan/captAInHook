@@ -490,18 +490,31 @@ public sealed class ApiHost : IDisposable
         // dispose it between _stopping being set and this Cancel, swallowing
         // the ONLY cancellation the token-riding SSE writers would ever see.
         _stop.Cancel();
+        // Listener teardown must NEVER block the drain thread: on Linux the
+        // managed HttpListener's Stop()/Close() BLOCK behind a write wedged on
+        // a zero-window client (probed; doc/platform.md § Loopback TCP) — a
+        // synchronous call here turns one stalled subscriber into an unkillable
+        // daemon that never releases the version lock (SIGTERM is claimed by
+        // the drain registration; only SIGKILL would work). The port frees the
+        // INSTANT Stop() begins, even while blocked, so backgrounding costs the
+        // handoff nothing; the brief wait keeps the healthy path (returns in
+        // ~ms) synchronous for deterministic rebind in tests and cutover.
+        // Healthy streams are ended by the token + their own resp.Close — the
+        // listener teardown was never what terminated them; a wedged write
+        // dies with the connection at process exit.
         if (bound is not null)
-            try { bound.Stop(); } catch { /* already stopped */ }
-        // Known bound, accepted: a writer wedged INSIDE a response write to a
-        // stalled client (zero-window peer) does not observe the token until
-        // the write completes or the connection dies — Dispose's listener
-        // Close is the backstop that forces those closed. Everything else
-        // (poll delays, channel waits, heartbeats) exits on the token.
+        {
+            var teardown = Task.Run(() => { try { bound.Stop(); } catch { /* already stopped */ } });
+            teardown.Wait(TimeSpan.FromSeconds(2));   // ms when healthy; proceed when wedged
+        }
     }
 
     public void Dispose()
     {
         Stop();
-        try { _http?.Close(); } catch { /* best-effort */ }
+        // Same non-blocking rule as Stop: Close() blocks behind wedged writes
+        // and terminates nothing for healthy streams — best-effort, bounded.
+        Task.Run(() => { try { _http?.Close(); } catch { /* best-effort */ } })
+            .Wait(TimeSpan.FromSeconds(2));
     }
 }

@@ -265,8 +265,10 @@ public abstract record SseEvent
 /// a heartbeat when the trail is quiet.
 ///
 /// Backpressure (sse-backpressure; ADR-0007 decision 5 / ADR-0004 d6): the
-/// channel is BOUNDED, so a slow consumer can never grow the daemon (the
-/// memory ceiling is capacity × line) and never stalls the tail. A full buffer
+/// channel is BOUNDED, so a slow consumer can never grow the daemon — the
+/// per-subscriber ceiling is capacity × the read window (a buffered line can
+/// be up to maxBytes) plus one in-flight poll batch; hard-bounded, ~32MiB at
+/// worst-case defaults, typically KBs — and never stalls the tail. A full buffer
 /// gets ONE poll-beat of grace (a burst must not drop on a scheduler race);
 /// past it the OLDEST line is evicted and counted — by hand, because
 /// BoundedChannelFullMode.DropOldest discards silently and could never carry
@@ -376,9 +378,14 @@ public sealed class TrailSubscription
             while (!subCt.IsCancellationRequested)
             {
                 // Out-of-band signals FIRST, so neither can be starved by a full
-                // buffer: the reset (oldest news) before the gap, the gap before
-                // the lines it precedes chronologically (evictions always remove
-                // the OLDEST buffered line, so the hole sits exactly here).
+                // buffer. For EVICTION drops the hole sits exactly here (they
+                // remove the oldest buffered line, so everything still buffered
+                // is newer); a SKIP gap (oversized line at the poll frontier) may
+                // surface up to `capacity` lines early — the count stays exact
+                // and reconnect-recovery from the file is unharmed, so the
+                // imprecision is positional only. On a quiet trail a marker
+                // waits for the next line or the heartbeat to wake this loop —
+                // marker latency is heartbeat-bounded, never dropped.
                 if (Interlocked.Exchange(ref _resetPending, 0) == 1)
                 {
                     await write(new SseEvent.Reset(), subCt);
@@ -460,7 +467,9 @@ public sealed class TrailSubscription
         }
         while (!channel.Writer.TryWrite(line))
         {
-            if (channel.Reader.TryRead(out var evicted) && evicted is SseEvent.Line)
+            // Count EVERY eviction: the channel carries only lines today, and if
+            // that ever changes, an uncounted silent removal is the worse bug.
+            if (channel.Reader.TryRead(out _))
                 Interlocked.Increment(ref _dropped);
         }
     }

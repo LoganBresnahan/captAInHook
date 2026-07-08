@@ -131,6 +131,23 @@ trust surface is N1 of ADR-0006 made worse.
    API never *spawns* a daemon — hooks and an eventual CLI verb do; a dead
    daemon simply has no API.
 
+   *2026-07-08 amendment (idle-exit-defer's adversarial verify):* as first
+   written, "only for the current lock-holder" was an effect of drain, not a
+   mechanism — drain-start terminates streams, but for a superseded daemon
+   idle-exit is the only path TO drain, and the defer blocks idle-exit: a
+   forgotten tab could pin a stale daemon on the singleton port forever
+   (nothing SIGTERMs it on deploy; `doctor` would have silently become the
+   only version-cutover reaper). The mechanism now exists: on quiet ticks
+   (no hooks in flight) a daemon **with an API** re-fingerprints its own
+   deploy directory (`ContentIdentity` of `AppContext.BaseDirectory`,
+   start-vs-now); a mismatch means the deploy moved on — it logs
+   `daemon.superseded` and drains itself, which terminates the streams,
+   releases the port, and lands the tab's reconnect on the successor. This
+   also gives decision 2's "a **superseded** or draining daemon closes its
+   API listener" clause the code it previously lacked. Hook activity skips
+   the check: a daemon serving hooks is current by definition (shims compute
+   the socket from the deployed identity).
+
 8. **ADR-0004's "management API lands" trigger: examined, declined.** The
    hook path keeps one UDS connection per dispatch, untouched. The API is a
    separate listener on a separate transport; nothing here multiplexes or

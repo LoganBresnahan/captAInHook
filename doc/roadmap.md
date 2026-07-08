@@ -423,6 +423,27 @@ run live*. The framework underneath is what exists today.
   reports `openStreams`. FakeClock daemon tests: stream-defers/close-
   releases (a full fresh window after release), request-refreshes-the-
   window, drain-never-pinned-by-a-stream.)
+  Phase-5 adversarial verifies, closed out (2026-07-08): backpressure's
+  exact-count and un-droppable-marker contracts SURVIVED attack (200k-item
+  probe: delivered+evicted=enqueued, exactly once; reset ordering airtight);
+  touch-ups landed (skip-gaps may surface up to `capacity` lines before
+  their chronological hole — positional only, count exact, recovery
+  unharmed, now documented+pinned; every eviction counted regardless of
+  type; FastConsumer made structurally flake-proof). The idle-defer verify
+  CONFIRMED two real gaps, both fixed: (1) the immortal-daemon loop —
+  decision 7's "current-lock-holder-only" was an effect of drain, not a
+  mechanism, so a forgotten tab could pin a superseded daemon on the
+  singleton port forever; the daemon now re-fingerprints its own deploy dir
+  on quiet ticks and drains itself on mismatch (`daemon.superseded` —
+  ADR-0007 d7 amendment, giving decision 2's "superseded" clause its
+  missing code). (2) Probe-proven: managed `HttpListener.Stop()/Close()`
+  BLOCK on Linux behind a write wedged on a zero-window subscriber — a
+  synchronous teardown made one stalled client an unkillable daemon that
+  never released the version lock (every same-identity hook collapsing
+  forever); teardown now runs bounded-background (the port frees the
+  instant Stop begins, so the handoff is unharmed), recorded in
+  platform.md. Both pinned: supersession-reaps-despite-a-forgotten-tab,
+  Stop-bounded-under-a-wedged-writer.
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine
