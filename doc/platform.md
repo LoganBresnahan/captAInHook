@@ -25,7 +25,8 @@ verified the day a real run touches them.
 The management API (ADR-0007) rides the *managed* `HttpListener` — on Unix
 there is no http.sys; the BCL ships its own socket-level implementation, "the
 least-loved corner of the BCL" (ADR-0007 N5). Bind-boundary facts probed
-2026-07-07 (Linux/WSL2, .NET 10) for the singleton-port cutover:
+2026-07-07/08 (Linux/WSL2, .NET 10) for the singleton-port cutover; the API's
+own mechanics live in [flow/management-api.md](flow/management-api.md):
 
 | Fact | Detail | What leans on it |
 | --- | --- | --- |

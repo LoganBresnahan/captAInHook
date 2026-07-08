@@ -251,7 +251,7 @@ run live*. The framework underneath is what exists today.
   honored cancellations restart without counting — changed deliberately.
   Pinned by ClassificationTests.cs; mechanics in
   doc/flow/actor-supervision.md.
-- [ ] **5. Management API** — HTTP + SSE on the daemon: inventory of
+- [x] **5. Management API** — HTTP + SSE on the daemon: inventory of
   installed hooks/skills, install/uninstall/enable/disable operations, and a
   live event stream sourced from the structured log pipeline (dispatchId
   correlation = per-dispatch traces for free). **After item 14** — the API's
@@ -477,6 +477,18 @@ run live*. The framework underneath is what exists today.
   COARSE-mtime FS — probe-confirmed unreachable on ext4/APFS/NTFS, a
   pre-existing ADR-0006 property; the write API just makes it programmatically
   reachable (scratch.md + platform.md).)
+  `docs-flow-platform` (2026-07-08; Phase 7, the capstone — terminal by
+  construction: `doc/flow/management-api.md`, the management-API flow doc
+  (request-lifecycle + cutover ASCII diagrams, why-prose for discovery/auth/
+  lifecycle/SSE/write, GUI notes, and a ground-truth table naming every
+  endpoint, symbol, log event, and test class), including the mandated
+  `TrailCursor` edge-behavior table (oversized-line skip / truncation-reset /
+  alignment-self-heal / truncate-regrow). platform.md's `HttpListener`-on-Unix
+  quirks (N5) recorded as met — the § Loopback TCP section already consolidates
+  co-bind, SO_REUSEADDR/TIME_WAIT-pairwise, teardown-blocks-behind-a-wedged-
+  write, and Host-prefix-match; now cross-linked to the flow doc. No adversarial
+  verify — shipshape only. **ADR-0007 complete: all 7 phases, all 13 slices
+  landed; item 5 checked.**)
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine
