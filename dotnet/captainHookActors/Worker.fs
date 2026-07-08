@@ -150,3 +150,12 @@ type Worker<'Req, 'Reply> private (sup: Supervisor, id: string, handle: ActorRef
                     else
                         return AskOutcome<'Reply>(AskStatus.Backlogged, Unchecked.defaultof<'Reply>, null)
         }
+
+    /// Plain-data supervision state for the read API (ADR-0007 get-handlers).
+    /// Generation is the live restart count (bumped each supervised respawn);
+    /// IsDead is true once the worker has escalated past its restart window. Both
+    /// are plain int/bool read straight off the current ActorRef — the DU and
+    /// AsyncReplyChannel never leak past this assembly (the dependency arrow),
+    /// exactly like the AskStatus enum seam.
+    member _.Generation = handle.Generation
+    member _.IsDead = handle.IsDead

@@ -104,8 +104,22 @@ public static class DaemonHost
         // construction — its own listener and tasks, sharing no mutable state
         // with the serve loop below.
         var drainBudget = drainDeadline ?? TimeSpan.FromSeconds(10);
+
+        // Serve counters + monotonic clock, shared READ-ONLY with the API's GET
+        // /status through the read model below (ADR-0007 d3). `stats` also feeds
+        // the drain loop and idle watchdog, which previously kept a bare `active`
+        // local; `clk`/`startTick` (monotonic, house invariant 2) back uptime.
+        var stats = new ServeStats();
+        var clk = clock ?? (() => Environment.TickCount64);
+        var startTick = clk();
+
+        // The read model projects the SAME resolvers/registry/dispatcher the
+        // dispatch path runs, so the API's read view cannot drift (ADR-0007 d3).
+        var readModel = new ApiReadModel(
+            paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick);
+
         using var api = apiPort is int apiP
-            ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths)
+            ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths, readModel: readModel)
             : null;
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
@@ -117,8 +131,6 @@ public static class DaemonHost
         using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT,
             sctx => { sctx.Cancel = true; drainCts.Cancel(); });
 
-        var active = 0;   // in-flight connections; drain waits for 0
-
         // ---- mandatory idle-exit (decision 4) --------------------------------
         // Monotonic window; the BASELINE IS PROCESS START (decision 3: a daemon
         // that wedges before ever serving is still reapable). Activity =
@@ -127,7 +139,6 @@ public static class DaemonHost
         // restarts the window (the session-final memory write keeps the daemon
         // open, then it gets a full window before exit). The trigger is the
         // SAME drainCts as SIGTERM: idle-exit and drain agree by construction.
-        var clk = clock ?? (() => Environment.TickCount64);
         var idleMs = (long)(idleWindow ?? TimeSpan.FromMinutes(30)).TotalMilliseconds;
         var lastActive = new[] { clk() };
         var idleTick = TimeSpan.FromMilliseconds(Math.Clamp(idleMs / 8.0, 50, 5000));
@@ -137,7 +148,7 @@ public static class DaemonHost
             {
                 try { await Task.Delay(idleTick, drainCts.Token); }
                 catch (OperationCanceledException) { return; }
-                if (Volatile.Read(ref active) > 0 || dispatcher.BackgroundPending > 0)
+                if (stats.Active > 0 || dispatcher.BackgroundPending > 0)
                 {
                     Volatile.Write(ref lastActive[0], clk());
                     continue;
@@ -172,7 +183,7 @@ public static class DaemonHost
             // One task per connection: dispatches run concurrently; per-worker
             // serialization inside the dispatcher is what actually orders work
             // (the concurrency-audit slice soaks exactly this).
-            Interlocked.Increment(ref active);
+            stats.OnConnect();
             Volatile.Write(ref lastActive[0], clk());
             _ = Task.Run(async () =>
             {
@@ -180,7 +191,7 @@ public static class DaemonHost
                 finally
                 {
                     Volatile.Write(ref lastActive[0], clk());
-                    Interlocked.Decrement(ref active);
+                    stats.OnDone();
                 }
             }, CancellationToken.None);
         }
@@ -200,7 +211,7 @@ public static class DaemonHost
         {
             Data = new Dictionary<string, object>
             {
-                ["active"] = Volatile.Read(ref active),
+                ["active"] = stats.Active,
                 ["backgroundPending"] = dispatcher.BackgroundPending,
                 ["deadlineMs"] = drainBudget.TotalMilliseconds,
             },
@@ -209,7 +220,7 @@ public static class DaemonHost
         // Phase 1: in-flight dispatches. Their responses must still be relayed
         // — an accepted request is a promise. Monotonic deadline (Stopwatch).
         var sw = Stopwatch.StartNew();
-        while (Volatile.Read(ref active) > 0 && sw.Elapsed < drainBudget)
+        while (stats.Active > 0 && sw.Elapsed < drainBudget)
             await Task.Delay(20, CancellationToken.None);
 
         // Phase 2: the Background queue — work that by design outlives its
@@ -218,7 +229,7 @@ public static class DaemonHost
         // new enqueues can arrive: completing the queue IS the drain.
         var drained = false;
         var remaining = drainBudget - sw.Elapsed;
-        if (Volatile.Read(ref active) == 0 && remaining > TimeSpan.Zero)
+        if (stats.Active == 0 && remaining > TimeSpan.Zero)
         {
             try
             {
@@ -241,7 +252,7 @@ public static class DaemonHost
                 DurMs = sw.Elapsed.TotalMilliseconds,
                 Data = new Dictionary<string, object>
                 {
-                    ["active"] = Volatile.Read(ref active),
+                    ["active"] = stats.Active,
                     ["backgroundPending"] = dispatcher.BackgroundPending,
                 },
             });

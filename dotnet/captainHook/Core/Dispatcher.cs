@@ -43,6 +43,12 @@ public sealed class Registry
 
 public sealed record DispatchResult(Effect Merged, Trace Trace);
 
+/// One handler's registration plus its live supervision state, as plain data —
+/// the read API's view (ADR-0007 get-handlers). Generation is the supervised
+/// worker's restart count; Dead is true once it has escalated past its window.
+public sealed record HandlerStatus(
+    string EventType, string Name, FailMode OnFailure, int Generation, bool Dead);
+
 public sealed class Dispatcher
 {
     private sealed record Outcome(string Name, Effect Effect);
@@ -185,6 +191,17 @@ public sealed class Dispatcher
     /// Background effects not yet completed — queued or running. The idle and
     /// drain machinery reads this: a non-empty queue defers exit.
     public int BackgroundPending => Volatile.Read(ref _sidePending);
+
+    /// A plain-data view of every registered handler for the read API (ADR-0007
+    /// get-handlers): event, name, fail mode, and the supervised worker's live
+    /// generation + dead flag. Read-only projection off the SAME runners the
+    /// dispatch path uses — no parallel registry to drift. Registration order is
+    /// preserved within each event (the order Merge depends on); the rich F# DU
+    /// stays inside the actor lib — only the int/bool accessors cross.
+    public IReadOnlyList<HandlerStatus> Snapshot() =>
+        _runners.SelectMany(kv => kv.Value.Select(r =>
+            new HandlerStatus(kv.Key, r.Name, r.OnFailure, r.Worker.Generation, r.Worker.IsDead)))
+            .ToList();
 
     /// Single-shot mode: no more dispatches will come — complete the side
     /// queue and wait for the consumer to finish everything already enqueued.

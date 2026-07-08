@@ -106,8 +106,11 @@ public class ApiAuthGateTests
 // ApiDiscoveryTests.
 public class ApiAuthHttpTests
 {
+    // Default path is a genuinely UNWIRED route so an authorized request lands
+    // on the 404 router — the auth tests assert the GATE, never endpoint content
+    // (real endpoints are pinned in ApiReadEndpointsTests).
     private static async Task<(HttpStatusCode Status, string? WwwAuth)> Send(
-        int port, string? bearer, string? origin = null, string? host = null, string path = "/api/v1/status")
+        int port, string? bearer, string? origin = null, string? host = null, string path = "/api/v1/nonesuch")
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
         using var req = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}{path}");

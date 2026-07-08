@@ -18,14 +18,16 @@ public class ApiHostTests
     [Fact]
     public async Task Listener_Routes404Json_ForEveryUnwiredRoute()
     {
+        // A pure listener has no read model, so even the real endpoint paths are
+        // unwired; use a genuinely-unknown route so this stays true regardless.
         using var api = ApiHost.Start(FreeTcpPort());
 
-        var (status, body) = await ApiGetAsync(api.Port, api.Token, "/api/v1/status");
+        var (status, body) = await ApiGetAsync(api.Port, api.Token, "/api/v1/nonesuch");
         Assert.Equal(HttpStatusCode.NotFound, status);
 
         using var doc = JsonDocument.Parse(body);
         Assert.Equal("not_found", doc.RootElement.GetProperty("error").GetString());
-        Assert.Equal("/api/v1/status", doc.RootElement.GetProperty("path").GetString());
+        Assert.Equal("/api/v1/nonesuch", doc.RootElement.GetProperty("path").GetString());
     }
 
     [Fact]
@@ -113,8 +115,13 @@ public class ApiHostInDaemonTests : IAsyncLifetime
             Assert.Equal(HttpStatusCode.Unauthorized,
                 (await noauth.GetAsync($"http://127.0.0.1:{_apiPort}/api/v1/status")).StatusCode);
 
-        var (status, _) = await ApiGetAsync(_apiPort, disc.Token, "/api/v1/status");
-        Assert.Equal(HttpStatusCode.NotFound, status);
+        // A real daemon HAS a read model, so /status is a live endpoint (200) —
+        // the discovered token passes the gate and the status names this daemon.
+        var (status, body) = await ApiGetAsync(_apiPort, disc.Token, "/api/v1/status");
+        Assert.Equal(HttpStatusCode.OK, status);
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(_dir.Paths.Version, doc.RootElement.GetProperty("version").GetString());
+        Assert.Equal(Environment.ProcessId, doc.RootElement.GetProperty("pid").GetInt32());
     }
 
     [Fact]
@@ -179,8 +186,8 @@ public class ApiRetryBindTests
         using var api = ApiHost.StartRetrying(FreeTcpPort(), fastWindow: TimeSpan.FromSeconds(10));
         Assert.True(api.IsListening);
 
-        var (status, _) = await ApiGetAsync(api.Port, api.Token, "/api/v1/status");
-        Assert.Equal(HttpStatusCode.NotFound, status);
+        var (status, _) = await ApiGetAsync(api.Port, api.Token, "/api/v1/nonesuch");
+        Assert.Equal(HttpStatusCode.NotFound, status);   // bound + serving (no read model here)
     }
 
     [Fact]
@@ -208,7 +215,7 @@ public class ApiRetryBindTests
             await PollUntilAsync(() => Task.FromResult(api.IsListening),
                 TimeSpan.FromSeconds(10), "retry-bind lands after the port frees");
 
-            var (status, _) = await ApiGetAsync(port, api.Token, "/api/v1/status");
+            var (status, _) = await ApiGetAsync(port, api.Token, "/api/v1/nonesuch");
             Assert.Equal(HttpStatusCode.NotFound, status);
 
             Assert.Single(captured.Events, e => e.Evt == "api.bindBlocked");
@@ -238,7 +245,7 @@ public class ApiRetryBindTests
 
         // The holder still answers — with ITS token (the contender never bound,
         // so it never published one).
-        var (status, _) = await ApiGetAsync(port, holder.Token, "/api/v1/status");
+        var (status, _) = await ApiGetAsync(port, holder.Token, "/api/v1/nonesuch");
         Assert.Equal(HttpStatusCode.NotFound, status);
     }
 

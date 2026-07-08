@@ -62,14 +62,16 @@ public sealed class ApiHost : IDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly RendezvousPaths? _rendezvous;       // null in pure-listener tests: no discovery file
     private readonly ApiAuthGate _auth;                  // the pure Host/Origin/token decision
+    private readonly ApiReadModel? _read;                // null => read endpoints 404 (no daemon behind us)
     private HttpListener? _http;                          // installed under _gate once bound
     private bool _listening;
     private volatile bool _stopping;
 
-    private ApiHost(int port, RendezvousPaths? rendezvous)
+    private ApiHost(int port, RendezvousPaths? rendezvous, ApiReadModel? readModel)
     {
         Port = port;
         _rendezvous = rendezvous;
+        _read = readModel;
         // 256 bits from the CSPRNG, hex so it survives a header and JSON without
         // encoding ambiguity. Minted once per host — a superseded daemon's token
         // dies with it (the successor mints its own; ADR-0007 decision 6).
@@ -107,9 +109,10 @@ public sealed class ApiHost : IDisposable
     /// port is free (tests). Production goes through StartRetrying. `rendezvous`
     /// (when supplied) is where the 0600 api.json is written on bind and removed
     /// on stop; null skips the file (pure-listener tests read Token directly).
-    public static ApiHost Start(int port, RendezvousPaths? rendezvous = null)
+    /// `readModel` backs the read endpoints; null => they 404 (no daemon state).
+    public static ApiHost Start(int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null)
     {
-        var host = new ApiHost(port, rendezvous);
+        var host = new ApiHost(port, rendezvous, readModel);
         if (host.TryBindOnce() is { } err) ExceptionDispatchInfo.Capture(err).Throw();
         _ = Task.Run(host.AcceptLoopAsync);
         return host;
@@ -121,11 +124,13 @@ public sealed class ApiHost : IDisposable
     /// off 100ms→1s (a drain-start release is picked up in ≤1s); past it, one
     /// warn, then `slowRetry` (default 5s) forever until Stop. Never throws:
     /// bind failure is a warn, never fatal (ADR-0007 N1). `rendezvous` carries
-    /// the api.json path + identity to publish once the bind lands.
+    /// the api.json path + identity to publish once the bind lands; `readModel`
+    /// backs the read endpoints.
     public static ApiHost StartRetrying(
-        int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null, TimeSpan? slowRetry = null)
+        int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null,
+        ApiReadModel? readModel = null, TimeSpan? slowRetry = null)
     {
-        var host = new ApiHost(port, rendezvous);
+        var host = new ApiHost(port, rendezvous, readModel);
         if (host.TryBindOnce() is not { } err)
         {
             _ = Task.Run(host.AcceptLoopAsync);
@@ -309,8 +314,7 @@ public sealed class ApiHost : IDisposable
                 await ApiJson.WriteAsync(ctx.Response, rej.Status, new { error = rej.Error });
                 return;
             }
-            await ApiJson.WriteAsync(ctx.Response, 404,
-                new { error = "not_found", path = req.Url?.AbsolutePath ?? "" });
+            await RouteAsync(ctx);
         }
         catch (Exception ex)
         {
@@ -319,6 +323,38 @@ public sealed class ApiHost : IDisposable
             Log.Warn("api", "api.handlerError", new LogFields { Msg = ex.Message });
             try { ctx.Response.Abort(); } catch { /* peer already gone */ }
         }
+    }
+
+    // The read surface (ADR-0007 decision 3): GET /api/v1/{status,policy,
+    // harnesses,handlers}, each rendered from the ApiReadModel — the same live
+    // objects the dispatch path uses. With no read model (a pure-listener test:
+    // no daemon behind us) every route 404s. GET /policy carries a content-hash
+    // ETag header (put-policy-write's If-Match token, Phase 6). Unknown route or
+    // wrong method → 404. Writes (PUT /policy) are Phase 6.
+    private async Task RouteAsync(HttpListenerContext ctx)
+    {
+        var path = ctx.Request.Url?.AbsolutePath ?? "";
+        if (_read is not null && ctx.Request.HttpMethod == "GET")
+        {
+            switch (path)
+            {
+                case "/api/v1/status":
+                    await ApiJson.WriteAsync(ctx.Response, 200, _read.Status());
+                    return;
+                case "/api/v1/harnesses":
+                    await ApiJson.WriteAsync(ctx.Response, 200, _read.Harnesses());
+                    return;
+                case "/api/v1/handlers":
+                    await ApiJson.WriteAsync(ctx.Response, 200, _read.Handlers());
+                    return;
+                case "/api/v1/policy":
+                    var policy = _read.Policy();
+                    if (policy.Etag is not null) ctx.Response.AddHeader("ETag", policy.Etag);
+                    await ApiJson.WriteAsync(ctx.Response, 200, policy);
+                    return;
+            }
+        }
+        await ApiJson.WriteAsync(ctx.Response, 404, new { error = "not_found", path });
     }
 
     /// Stop accepting AND stop retrying (idempotent). DaemonHost calls this at

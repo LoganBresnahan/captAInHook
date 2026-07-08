@@ -337,6 +337,25 @@ run live*. The framework underneath is what exists today.
   HTTP) plus every prior HTTP test updated to present the token; suite green
   twice; adversarially verified per the plan. Endpoints (Phase 4) inherit
   the gate for free.
+  Phase 4 read endpoints — `get-status` + `get-policy-read` + `get-harnesses`
+  + `get-handlers` (2026-07-07; the parallel antichain, landed as one batch —
+  read-only, no adversarial verify). `GET /api/v1/{status,policy,harnesses,
+  handlers}` render from an `ApiReadModel` over the SAME live resolvers,
+  registry, and dispatcher the dispatch path runs, so the API view cannot
+  drift (ADR-0007 d3). `/status`: identity, pid, monotonic uptime, and live
+  serve counters (a new `ServeStats` replaces DaemonHost's bare `active`
+  local, adding a lifetime `served` count). `/policy`: the resolved tri-state
+  (absent/malformed+error/loaded+parsed doc) plus the raw file and a
+  content-hash **ETag** (header + body — the token `put-policy-write`'s
+  If-Match will consume). `/harnesses`: the registry projection (specs,
+  adapters, request mapping, per-event capabilities). `/handlers`: every
+  registration with fail mode + live supervision state — carried by the one
+  new bit of plumbing, plain-data `Worker.Generation`/`IsDead` F# accessors
+  (int/bool cross the boundary; the DUs stay inside) behind a
+  `Dispatcher.Snapshot()`. All four inherit the Phase-3 auth gate (401
+  without the token) and 404 an unknown route; a pure listener with no read
+  model 404s them all. 8 endpoint tests over real Core objects + the
+  daemon-integration `/status` at 200; suite green twice.
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine
