@@ -39,9 +39,10 @@ namespace CaptainHook.Api;
 
 /// One poll's outcome: complete lines (each with the byte offset AFTER its
 /// '\n' — the SSE id that resumes exactly past it), whether the file was
-/// truncated/replaced since the last poll, and whether more bytes are already
-/// known to be waiting (caller should poll again without delay).
-public sealed record TrailPoll(IReadOnlyList<TrailLine> Lines, bool Reset, bool More);
+/// truncated/replaced since the last poll, whether more bytes are already
+/// known to be waiting (caller should poll again without delay), and how many
+/// oversized lines were skipped (surfaced to the subscriber as a gap).
+public sealed record TrailPoll(IReadOnlyList<TrailLine> Lines, bool Reset, bool More, int Skipped = 0);
 
 public sealed record TrailLine(long EndOffset, string Text);
 
@@ -50,7 +51,8 @@ public sealed record TrailLine(long EndOffset, string Text);
 public sealed class TrailCursor
 {
     private readonly string _path;
-    private bool _align;   // offset came from a client: trust it only after proving it sits on a boundary
+    private bool _align;      // offset came from a client: trust it only after proving it sits on a boundary
+    private bool _skipping;   // mid-way through discarding a line longer than the read window
 
     public TrailCursor(string path, long startOffset, bool alignForward = false)
     {
@@ -80,28 +82,88 @@ public sealed class TrailCursor
             if (Offset == 0) return new TrailPoll([], Reset: false, More: false);
             // The file we were mid-way through vanished: a rotation/removal.
             // Reset once; a recreated file starts a fresh id space at 0.
-            Offset = 0;
-            _align = false;
-            return new TrailPoll([], Reset: true, More: false);
+            return ResetCursor(more: false);
+        }
+        catch (UnauthorizedAccessException)   // unreadable: quiet, like absent
+        {
+            return new TrailPoll([], Reset: false, More: false);
         }
 
         using (fs)
+        {
+            try
+            {
+                return ReadFrom(fs, maxBytes);
+            }
+            catch (Exception ex) when (ex is EndOfStreamException or IOException)
+            {
+                // The file shrank/vanished BETWEEN the length stat and the read
+                // (a truncation racing this poll). Quietly yield; the next poll
+                // sees len < Offset and resets — one beat of latency, never a
+                // dead subscription.
+                return new TrailPoll([], Reset: false, More: false);
+            }
+        }
+    }
+
+    private TrailPoll ResetCursor(bool more)
+    {
+        Offset = 0;
+        _align = false;
+        _skipping = false;
+        return new TrailPoll([], Reset: true, More: more);
+    }
+
+    private TrailPoll ReadFrom(FileStream fs, int maxBytes)
+    {
         {
             var len = fs.Length;
             if (len < Offset)
             {
                 // Truncated or replaced with something shorter: every id we ever
                 // issued is invalid. Restart the id space; report it explicitly.
-                Offset = 0;
-                _align = false;
-                return new TrailPoll([], Reset: true, More: len > 0);
+                return ResetCursor(more: len > 0);
             }
             if (len == Offset) return new TrailPoll([], Reset: false, More: false);
+
+            if (!_align && !_skipping && Offset > 0)
+            {
+                // Truncate-then-REGROW blind spot: a file replaced with content
+                // at least as long as our offset passes the length check, and a
+                // mid-line resume would emit garbage. Our own offsets always
+                // rest just past a '\n', so re-verify that boundary byte every
+                // poll — it can never false-fire on an untouched file, and a
+                // replaced file fails it 255/256 times: same answer as a
+                // truncation, reset the id space. (The residual 1/256
+                // coincidence is accepted; trail rotation is rare and manual.
+                // Skipped while mid-discard: those offsets are deliberately
+                // mid-line.)
+                fs.Seek(Offset - 1, SeekOrigin.Begin);
+                if (fs.ReadByte() != '\n')
+                    return ResetCursor(more: len > 0);
+            }
 
             var take = (int)Math.Min(maxBytes, len - Offset);
             var buf = new byte[take];
             fs.Seek(Offset, SeekOrigin.Begin);
             fs.ReadExactly(buf, 0, take);
+
+            if (_skipping)
+            {
+                // Mid-way through an oversized line: keep discarding until its
+                // '\n', then count ONE skipped line (the subscriber surfaces it
+                // as a gap). Progress every poll — a monster line can never
+                // wedge the feed.
+                var nl = Array.IndexOf(buf, (byte)'\n', 0, take);
+                if (nl < 0)
+                {
+                    Offset += take;
+                    return new TrailPoll([], Reset: false, More: Offset < len);
+                }
+                Offset += nl + 1;
+                _skipping = false;
+                return new TrailPoll([], Reset: false, More: Offset < len, Skipped: 1);
+            }
 
             var start = 0;
             if (_align)
@@ -134,8 +196,24 @@ public sealed class TrailCursor
             var lastNl = Array.LastIndexOf(buf, (byte)'\n', take - 1, take - start);
             if (lastNl < start)
             {
-                Offset += start;   // consumed only alignment discard, if any
-                return new TrailPoll([], Reset: false, More: false);
+                if (take == maxBytes)
+                {
+                    // No newline in a FULL window: the line is longer than the
+                    // window itself. Delivering would need line-sized memory and
+                    // a line-sized SSE frame; instead SKIP it — discard forward
+                    // (like alignment) to its '\n' and surface one gap. The
+                    // trail file still holds the line; only the live feed caps.
+                    // Without this, one monster line would wedge every cursor
+                    // forever while heartbeats kept the stream looking healthy.
+                    _skipping = true;
+                    Offset += take;
+                    return new TrailPoll([], Reset: false, More: Offset < len);
+                }
+                // A partial line still being written: hold back, re-read whole
+                // next poll. More only if alignment consumed bytes (progress) —
+                // More without progress would spin the poll loop hot.
+                Offset += start;
+                return new TrailPoll([], Reset: false, More: start > 0 && Offset < len);
             }
 
             var lines = new List<TrailLine>();
@@ -157,9 +235,11 @@ public sealed class TrailCursor
 }
 
 /// The daemon-start configuration for GET /api/v1/events: which file to tail
-/// (production: WireJsonl.DefaultLogPath — the same trail both emitters append)
-/// and the poll/heartbeat cadences (test seams; production defaults).
-public sealed record SseOptions(string TrailPath, TimeSpan? Poll = null, TimeSpan? Heartbeat = null);
+/// (production: WireJsonl.DefaultLogPath — the same trail both emitters append),
+/// the poll/heartbeat cadences, and the per-subscriber buffer capacity
+/// (sse-backpressure) — all test seams with production defaults.
+public sealed record SseOptions(
+    string TrailPath, TimeSpan? Poll = null, TimeSpan? Heartbeat = null, int? Capacity = null);
 
 /// What the SSE writer emits. ApiHost adapts these to text/event-stream frames
 /// on the HTTP response; tests inject their own sink and assert on the events
@@ -171,33 +251,58 @@ public abstract record SseEvent
     public sealed record Line(long Id, string Text) : SseEvent;
     /// The file was truncated/replaced: the id space restarted at 0.
     public sealed record Reset : SseEvent;
+    /// `Dropped` lines were evicted for a slow consumer (sse-backpressure) —
+    /// degraded honestly, never silently. Carries no id, so a reconnect resumes
+    /// from the last LINE id and can actually recover the gap from the file.
+    public sealed record Gap(long Dropped) : SseEvent;
     /// Keep-alive comment — also the dead-client probe: writing it fails on a
     /// closed connection, ending the subscription (and later its idle-defer).
     public sealed record Heartbeat : SseEvent;
 }
 
 /// One SSE subscriber's pipeline: a reader task stat-polls the cursor and
-/// queues events; the writer loop (RunAsync) drains them to the sink, emitting
-/// a heartbeat when the trail is quiet. The channel between them is UNBOUNDED
-/// in this slice — the sse-backpressure slice bounds it with drop-oldest plus
-/// an explicit gap marker (ADR-0007 decision 5 / ADR-0004 d6).
+/// queues lines; the writer loop (RunAsync) drains them to the sink, emitting
+/// a heartbeat when the trail is quiet.
+///
+/// Backpressure (sse-backpressure; ADR-0007 decision 5 / ADR-0004 d6): the
+/// channel is BOUNDED, so a slow consumer can never grow the daemon (the
+/// memory ceiling is capacity × line) and never stalls the tail. A full buffer
+/// gets ONE poll-beat of grace (a burst must not drop on a scheduler race);
+/// past it the OLDEST line is evicted and counted — by hand, because
+/// BoundedChannelFullMode.DropOldest discards silently and could never carry
+/// the count. The count and the
+/// truncation-reset signal both travel OUT OF BAND (Interlocked fields the
+/// writer checks before each dequeue), which is what makes the gap marker and
+/// the reset structurally un-droppable: they are never IN the buffer that
+/// drops. A gap carries no id, so a reconnecting client resumes from its last
+/// line id and recovers the dropped region from the file itself.
 public sealed class TrailSubscription
 {
     private readonly TrailCursor _cursor;
     private readonly TimeSpan _poll;
     private readonly TimeSpan _heartbeat;
+    private readonly int _capacity;
+    private long _dropped;        // lines evicted since the last gap marker
+    private int _resetPending;    // a truncation-reset awaiting emission
+    private bool _pressured;      // in a full-buffer episode (reader-task-local)
 
     /// `lastEventId` is the client's resume point (Last-Event-ID); null means
     /// "from now" — the file's current end, so a fresh subscriber sees only new
     /// events. Alignment is forced for client-supplied offsets, trusted for our
     /// own end-of-file stat.
-    public TrailSubscription(string path, long? lastEventId, TimeSpan? poll = null, TimeSpan? heartbeat = null)
+    public TrailSubscription(
+        string path, long? lastEventId,
+        TimeSpan? poll = null, TimeSpan? heartbeat = null, int? capacity = null)
     {
         var start = lastEventId ?? CurrentLength(path);
         _cursor = new TrailCursor(path, start, alignForward: lastEventId is > 0);
         _poll = poll ?? TimeSpan.FromMilliseconds(200);
         _heartbeat = heartbeat ?? TimeSpan.FromSeconds(15);
+        _capacity = Math.Max(1, capacity ?? 256);
     }
+
+    /// Evictions not yet surfaced as a gap marker — test observability.
+    internal long DroppedSoFar => Volatile.Read(ref _dropped);
 
     private static long CurrentLength(string path)
     {
@@ -210,7 +315,16 @@ public sealed class TrailSubscription
     /// client). Never throws for either — both are normal subscription ends.
     public async Task RunAsync(Func<SseEvent, CancellationToken, Task> write, CancellationToken ct)
     {
-        var channel = Channel.CreateUnbounded<SseEvent>();
+        // Bounded: the slow-consumer memory ceiling. FullMode.Wait only shapes
+        // blocking WriteAsync, which is never used — TryWrite returns false on
+        // full and Enqueue evicts by hand so the drop is COUNTED. The channel
+        // carries lines only; gaps and resets ride the out-of-band fields.
+        var channel = Channel.CreateBounded<SseEvent>(new BoundedChannelOptions(_capacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleWriter = true,     // the reader task is the only producer
+            SingleReader = false,    // the writer loop dequeues; Enqueue's eviction also reads
+        });
         // The writer's exit — for ANY reason, a hung-up client included — must
         // end the reader task too, or a dead subscription would keep stat-
         // polling until daemon stop. One linked source covers both exits.
@@ -227,9 +341,23 @@ public sealed class TrailSubscription
                     do
                     {
                         poll = _cursor.Poll();
-                        if (poll.Reset) channel.Writer.TryWrite(new SseEvent.Reset());
+                        if (poll.Reset)
+                        {
+                            // The id space restarted: buffered pre-reset lines are
+                            // from the replaced file — superseded by the reset
+                            // itself (which also supersedes any pending gap; a
+                            // "dropped N" straddling a reset would count lines of
+                            // a file that no longer exists).
+                            while (channel.Reader.TryRead(out _)) { }
+                            Interlocked.Exchange(ref _dropped, 0);
+                            Volatile.Write(ref _resetPending, 1);
+                        }
+                        // An oversized line the cursor skipped is a gap the
+                        // subscriber must hear about — same counter, same
+                        // un-droppable out-of-band path as slow-consumer drops.
+                        if (poll.Skipped > 0) Interlocked.Add(ref _dropped, poll.Skipped);
                         foreach (var line in poll.Lines)
-                            channel.Writer.TryWrite(new SseEvent.Line(line.EndOffset, line.Text));
+                            await EnqueueAsync(channel, new SseEvent.Line(line.EndOffset, line.Text), subCt);
                     } while (poll.More && !subCt.IsCancellationRequested);
                     await Task.Delay(_poll, subCt);
                 }
@@ -247,6 +375,21 @@ public sealed class TrailSubscription
         {
             while (!subCt.IsCancellationRequested)
             {
+                // Out-of-band signals FIRST, so neither can be starved by a full
+                // buffer: the reset (oldest news) before the gap, the gap before
+                // the lines it precedes chronologically (evictions always remove
+                // the OLDEST buffered line, so the hole sits exactly here).
+                if (Interlocked.Exchange(ref _resetPending, 0) == 1)
+                {
+                    await write(new SseEvent.Reset(), subCt);
+                    continue;
+                }
+                var dropped = Interlocked.Exchange(ref _dropped, 0);
+                if (dropped > 0)
+                {
+                    await write(new SseEvent.Gap(dropped), subCt);
+                    continue;
+                }
                 if (channel.Reader.TryRead(out var item))
                 {
                     await write(item, subCt);
@@ -278,6 +421,47 @@ public sealed class TrailSubscription
         {
             sub.Cancel();    // writer gone ⇒ reader must go too
             await reader;    // never leak the poll task
+        }
+    }
+
+    /// Buffer a line; when full, evict-and-count the oldest — the manual
+    /// drop-oldest that BoundedChannelFullMode.DropOldest cannot be (it
+    /// discards silently; the count IS the honesty).
+    ///
+    /// "Slow" means the consumer doesn't make room within one pipeline beat —
+    /// NOT that it lost a scheduler race: a burst append larger than capacity
+    /// with a perfectly healthy consumer must not drop, so the FIRST overflow
+    /// of an episode waits one poll-beat for space (WriteAsync under a grace
+    /// token) before declaring pressure. Once pressured, evictions run at full
+    /// speed — a dead consumer never throttles the reader to grace-per-line —
+    /// until a first-try write succeeds again, which ends the episode. The
+    /// eviction TryRead can race the writer loop's dequeue — losing that race
+    /// just means the line was DELIVERED, so only what this evicts is counted.
+    private async ValueTask EnqueueAsync(Channel<SseEvent> channel, SseEvent.Line line, CancellationToken subCt)
+    {
+        if (channel.Writer.TryWrite(line))
+        {
+            _pressured = false;
+            return;
+        }
+        if (!_pressured)
+        {
+            using var grace = CancellationTokenSource.CreateLinkedTokenSource(subCt);
+            grace.CancelAfter(_poll);
+            try
+            {
+                await channel.Writer.WriteAsync(line, grace.Token);
+                return;
+            }
+            catch (OperationCanceledException) when (!subCt.IsCancellationRequested)
+            {
+                _pressured = true;   // no room in a full beat: the consumer is genuinely slow
+            }
+        }
+        while (!channel.Writer.TryWrite(line))
+        {
+            if (channel.Reader.TryRead(out var evicted) && evicted is SseEvent.Line)
+                Interlocked.Increment(ref _dropped);
         }
     }
 }

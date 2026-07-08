@@ -37,7 +37,7 @@ public static class DaemonHost
         RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
         Registry? registry = null, TimeSpan? drainDeadline = null,
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
-        int? apiPort = null, string? trailPath = null)
+        int? apiPort = null, SseOptions? sse = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -109,9 +109,12 @@ public static class DaemonHost
         // /status through the read model below (ADR-0007 d3). `stats` also feeds
         // the drain loop and idle watchdog, which previously kept a bare `active`
         // local; `clk`/`startTick` (monotonic, house invariant 2) back uptime.
+        // `lastActive` is the idle stamp — declared here because the API's
+        // request callback below refreshes it too (decision 7).
         var stats = new ServeStats();
         var clk = clock ?? (() => Environment.TickCount64);
         var startTick = clk();
+        var lastActive = new[] { startTick };
 
         // The read model projects the SAME resolvers/registry/dispatcher the
         // dispatch path runs, so the API's read view cannot drift (ADR-0007 d3).
@@ -120,13 +123,15 @@ public static class DaemonHost
 
         // The SSE feed tails the SAME trail file both emitters append (ADR-0007
         // decision 5): CAPTAINHOOK_LOG or the default, resolved here at daemon
-        // start like the rest of the environment. `trailPath` is the test seam
-        // (the suite swaps the Log sink, so tests hand-append a temp trail).
-        var sse = new SseOptions(trailPath ?? WireJsonl.DefaultLogPath());
+        // start like the rest of the environment. `sse` is the test seam (the
+        // suite swaps the Log sink, so tests hand-append a temp trail and
+        // tighten the poll/heartbeat cadences).
+        sse ??= new SseOptions(WireJsonl.DefaultLogPath());
 
         using var api = apiPort is int apiP
             ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths,
-                readModel: readModel, sse: sse)
+                readModel: readModel, sse: sse,
+                onRequest: () => Volatile.Write(ref lastActive[0], clk()))
             : null;
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
@@ -141,13 +146,16 @@ public static class DaemonHost
         // ---- mandatory idle-exit (decision 4) --------------------------------
         // Monotonic window; the BASELINE IS PROCESS START (decision 3: a daemon
         // that wedges before ever serving is still reapable). Activity =
-        // serving connections OR a non-empty background queue — the watchdog
-        // refreshes the stamp while either holds, so background COMPLETION
-        // restarts the window (the session-final memory write keeps the daemon
-        // open, then it gets a full window before exit). The trigger is the
-        // SAME drainCts as SIGTERM: idle-exit and drain agree by construction.
+        // serving connections OR a non-empty background queue OR an open SSE
+        // stream (ADR-0007 decision 7: an attached observer is a bounding
+        // parent) — the watchdog refreshes the stamp while any holds, so
+        // completion/close restarts the window. The SSE defer is CURRENT-LOCK-
+        // HOLDER-ONLY by construction: drain-start api.Stop() terminates every
+        // stream, so a superseded daemon can never be pinned by a forgotten
+        // tab. API requests stamp lastActive via the onRequest callback above.
+        // The trigger is the SAME drainCts as SIGTERM: idle-exit and drain
+        // agree by construction.
         var idleMs = (long)(idleWindow ?? TimeSpan.FromMinutes(30)).TotalMilliseconds;
-        var lastActive = new[] { clk() };
         var idleTick = TimeSpan.FromMilliseconds(Math.Clamp(idleMs / 8.0, 50, 5000));
         _ = Task.Run(async () =>
         {
@@ -155,7 +163,7 @@ public static class DaemonHost
             {
                 try { await Task.Delay(idleTick, drainCts.Token); }
                 catch (OperationCanceledException) { return; }
-                if (stats.Active > 0 || dispatcher.BackgroundPending > 0)
+                if (stats.Active > 0 || dispatcher.BackgroundPending > 0 || (api?.OpenStreams ?? 0) > 0)
                 {
                     Volatile.Write(ref lastActive[0], clk());
                     continue;

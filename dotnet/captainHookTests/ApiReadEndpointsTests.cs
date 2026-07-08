@@ -53,6 +53,7 @@ public class ApiReadEndpointsTests
         Assert.Equal(1, s.GetProperty("active").GetInt32());
         Assert.Equal(2, s.GetProperty("served").GetInt64());
         Assert.Equal(0, s.GetProperty("backgroundPending").GetInt32());
+        Assert.Equal(0, s.GetProperty("openStreams").GetInt32());   // no SSE subscribers here
     }
 
     [Fact]

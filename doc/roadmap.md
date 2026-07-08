@@ -379,7 +379,50 @@ run live*. The framework underneath is what exists today.
   fetch-streaming (noted in code). 19 tests incl. byte-offset ids over real
   HTTP, exact resume, live-end default, Stop teardown, heartbeat dead-client
   release, and the Phase-1 debt cashed: an open stream while other requests
-  answer. Suite green twice; adversarial verify per plan.)
+  answer. Suite green twice; adversarial verify per plan — the resume/id math
+  survived attack (probed via a standalone compile of the real TrailCursor);
+  the pass then fixed, in-phase: a line longer than the read window no longer
+  wedges every cursor forever (it is SKIPPED across polls and surfaced as an
+  honest gap — the verify's one correctness-threatening find), a live cursor
+  now detects truncate-then-REGROW via a boundary-byte re-check (offsets rest
+  just past '\n'; a replaced file fails the check 255/256), a truncation
+  racing inside one poll yields quietly instead of killing the subscription,
+  the ApiHost stop-CTS is never disposed (a Stop∥Dispose race could swallow
+  the only Cancel SSE writers ride), align-consumption polls report More
+  correctly, and a drain-racing /events OCE is a routine end, not
+  handlerError noise. It also surfaced a PRE-EXISTING emitter defect: .NET's
+  File.AppendAllText does NOT open O_APPEND (strace-proved) — shim+daemon
+  can clobber concurrent trail appends; recorded in platform.md + scratch as
+  a wire-lib follow-up, reader unaffected.)
+  `sse-backpressure` (2026-07-08; Phase 5 — a slow consumer gets drop-oldest
+  plus an explicit gap marker with the EXACT dropped count, never a growing
+  daemon, never a silent hole, never a disconnect (decision 5 / ADR-0004 d6).
+  The per-subscriber channel is bounded (`SseOptions.Capacity`, default 256);
+  eviction is by hand — `BoundedChannelFullMode.DropOldest` discards silently
+  and could never carry the count — and the count plus the truncation-reset
+  both travel OUT OF BAND (Interlocked fields the writer checks before each
+  dequeue), which is what makes the gap and the reset structurally
+  un-droppable: they are never in the buffer that drops. "Slow" means no
+  room within one poll-beat of grace — a burst append bigger than capacity
+  with a healthy consumer must not drop on a scheduler race (found by the
+  first cut's own test); once pressured, evictions run at full speed until a
+  first-try write succeeds. A reset clears the buffer and supersedes any
+  pending gap (counting lines of a replaced file would lie). A gap carries
+  no id, so a reconnect resumes from the last line id and RECOVERS the
+  dropped region from the file. Deterministic stalled-sink tests: exact
+  drop counts, reset-supersedes, fast-consumer-full-fidelity.)
+  `idle-exit-defer` (2026-07-08; Phase 5, ADR-0004's open question cashed as
+  decision 7: any API request resets the idle clock (an `onRequest` stamp
+  callback into DaemonHost's `lastActive`, fired before the gate — even a
+  401 proves interaction) and an open SSE subscription defers idle-exit —
+  `ApiHost.OpenStreams` (finally-decremented) joins `active` and
+  `BackgroundPending` in the idle watchdog's activity check, riding the same
+  bookkeeping the background queue uses. CURRENT-LOCK-HOLDER-ONLY by
+  construction: drain-start `Stop()` terminates every stream, so a
+  superseded daemon is never pinned by a forgotten tab. `/status` now
+  reports `openStreams`. FakeClock daemon tests: stream-defers/close-
+  releases (a full fresh window after release), request-refreshes-the-
+  window, drain-never-pinned-by-a-stream.)
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine

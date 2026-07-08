@@ -39,13 +39,16 @@ public sealed class ApiReadModel
         _startTick = startTick;
     }
 
-    public StatusDto Status() => new(
+    /// `openStreams` arrives from the ApiHost serving the request (the host owns
+    /// the SSE counter; the read model is built before the host exists).
+    public StatusDto Status(int openStreams = 0) => new(
         Version: _version,
         Pid: Environment.ProcessId,
         UptimeMs: _clock() - _startTick,
         Active: _stats.Active,
         Served: _stats.Served,
-        BackgroundPending: _dispatcher.BackgroundPending);
+        BackgroundPending: _dispatcher.BackgroundPending,
+        OpenStreams: openStreams);
 
     public HandlersDto Handlers() => new(
         _dispatcher.Snapshot()

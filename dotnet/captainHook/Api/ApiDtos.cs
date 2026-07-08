@@ -8,10 +8,11 @@ namespace CaptainHook.Api;
 // the API view can never drift from daemon behavior. Reflection STJ, no source-
 // gen: the host is JIT.
 
-/// GET /status — who this daemon is and how busy it has been.
+/// GET /status — who this daemon is and how busy it has been. OpenStreams is
+/// the live SSE subscription count (the idle-defer signal, ADR-0007 d7).
 public sealed record StatusDto(
     string Version, int Pid, long UptimeMs,
-    int Active, long Served, int BackgroundPending);
+    int Active, long Served, int BackgroundPending, int OpenStreams);
 
 /// GET /policy — the resolved dispatch-policy tri-state (ADR-0006 decision 4)
 /// plus the raw file and a content-hash ETag (the token put-policy-write's

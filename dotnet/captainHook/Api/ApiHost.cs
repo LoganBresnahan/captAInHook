@@ -65,17 +65,20 @@ public sealed class ApiHost : IDisposable
     private readonly ApiAuthGate _auth;                  // the pure Host/Origin/token decision
     private readonly ApiReadModel? _read;                // null => read endpoints 404 (no daemon behind us)
     private readonly SseOptions? _sse;                   // null => /events 404s (no trail to tail)
+    private readonly Action? _onRequest;                 // the daemon's idle-clock stamp (decision 7)
     private HttpListener? _http;                          // installed under _gate once bound
     private int _openStreams;                            // live SSE subscriptions (the idle-defer signal)
     private bool _listening;
     private volatile bool _stopping;
 
-    private ApiHost(int port, RendezvousPaths? rendezvous, ApiReadModel? readModel, SseOptions? sse)
+    private ApiHost(
+        int port, RendezvousPaths? rendezvous, ApiReadModel? readModel, SseOptions? sse, Action? onRequest)
     {
         Port = port;
         _rendezvous = rendezvous;
         _read = readModel;
         _sse = sse;
+        _onRequest = onRequest;
         // 256 bits from the CSPRNG, hex so it survives a header and JSON without
         // encoding ambiguity. Minted once per host — a superseded daemon's token
         // dies with it (the successor mints its own; ADR-0007 decision 6).
@@ -121,10 +124,13 @@ public sealed class ApiHost : IDisposable
     /// on stop; null skips the file (pure-listener tests read Token directly).
     /// `readModel` backs the read endpoints; null => they 404 (no daemon state).
     /// `sse` names the trail file /events tails; null => /events 404s.
+    /// `onRequest` fires on every arriving request — the daemon stamps its idle
+    /// clock with it (ADR-0007 decision 7).
     public static ApiHost Start(
-        int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null, SseOptions? sse = null)
+        int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null,
+        SseOptions? sse = null, Action? onRequest = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, sse);
+        var host = new ApiHost(port, rendezvous, readModel, sse, onRequest);
         if (host.TryBindOnce() is { } err) ExceptionDispatchInfo.Capture(err).Throw();
         _ = Task.Run(host.AcceptLoopAsync);
         return host;
@@ -140,9 +146,10 @@ public sealed class ApiHost : IDisposable
     /// backs the read endpoints; `sse` names the trail /events tails.
     public static ApiHost StartRetrying(
         int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null,
-        ApiReadModel? readModel = null, SseOptions? sse = null, TimeSpan? slowRetry = null)
+        ApiReadModel? readModel = null, SseOptions? sse = null, Action? onRequest = null,
+        TimeSpan? slowRetry = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, sse);
+        var host = new ApiHost(port, rendezvous, readModel, sse, onRequest);
         if (host.TryBindOnce() is not { } err)
         {
             _ = Task.Run(host.AcceptLoopAsync);
@@ -318,6 +325,10 @@ public sealed class ApiHost : IDisposable
     {
         try
         {
+            // Any API request resets the daemon's idle clock (decision 7) —
+            // stamped before the gate on purpose: even a 401 proves someone is
+            // interacting with this daemon, and a warm daemon is capacity.
+            _onRequest?.Invoke();
             var req = ctx.Request;
             if (_auth.Evaluate(req.UserHostName, req.Headers["Origin"], req.Headers["Authorization"]) is { } rej)
             {
@@ -358,7 +369,7 @@ public sealed class ApiHost : IDisposable
             switch (path)
             {
                 case "/api/v1/status":
-                    await ApiJson.WriteAsync(ctx.Response, 200, _read.Status());
+                    await ApiJson.WriteAsync(ctx.Response, 200, _read.Status(OpenStreams));
                     return;
                 case "/api/v1/harnesses":
                     await ApiJson.WriteAsync(ctx.Response, 200, _read.Harnesses());
@@ -405,9 +416,15 @@ public sealed class ApiHost : IDisposable
             // response headers so the client sees the stream is live.
             await WriteFrameAsync(output, "retry: 1000\n\n", _stop.Token);
 
-            var subscription = new TrailSubscription(_sse!.TrailPath, lastId, _sse.Poll, _sse.Heartbeat);
+            var subscription = new TrailSubscription(
+                _sse!.TrailPath, lastId, _sse.Poll, _sse.Heartbeat, _sse.Capacity);
             await subscription.RunAsync(
                 (e, ct) => WriteFrameAsync(output, Frame(e), ct), _stop.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // A request racing drain start: a routine end, not a handler error —
+            // don't let it reach HandleAsync's catch as api.handlerError noise.
         }
         finally
         {
@@ -428,6 +445,7 @@ public sealed class ApiHost : IDisposable
     {
         SseEvent.Line l => $"id: {l.Id}\ndata: {l.Text}\n\n",
         SseEvent.Reset => "event: reset\nid: 0\ndata: {}\n\n",
+        SseEvent.Gap g => $"event: gap\ndata: {{\"dropped\":{g.Dropped}}}\n\n",   // no id: resume recovers the gap
         SseEvent.Heartbeat => ": hb\n\n",
         _ => throw new InvalidOperationException($"unrenderable SSE event {e.GetType().Name}"),
     };
@@ -466,18 +484,24 @@ public sealed class ApiHost : IDisposable
         {
             Data = new Dictionary<string, object> { ["port"] = Port, ["wasBound"] = bound is not null },
         });
-        // Wake a sleeping retry backoff so it exits promptly. A concurrent
-        // Dispose (its Stop early-returned on _stopping) may have disposed the
-        // source already — that race must not throw out of an idempotent Stop.
-        try { _stop.Cancel(); } catch (ObjectDisposedException) { /* flags are set; the loop still exits */ }
+        // Wake a sleeping retry backoff AND every SSE writer riding this token.
+        // The source is deliberately never disposed (one per daemon lifetime,
+        // no timers — trivial): a concurrent Stop∥Dispose could otherwise
+        // dispose it between _stopping being set and this Cancel, swallowing
+        // the ONLY cancellation the token-riding SSE writers would ever see.
+        _stop.Cancel();
         if (bound is not null)
             try { bound.Stop(); } catch { /* already stopped */ }
+        // Known bound, accepted: a writer wedged INSIDE a response write to a
+        // stalled client (zero-window peer) does not observe the token until
+        // the write completes or the connection dies — Dispose's listener
+        // Close is the backstop that forces those closed. Everything else
+        // (poll delays, channel waits, heartbeats) exits on the token.
     }
 
     public void Dispose()
     {
         Stop();
         try { _http?.Close(); } catch { /* best-effort */ }
-        _stop.Dispose();   // always canceled first, so no late Task.Delay can register
     }
 }
