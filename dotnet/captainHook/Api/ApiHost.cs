@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
+using System.Security.Cryptography;
 using CaptainHook.Actors;
+using CaptainHook.Wire;
 
 namespace CaptainHook.Api;
 
@@ -38,9 +40,17 @@ namespace CaptainHook.Api;
 // can block up to ~60s, which the slow cadence absorbs); a blocked bind
 // surfaces as HttpListenerException.
 //
-// Endpoints and auth are later slices (ADR-0007 § Implementation plan): every
-// route still 404s as JSON, and the bearer-token + Origin gate
-// (auth-token-origin) must land before any endpoint is exposed.
+// Discovery + credential (api-json-discovery, ADR-0007 decisions 2+6): on bind
+// the host writes a 0600 api.json (port, token, pid, identity) beside the
+// socket and mints a random bearer token — the SOLE credential source. The
+// file exists iff this host holds the port: written under the same lock that
+// flips `_listening` true, deleted when Stop flips it false, so a client never
+// reads a port+token for a listener that has already handed the port off.
+//
+// Endpoints and the auth GATE are later slices (ADR-0007 § Implementation
+// plan): the token is minted and published here, but every route still 404s
+// and nothing is yet checked — auth-token-origin adds the check and must land
+// before any endpoint is exposed.
 public sealed class ApiHost : IDisposable
 {
     /// "HOOK" on a phone keypad (ADR-0007 decision 2) — fixed so the GUI's URL
@@ -49,15 +59,29 @@ public sealed class ApiHost : IDisposable
 
     private readonly object _gate = new();               // orders bind-install vs Stop
     private readonly CancellationTokenSource _stop = new();
+    private readonly RendezvousPaths? _rendezvous;       // null in pure-listener tests: no discovery file
     private HttpListener? _http;                          // installed under _gate once bound
     private bool _listening;
     private volatile bool _stopping;
 
-    private ApiHost(int port) => Port = port;
+    private ApiHost(int port, RendezvousPaths? rendezvous)
+    {
+        Port = port;
+        _rendezvous = rendezvous;
+        // 256 bits from the CSPRNG, hex so it survives a header and JSON without
+        // encoding ambiguity. Minted once per host — a superseded daemon's token
+        // dies with it (the successor mints its own; ADR-0007 decision 6).
+        Token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+    }
 
     /// The configured loopback port — fixed up front; whether it is currently
     /// BOUND is IsListening (a retrying host may not hold the port yet).
     public int Port { get; }
+
+    /// The per-daemon bearer token published in api.json — the sole credential
+    /// the auth gate (next slice) will require. Tests without a rendezvous read
+    /// it here; production clients read it from the 0600 file.
+    public string Token { get; }
 
     /// True while the listener is bound and accepting. False before a retrying
     /// bind lands and after Stop().
@@ -77,10 +101,12 @@ public sealed class ApiHost : IDisposable
     }
 
     /// Bind loopback-only on `port` NOW or throw — for callers that know the
-    /// port is free (tests). Production goes through StartRetrying.
-    public static ApiHost Start(int port)
+    /// port is free (tests). Production goes through StartRetrying. `rendezvous`
+    /// (when supplied) is where the 0600 api.json is written on bind and removed
+    /// on stop; null skips the file (pure-listener tests read Token directly).
+    public static ApiHost Start(int port, RendezvousPaths? rendezvous = null)
     {
-        var host = new ApiHost(port);
+        var host = new ApiHost(port, rendezvous);
         if (host.TryBindOnce() is { } err) ExceptionDispatchInfo.Capture(err).Throw();
         _ = Task.Run(host.AcceptLoopAsync);
         return host;
@@ -91,10 +117,12 @@ public sealed class ApiHost : IDisposable
     /// `fastWindow` is the incumbent's drain deadline: within it, attempts back
     /// off 100ms→1s (a drain-start release is picked up in ≤1s); past it, one
     /// warn, then `slowRetry` (default 5s) forever until Stop. Never throws:
-    /// bind failure is a warn, never fatal (ADR-0007 N1).
-    public static ApiHost StartRetrying(int port, TimeSpan fastWindow, TimeSpan? slowRetry = null)
+    /// bind failure is a warn, never fatal (ADR-0007 N1). `rendezvous` carries
+    /// the api.json path + identity to publish once the bind lands.
+    public static ApiHost StartRetrying(
+        int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null, TimeSpan? slowRetry = null)
     {
-        var host = new ApiHost(port);
+        var host = new ApiHost(port, rendezvous);
         if (host.TryBindOnce() is not { } err)
         {
             _ = Task.Run(host.AcceptLoopAsync);
@@ -183,12 +211,48 @@ public sealed class ApiHost : IDisposable
             }
             _http = http;
             _listening = true;
+            // Publish discovery UNDER the gate, atomic with _listening=true, so
+            // "api.json exists ⟺ we hold the port" holds against a racing Stop:
+            // either we write here then Stop deletes, or Stop wins the gate and
+            // we return above without writing. Never both.
+            PublishDiscovery();
         }
         Log.Info("api", "api.listening", new LogFields
         {
             Data = new Dictionary<string, object> { ["port"] = Port },
         });
         return null;
+    }
+
+    // Write the 0600 api.json for this bind, or degrade honestly: a write
+    // failure (disk full, perms) leaves the API listening but UNDISCOVERABLE
+    // (no client can learn the token) — degraded, never fatal to hooks, so it
+    // must not throw out of the gate or un-bind the port. Callers hold _gate.
+    private void PublishDiscovery()
+    {
+        if (_rendezvous is null) return;
+        try
+        {
+            ApiDiscovery.Write(_rendezvous.ApiJsonPath,
+                new ApiDiscovery(Port, Token, Environment.ProcessId, _rendezvous.Version));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("api", "api.discoveryFailed", new LogFields
+            {
+                Msg = ex.Message,
+                Data = new Dictionary<string, object> { ["path"] = _rendezvous.ApiJsonPath },
+            });
+        }
+    }
+
+    // Remove this host's own api.json (best-effort). Version-partitioned, so it
+    // is always OURS to delete — never a successor's. Callers hold _gate, paired
+    // with _listening=false, so the file cannot outlive the port we held.
+    private void UnpublishDiscovery()
+    {
+        if (_rendezvous is null) return;
+        try { File.Delete(_rendezvous.ApiJsonPath); } catch { /* best-effort, doctor backstops a leak */ }
     }
 
     // The loop's ONLY job is accept-and-hand-off: each context runs on its own
@@ -260,6 +324,10 @@ public sealed class ApiHost : IDisposable
             _stopping = true;
             bound = _http;
             _listening = false;
+            // Delete under the gate, atomic with _listening=false: a draining
+            // incumbent stops advertising its port+token the instant it decides
+            // to release, so no client reads stale credentials mid-cutover.
+            UnpublishDiscovery();
         }
         // Enqueue api.stopped BEFORE releasing the port: a successor's
         // api.listening can then never precede it, so the trail's cutover

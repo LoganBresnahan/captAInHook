@@ -140,6 +140,12 @@ public static class Doctor
         if (rv is null)
             return new DoctorVerdict(version, "lock-held",
                 $"wanted to clean ({action}: {detail}) but a live daemon holds the lock; left alone");
+        // The lock proves this version's daemon is dead, so its management-API
+        // discovery file (ADR-0007) is stale too — reap it beside the socket and
+        // pidfile `rv.Dispose` removes. Version-partitioned, so never a live
+        // successor's file. (Dispose owns socket+pid; api.json is not its
+        // concern, so it is unlinked explicitly here.)
+        try { File.Delete(paths.ApiJsonPath); } catch { /* best-effort, like the socket */ }
         return new DoctorVerdict(version, action, detail);
     }
 }

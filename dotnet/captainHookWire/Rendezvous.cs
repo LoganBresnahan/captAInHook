@@ -80,15 +80,16 @@ public static class ContentIdentity
     }
 }
 
-/// Where a given build's daemon and shims meet: socket, lock, and pid paths,
-/// all carrying the content-identity version in their names. Resolution is a
-/// PURE FUNCTION of the environment — the shim is per-invocation with no
-/// memory and no side channel to the daemon, so both sides must *compute* the
-/// identical path; probe-until-fits or any stateful negotiation is unsound by
-/// construction (doc/platform.md). Nothing here touches the filesystem:
-/// creating the directory and binding are the lock-holder's business
-/// (lock-bind-rendezvous slice).
-public sealed record RendezvousPaths(string Version, string RuntimeDir, string SocketPath, string LockPath, string PidPath)
+/// Where a given build's daemon and shims meet: socket, lock, pid, and the
+/// management-API discovery file, all carrying the content-identity version in
+/// their names. Resolution is a PURE FUNCTION of the environment — the shim is
+/// per-invocation with no memory and no side channel to the daemon, so both
+/// sides must *compute* the identical path; probe-until-fits or any stateful
+/// negotiation is unsound by construction (doc/platform.md). Nothing here
+/// touches the filesystem: creating the directory and binding are the
+/// lock-holder's business (lock-bind-rendezvous slice).
+public sealed record RendezvousPaths(
+    string Version, string RuntimeDir, string SocketPath, string LockPath, string PidPath, string ApiJsonPath)
 {
     /// Tightest sun_path budget across supported platforms: macOS caps at 104
     /// bytes including the NUL, Linux at 108 (doc/platform.md). One number so
@@ -109,10 +110,17 @@ public sealed record RendezvousPaths(string Version, string RuntimeDir, string S
                 $"socket path '{socket}' is {bytes} bytes; Unix domain socket paths cap at {MaxSocketPathBytes}. " +
                 "Set XDG_RUNTIME_DIR to a short per-user directory (e.g. /run/user/<uid>).");
 
+        // api.json is version-partitioned like its siblings — the port it
+        // advertises is a global singleton (ADR-0007 N1), but the DISCOVERY
+        // FILE is per-identity so a draining incumbent and its successor own
+        // separate files and neither ever deletes the other's (the same
+        // cross-version-delete hazard the versioned socket avoids). No sun_path
+        // cap here: a regular file, not a socket.
         return new RendezvousPaths(
             version, dir, socket,
             Path.Combine(dir, $"captaind-{version}.lock"),
-            Path.Combine(dir, $"captaind-{version}.pid"));
+            Path.Combine(dir, $"captaind-{version}.pid"),
+            Path.Combine(dir, $"captaind-{version}.api.json"));
     }
 
     /// $XDG_RUNTIME_DIR/captainHook when set (Linux/systemd: short by

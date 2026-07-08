@@ -46,6 +46,7 @@ public class DoctorTests
         p.WaitForExit();
         WritePidfile(dir, "deadver", p.Id, "/nonexistent/captainHook");
         File.WriteAllText(Path.Combine(dir.Path, "captaind-deadver.sock"), "stale");
+        File.WriteAllText(Path.Combine(dir.Path, "captaind-deadver.api.json"), "{\"port\":4665}");
 
         var verdicts = await Doctor.RunAsync(dir.Path, TimeSpan.FromSeconds(1));
 
@@ -53,6 +54,8 @@ public class DoctorTests
         Assert.Equal("dead", v.Action);
         Assert.False(File.Exists(Path.Combine(dir.Path, "captaind-deadver.pid")));
         Assert.False(File.Exists(Path.Combine(dir.Path, "captaind-deadver.sock")));
+        Assert.False(File.Exists(Path.Combine(dir.Path, "captaind-deadver.api.json")),
+            "the stale management-API discovery file is reaped too (ADR-0007)");
         Assert.True(File.Exists(Path.Combine(dir.Path, "captaind-deadver.lock")), "lock files stay, always");
     }
 

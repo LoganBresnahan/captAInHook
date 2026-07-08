@@ -310,6 +310,17 @@ run live*. The framework underneath is what exists today.
   hardened Stop/Dispose (a concurrent-Dispose ODE), made the trail's
   stopped→listening cutover order deterministic, silenced a misleading
   post-stop warn, and corrected the platform-fact attribution above).
+  `api-json-discovery` (2026-07-07; Phase 3a — the credential file: a
+  version-partitioned 0600 `captaind-<id>.api.json` (port, token, pid,
+  identity) beside socket/lock/pid (`RendezvousPaths.ApiJsonPath` +
+  `ApiDiscovery` read/write). `ApiHost` mints a 256-bit hex bearer token —
+  the SOLE credential source — and publishes/removes the file UNDER the
+  same gate that flips `_listening`, so "file exists ⟺ we hold the port"
+  holds against a racing Stop and a retrying host never advertises a port
+  it doesn't own. Version-partitioned so a draining incumbent never deletes
+  its successor's file; `doctor` reaps a stale one once the lock proves the
+  owner dead. No gate yet — the token is published, nothing is checked. 8
+  tests; suite 292 green twice).
   Install operations carry item 10's
   trust model with them. The fleet/enterprise shape (one org, many
   employees) is local-data-plane + central-control-plane: per-machine

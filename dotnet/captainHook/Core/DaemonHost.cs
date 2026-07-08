@@ -104,7 +104,9 @@ public static class DaemonHost
         // construction — its own listener and tasks, sharing no mutable state
         // with the serve loop below.
         var drainBudget = drainDeadline ?? TimeSpan.FromSeconds(10);
-        using var api = apiPort is int apiP ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget) : null;
+        using var api = apiPort is int apiP
+            ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths)
+            : null;
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
         // one linked source, one code path. ctx.Cancel = true claims the
