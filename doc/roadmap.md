@@ -592,7 +592,20 @@ run live*. The framework underneath is what exists today.
   empty If-Match — probed live, it would write blind); submitPolicy never
   throws; saving flag released in a finally. 24 web unit tests; chromium
   drive incl. save-twice ETag adoption; suite 417 green twice ×2 runs.
-  **Phase 4 complete — phase 5 next: `read-panels-islands`.**
+  Phase 4 complete.
+  `read-panels-islands` (2026-07-09; the four read screens as sibling islands
+  over the store. Three fetch-and-render tables (Status — identity + serve
+  counters, polled 3s; Supervision — handlers with fail mode / generation /
+  dead, polled 4s; Harnesses — the ADR-0003 registry projection, fetched
+  once) share one `useApiJson` hook so a 401 flips the whole session to dead
+  in one place. Live trace reads the SSE-filled trace slice: dispatchId
+  correlation via a stable color-per-id + click-to-filter, a substring
+  filter, follow-the-tail scroll, and gap/reset as honest dividers; pure
+  display logic (`src/format.ts`) unit-tested. App slimmed to the shell; one
+  theme-aware stylesheet. 31 web unit tests; chromium drive of all panels +
+  trace ingest/filter, eyeballed light+dark; engine untouched, C# 417 green.
+  **Phase 5 complete — phase 6 next: `playwright-e2e` (the daemon fixture),
+  then phase 7's flow-doc capstone.**
 
 ## Later
 
