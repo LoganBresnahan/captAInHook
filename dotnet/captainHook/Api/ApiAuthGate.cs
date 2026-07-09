@@ -42,12 +42,25 @@ internal sealed class ApiAuthGate
     /// null ⇒ authorized. Otherwise the HTTP status + a short machine error.
     internal (int Status, string Error)? Evaluate(string? host, string? origin, string? authorization)
     {
+        if (EvaluateShell(host, origin) is { } rej) return rej;
+        if (!BearerMatches(authorization))
+            return (401, "unauthorized");
+        return null;
+    }
+
+    /// The bearer-exempt HALF of the gate — Host (rebind) + Origin (CSRF) only —
+    /// for the `/ui` static shell (ADR-0008 decision 2): a top-level browser
+    /// navigation cannot carry an Authorization header, so the shell must be
+    /// reachable without the token. The exemption is BEARER-ONLY by construction:
+    /// this method is the same two transport checks Evaluate runs first, so /ui
+    /// and /api/v1/* can never drift on Host/Origin policy. Everything data-
+    /// bearing stays behind Evaluate.
+    internal (int Status, string Error)? EvaluateShell(string? host, string? origin)
+    {
         if (!string.Equals(host, _authority, StringComparison.OrdinalIgnoreCase))
             return (403, "bad_host");
         if (origin is not null && !string.Equals(origin, _origin, StringComparison.OrdinalIgnoreCase))
             return (403, "bad_origin");
-        if (!BearerMatches(authorization))
-            return (401, "unauthorized");
         return null;
     }
 

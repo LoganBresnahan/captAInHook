@@ -37,7 +37,8 @@ public static class DaemonHost
         RendezvousPaths? pathsOverride = null, string? harnessDir = null, CancellationToken ct = default,
         Registry? registry = null, TimeSpan? drainDeadline = null,
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
-        int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null)
+        int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null,
+        string? uiDir = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -137,7 +138,11 @@ public static class DaemonHost
             ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths,
                 readModel: readModel, writer: policyWriter,
                 sse: sse ?? new SseOptions(WireJsonl.DefaultLogPath()),
-                onRequest: () => Volatile.Write(ref lastActive[0], clk()))
+                onRequest: () => Volatile.Write(ref lastActive[0], clk()),
+                // The GUI shell (ADR-0008 d2): serve the ui/ dir staged beside
+                // the executables by /deploy — absent (no GUI shipped yet) every
+                // /ui request 404s through the shell gate, nothing else changes.
+                uiDir: uiDir ?? Path.Combine(AppContext.BaseDirectory, "ui"))
             : null;
         superseded ??= MakeSupersededProbe();
 

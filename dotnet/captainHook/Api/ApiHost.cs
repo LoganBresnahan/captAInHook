@@ -66,6 +66,7 @@ public sealed class ApiHost : IDisposable
     private readonly ApiReadModel? _read;                // null => read endpoints 404 (no daemon behind us)
     private readonly ApiPolicyWriter? _writer;           // null => PUT /policy 404s (no writable path)
     private readonly SseOptions? _sse;                   // null => /events 404s (no trail to tail)
+    private readonly string? _uiDir;                     // null => /ui stays fully gated + 404s (no GUI staged)
     private readonly Action? _onRequest;                 // the daemon's idle-clock stamp (decision 7)
 
     /// A policy body larger than this is refused with 413 before any parse — a
@@ -79,13 +80,14 @@ public sealed class ApiHost : IDisposable
 
     private ApiHost(
         int port, RendezvousPaths? rendezvous, ApiReadModel? readModel, ApiPolicyWriter? writer,
-        SseOptions? sse, Action? onRequest)
+        SseOptions? sse, Action? onRequest, string? uiDir)
     {
         Port = port;
         _rendezvous = rendezvous;
         _read = readModel;
         _writer = writer;
         _sse = sse;
+        _uiDir = uiDir;
         _onRequest = onRequest;
         // 256 bits from the CSPRNG, hex so it survives a header and JSON without
         // encoding ambiguity. Minted once per host — a superseded daemon's token
@@ -136,9 +138,10 @@ public sealed class ApiHost : IDisposable
     /// clock with it (ADR-0007 decision 7).
     public static ApiHost Start(
         int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null,
-        ApiPolicyWriter? writer = null, SseOptions? sse = null, Action? onRequest = null)
+        ApiPolicyWriter? writer = null, SseOptions? sse = null, Action? onRequest = null,
+        string? uiDir = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest);
+        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest, uiDir);
         if (host.TryBindOnce() is { } err) ExceptionDispatchInfo.Capture(err).Throw();
         _ = Task.Run(host.AcceptLoopAsync);
         return host;
@@ -155,9 +158,9 @@ public sealed class ApiHost : IDisposable
     public static ApiHost StartRetrying(
         int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null,
         ApiReadModel? readModel = null, ApiPolicyWriter? writer = null, SseOptions? sse = null,
-        Action? onRequest = null, TimeSpan? slowRetry = null)
+        Action? onRequest = null, TimeSpan? slowRetry = null, string? uiDir = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest);
+        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest, uiDir);
         if (host.TryBindOnce() is not { } err)
         {
             _ = Task.Run(host.AcceptLoopAsync);
@@ -338,14 +341,27 @@ public sealed class ApiHost : IDisposable
             // interacting with this daemon, and a warm daemon is capacity.
             _onRequest?.Invoke();
             var req = ctx.Request;
-            if (_auth.Evaluate(req.UserHostName, req.Headers["Origin"], req.Headers["Authorization"]) is { } rej)
+            // ADR-0008 decision 2: the /ui static shell is the ONE bearer-exempt
+            // surface — a top-level navigation cannot carry the Authorization
+            // header, so the shell must load without it and then authenticate
+            // itself (the fragment handoff). The exemption exists only when a UI
+            // dir is actually configured (a pure API host keeps every path fully
+            // gated), and it is bearer-ONLY: Host + Origin still apply via
+            // EvaluateShell, and the router below never sees a UI path, so no
+            // data route can ride the exemption.
+            var isUi = _uiDir is not null && IsUiPath(req.Url?.AbsolutePath ?? "");
+            var rejection = isUi
+                ? _auth.EvaluateShell(req.UserHostName, req.Headers["Origin"])
+                : _auth.Evaluate(req.UserHostName, req.Headers["Origin"], req.Headers["Authorization"]);
+            if (rejection is { } rej)
             {
                 if (rej.Status == 401)
                     ctx.Response.AddHeader("WWW-Authenticate", "Bearer");   // RFC 7235
                 await ApiJson.WriteAsync(ctx.Response, rej.Status, new { error = rej.Error });
                 return;
             }
-            await RouteAsync(ctx);
+            if (isUi) await ServeUiAsync(ctx);
+            else await RouteAsync(ctx);
         }
         catch (Exception ex)
         {
@@ -400,6 +416,102 @@ public sealed class ApiHost : IDisposable
         }
         await ApiJson.WriteAsync(ctx.Response, 404, new { error = "not_found", path });
     }
+
+    /// Exactly "/ui", "/ui/", or "/ui/<asset>" — nothing else is UI-shaped. A
+    /// prefix like "/uifoo" is NOT (the separator check), so no data route can
+    /// be named into the bearer exemption.
+    private static bool IsUiPath(string path) =>
+        path == "/ui" || path == "/ui/" || path.StartsWith("/ui/", StringComparison.Ordinal);
+
+    // GET /ui (ui-static-route, ADR-0008 decision 2): the daemon as a dumb
+    // static-byte server for the GUI shell — disk streaming from the staged
+    // ui/ dir, a small MIME map, and the traversal guard in ResolveUiFile.
+    // INERT by contract: this method may serve bytes from _uiDir and NOTHING
+    // else — no daemon state, no token, no computed content may ever be
+    // written here (a data leak into the unauthenticated shell would breach
+    // the gate; pinned by ApiUiRouteTests' byte-identity + token-absence
+    // assertions). Off the sacred hook/stdout path like the rest of the API.
+    private async Task ServeUiAsync(HttpListenerContext ctx)
+    {
+        if (ctx.Request.HttpMethod != "GET")
+        {
+            await ApiJson.WriteAsync(ctx.Response, 404, new { error = "not_found" });
+            return;
+        }
+        var abs = ctx.Request.Url?.AbsolutePath ?? "/ui";
+        var rel = abs is "/ui" or "/ui/" ? "index.html" : abs["/ui/".Length..];
+        var file = ResolveUiFile(_uiDir!, rel);
+        if (file is null)
+        {
+            await ApiJson.WriteAsync(ctx.Response, 404, new { error = "not_found" });
+            return;
+        }
+        var resp = ctx.Response;
+        resp.StatusCode = 200;
+        resp.ContentType = Mime(file);
+        // The shell must never cache stale against a redeployed ui/ (Vite hashes
+        // asset names, but index.html keeps its name across builds); loopback
+        // reads are ~free, so no-cache everywhere is the simple, safe uniform.
+        resp.AddHeader("Cache-Control", "no-cache");
+        await using var fs = new FileStream(
+            file, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, useAsync: true);
+        resp.ContentLength64 = fs.Length;
+        await fs.CopyToAsync(resp.OutputStream, _stop.Token);
+        resp.OutputStream.Close();
+    }
+
+    /// The traversal guard, factored pure so the security logic is unit-tested
+    /// directly (like ApiAuthGate): map a decoded request-relative path to a
+    /// file INSIDE uiDir, or null. Null on: rooted paths, NUL bytes, any
+    /// canonicalized escape from uiDir (dot-dot in any encoding the transport
+    /// decoded), the root itself, directories, and files that don't exist.
+    /// The prefix check appends the separator so a SIBLING dir sharing the
+    /// prefix ("ui2/") can never pass. HttpListener pre-decodes percent
+    /// escapes in AbsolutePath and Uri collapses literal dot segments before
+    /// we ever see them — this guard assumes NEITHER, so it holds even if the
+    /// transport's canonicalization changes underneath. Symlinks inside uiDir
+    /// are trusted: the dir's contents are our own staged build output.
+    internal static string? ResolveUiFile(string uiDir, string rel)
+    {
+        if (rel.Length == 0) rel = "index.html";
+        if (rel.Contains('\0') || Path.IsPathRooted(rel)) return null;
+        string root, full;
+        try
+        {
+            // Trim a trailing separator so the prefix check below (root + sep)
+            // is well-formed: GetFullPath("/x/ui/") keeps the slash on Linux,
+            // which would make `root + sep` == "/x/ui//" and fail EVERY file —
+            // a silently-dark GUI. Production passes no trailing slash, but a
+            // config that does must degrade to serving, not to 404-everything.
+            root = Path.GetFullPath(uiDir).TrimEnd(Path.DirectorySeparatorChar);
+            full = Path.GetFullPath(Path.Combine(root, rel));
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            return null;   // unmappable request path — never an escape
+        }
+        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            return null;
+        return File.Exists(full) ? full : null;
+    }
+
+    /// The closed MIME map for what a Vite build emits — data selects, code
+    /// implements (the house pattern); anything unrecognized is an opaque
+    /// download, never text/html (no content-sniffing a stray file into a
+    /// script-bearing type).
+    private static string Mime(string file) => Path.GetExtension(file).ToLowerInvariant() switch
+    {
+        ".html" => "text/html; charset=utf-8",
+        ".js" or ".mjs" => "text/javascript; charset=utf-8",
+        ".css" => "text/css; charset=utf-8",
+        ".json" or ".map" => "application/json; charset=utf-8",
+        ".svg" => "image/svg+xml",
+        ".png" => "image/png",
+        ".ico" => "image/x-icon",
+        ".woff2" => "font/woff2",
+        ".txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    };
 
     // PUT /api/v1/policy (put-policy-write, ADR-0007 decision 4): the API as
     // editor of the file. Read the body (bounded — a policy is KiB, and this is
