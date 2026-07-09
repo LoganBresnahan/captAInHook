@@ -8,6 +8,7 @@
     "gen": "node scripts/gen-types.mjs",
     "dev": "npm run gen && vite build --watch",
     "build": "npm run gen && tsc -b && vite build",
+    "test": "node --test src/*.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.3.4",
