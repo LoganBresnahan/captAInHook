@@ -560,8 +560,18 @@ run live*. The framework underneath is what exists today.
   /proc-cmdline residual recorded in scratch). `deploy-ui-staging`
   (2026-07-09; /deploy stages the committed ui/ beside the two executables —
   one swap, one bin.prev rollback, no npm at deploy; verification gains the
-  same-daemon /ui shell check). Suite 417 green twice. **Phase 2 complete —
-  the store contract (phase 3) then the SSE client are next.**
+  same-daemon /ui shell check). Suite 417 green twice. Phase 2 complete.
+  `zustand-store` (2026-07-09; the contract slice, its own deliberate pass —
+  one provider-less store (`web/src/store.ts`), slices 1:1 with decision 1's
+  screens + session/stream; `SseFrame` mirrors the server SSE grammar (opaque
+  id per ADR-0009 d2, id-less gaps), `PolicyVerdict` mirrors the closed
+  `PolicyWriteOutcome`; `foldTrace` is the one reducer — reset clears and
+  supersedes the client truncation count, gaps visible, unparsable lines
+  render raw, TRACE_CAP counts evictions; trail stays schema-blind
+  (all-optional `TrailLine`). App/main are the first store consumers; reducer
+  tested pure via node:test (zero new deps); re-driven in headless chromium.
+  **Phase 3 complete — phase 4 next: `sse-fetch-client` (the hard slice) ∥
+  `policy-editor-island`.**
 
 ## Later
 
