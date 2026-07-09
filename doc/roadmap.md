@@ -570,8 +570,29 @@ run live*. The framework underneath is what exists today.
   render raw, TRACE_CAP counts evictions; trail stays schema-blind
   (all-optional `TrailLine`). App/main are the first store consumers; reducer
   tested pure via node:test (zero new deps); re-driven in headless chromium.
-  **Phase 3 complete — phase 4 next: `sse-fetch-client` (the hard slice) ∥
-  `policy-editor-island`.**
+  Phase 3 complete.
+  `sse-fetch-client` + `policy-editor-island` (2026-07-09, the parallel pair,
+  both **adversarially verified against live daemons** per the plan. SSE
+  client (`web/src/sse.ts`): pure protocol layer under a reconnect loop — all
+  five contracts held under attack (opaque-cursor resume zero-dup/zero-loss
+  across 8 real TCP cuts; gap-never-advances proven against a real
+  57,853-line eviction with all 60k lines recovered; reset re-anchors incl.
+  cut-at-the-reset ⇒ genesis replay exactly-once; 401⇒dead-stops vs
+  drop/drain⇒retry-resumes; UTF-8 through 1–5-byte chunk slices). The verify
+  CAUGHT a real server defect — the from-now anchor raced the first flush,
+  silently losing a line appended at client-live; fixed by anchoring the
+  subscription BEFORE the retry-hint flush (anchor ≤ headers ≤ live by
+  construction) — and two client hardenings landed (reader.cancel in a
+  finally so a throwing subscriber can't leak the stream and pin the daemon's
+  idle-defer counter; CR-free trail note). Policy editor (`policy.ts` +
+  `PolicyPanel.tsx`): the ETag discipline's three pins all held (If-Match on
+  every PUT once known — stale tag 412s, file untouched; 200's tag adopted,
+  no re-GET; 412's current adopted, draft preserved); verify hardenings: a
+  tagless 200 maps to null + GET re-seed, never `\"\"` (the server ignores an
+  empty If-Match — probed live, it would write blind); submitPolicy never
+  throws; saving flag released in a finally. 24 web unit tests; chromium
+  drive incl. save-twice ETag adoption; suite 417 green twice ×2 runs.
+  **Phase 4 complete — phase 5 next: `read-panels-islands`.**
 
 ## Later
 
