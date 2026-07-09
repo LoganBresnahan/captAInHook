@@ -540,6 +540,28 @@ run live*. The framework underneath is what exists today.
   Vite base '/ui/', outDir → the committed `ui/`; Node dev-only, built assets
   committed; drove the real built ui/ through the live daemon route
   end-to-end). Phase 1 complete.
+  `dto-schema-codegen` + `token-handoff-bootstrap` (2026-07-09, one
+  frontend-plumbing session per the plan's batching note. Codegen:
+  `ApiSchema.Export` (BCL `JsonSchemaExporter`; camelCase wire casing,
+  NRT-honest nullability, strict numbers) → checked-in
+  `web/schema/api.schema.json` pinned by `ApiSchemaTests` — the drift detector;
+  `CAPTAINHOOK_SCHEMA_UPDATE=1` regenerates — → `gen-types.mjs` derives
+  `src/api.gen.ts` in every npm build; DTO change ⇒ regenerate both, same
+  commit. Handoff: `web/src/auth.ts` — #t= fragment → sessionStorage →
+  immediate replaceState scrub → Bearer on every apiFetch; fresh hash beats
+  stale stash; 401/403 ⇒ the no-self-heal 'session ended' state. Driven
+  end-to-end in headless chromium against a real isolated daemon: fragment
+  parsed, hash scrubbed, stash survives reload, /status renders live, fresh
+  tab inert). `ui-cli-verb` (2026-07-09; `Mode.Ui` in the wire enum + shim's
+  loud refusal, `UiVerb` reads the 0600 api.json — absent ⇒ clear refusal,
+  never a spawn — and opens `/ui#t=<token>` via the OS opener; the fragment
+  shape is pinned against the shell bootstrap's regex; the token reaches the
+  browser and NOWHERE else (stdout/stderr asserted clean); the argv
+  /proc-cmdline residual recorded in scratch). `deploy-ui-staging`
+  (2026-07-09; /deploy stages the committed ui/ beside the two executables —
+  one swap, one bin.prev rollback, no npm at deploy; verification gains the
+  same-daemon /ui shell check). Suite 417 green twice. **Phase 2 complete —
+  the store contract (phase 3) then the SSE client are next.**
 
 ## Later
 
