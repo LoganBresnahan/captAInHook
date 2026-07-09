@@ -523,6 +523,23 @@ run live*. The framework underneath is what exists today.
   route's traversal guard + gate split, the SSE fetch client's
   resume/reset/gap + dead-credential logic, and the policy editor's ETag
   lifecycle; no ultracode). Tick slices here as they land.
+  Slices landed: `ui-static-route` + `inert-shell-tests` (2026-07-09; one
+  commit — the `GET /ui[/*]` static route in `Api/`, the daemon's ONE
+  bearer-exempt surface, pinned the instant it opens. `ApiAuthGate` split into
+  `EvaluateShell` (Host+Origin only) so /ui and /api/v1/* can't drift on
+  transport policy; exemption bearer-ONLY and scoped to exactly /ui[/...]
+  (`IsUiPath` on the router's own AbsolutePath). Pure `ResolveUiFile` traversal
+  guard — rooted/NUL/escape/dir/missing ⇒ null, separator-appended prefix so a
+  sibling ui2/ can't pass, trailing-slash-root trimmed. 41 tests: guard proven
+  against files that REALLY exist outside ui/, traversal probed over a raw
+  socket, inert contract (byte-identical authed/unauthed, token never served).
+  **Adversarially verified** — no escape under any encoded/mixed form
+  (HttpListener collapses dot-segments pre-gate ⇒ /ui/../api/v1/status meets the
+  full 401); trailing-slash hardening applied, symlinks-inside-ui trusted per
+  d2). `web-scaffold` (2026-07-09; the `web/` React19+Vite6+Zustand5 project,
+  Vite base '/ui/', outDir → the committed `ui/`; Node dev-only, built assets
+  committed; drove the real built ui/ through the live daemon route
+  end-to-end). Phase 1 complete.
 
 ## Later
 
