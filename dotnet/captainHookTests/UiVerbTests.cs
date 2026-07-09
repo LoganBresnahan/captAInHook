@@ -72,6 +72,29 @@ public class UiVerbTests : IDisposable
     }
 
     [Fact]
+    public void LauncherCommand_OnWsl_HandsOffToTheWindowsShell()
+    {
+        // WSL's bare xdg-open is a silent no-op; the fix hands the URL to
+        // powershell Start-Process (opens the Windows default browser, which
+        // reaches 127.0.0.1 via WSL2 localhost forwarding).
+        var url = "http://127.0.0.1:4665/ui#t=" + Token;
+        var (cmd, args) = UiVerb.LauncherCommand(url, isWsl: true);
+        Assert.Equal("powershell.exe", cmd);
+        Assert.Contains("-NoProfile", args);
+        // The URL (fragment and all) rides one Start-Process argument verbatim.
+        Assert.Contains(args, a => a.Contains("Start-Process") && a.Contains(url));
+    }
+
+    [Fact]
+    public void LauncherCommand_PlainLinux_UsesXdgOpen()
+    {
+        // A non-WSL Linux desktop has a real xdg-open — unchanged.
+        var (cmd, args) = UiVerb.LauncherCommand("http://x/ui#t=abc", isWsl: false);
+        Assert.Equal("xdg-open", cmd);
+        Assert.Equal(["http://x/ui#t=abc"], args);
+    }
+
+    [Fact]
     public void Parse_UiVerb_IsUiMode()
     {
         Assert.Equal(Mode.Ui, Invocation.Parse(["ui"]).Mode);

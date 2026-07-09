@@ -70,7 +70,11 @@ A browser can't read the 0600 `api.json`, so it must be *handed* the token, and
 the handoff must leak it into neither a server log nor browser history. The
 `captainHook ui` verb (`UiVerb`, collapsed-mode, no daemon of its own) reads
 `api.json` and opens the OS browser at `…/ui#t=<token>` — the **fragment**, which
-is sent to no server and written to no access log. On load, `bootstrapToken()`:
+is sent to no server and written to no access log. The opener is WSL-aware
+(`UiVerb.LauncherCommand`): on WSL2 a bare `xdg-open` is a silent no-op, so the
+launcher detects WSL and hands the URL to the Windows shell's `Start-Process`,
+which opens the real default browser (the daemon's `127.0.0.1` is reachable via
+WSL2 localhost forwarding). On load, `bootstrapToken()`:
 
 1. reads `location.hash`; 2. stashes the token in `sessionStorage` (survives a
 reload, dies with the tab); 3. **immediately** `history.replaceState`s the hash
@@ -213,7 +217,7 @@ residual all-cores-pegged transient.
 | `/ui` static route, bearer-exempt split, MIME map, traversal guard | `dotnet/captainHook/Api/ApiHost.cs` (`ServeUiAsync`, `IsUiPath`, `ResolveUiFile`, `Mime`, the `HandleAsync` split) |
 | the bearer-exempt Host+Origin gate half | `dotnet/captainHook/Api/ApiAuthGate.cs` (`EvaluateShell`) |
 | DTO → JSON-Schema exporter | `dotnet/captainHook/Api/ApiSchema.cs` (`Export`) |
-| `captainHook ui` token-handoff verb | `dotnet/captainHook/Api/UiVerb.cs` (`BuildUrl`, `RunAsync`, `DefaultLauncher`); `Mode.Ui` in `captainHookWire/Cli.cs`; `Program.cs` case; shim refusal in `captainShim/ShimMain.cs` |
+| `captainHook ui` token-handoff verb | `dotnet/captainHook/Api/UiVerb.cs` (`BuildUrl`, `RunAsync`, `LauncherCommand`/`IsWsl`/`DefaultLauncher`); `Mode.Ui` in `captainHookWire/Cli.cs`; `Program.cs` case; shim refusal in `captainShim/ShimMain.cs` |
 | `uiDir` wiring (defaults beside the executables) | `dotnet/captainHook/Core/DaemonHost.cs` |
 | frontend project (React+Vite+Zustand, `base:'/ui/'`, outDir→ `ui/`) | `web/vite.config.ts`, `web/package.json`, `web/index.html` |
 | token bootstrap (fragment→sessionStorage→scrub→bearer) | `web/src/auth.ts` (`bootstrapToken`, `apiFetch`, `currentToken`, `clearToken`) |

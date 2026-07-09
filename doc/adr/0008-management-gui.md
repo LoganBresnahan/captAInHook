@@ -116,6 +116,18 @@ decides the whole shape:
    file and opens the browser" shape ADR-0007 d6 anticipated, hardened against
    the two leak channels (query-in-logs, token-in-history).
 
+   *Amendment (2026-07-09): the OS opener is WSL-aware.* On WSL2 a bare
+   `xdg-open` is a **silent no-op** — there is no Linux browser and nothing wires
+   it to the Windows one, so it exits 0 having done nothing and the verb would
+   falsely report success. Since the daemon binds `127.0.0.1`, which Windows
+   reaches via WSL2's localhost forwarding, the launcher detects WSL
+   (`WSL_DISTRO_NAME` / `WSL_INTEROP` / `microsoft` in `/proc/version`) and hands
+   the URL to the Windows shell's `Start-Process` instead — opening the real
+   default browser. The platform branch is factored pure (`UiVerb.LauncherCommand`)
+   and unit-tested; the fragment-token shape and the argv-exposure residual are
+   unchanged (the token now rides `powershell.exe`'s argv rather than
+   `xdg-open`'s — same `/proc/<pid>/cmdline` exposure, same hardening candidate).
+
 4. **The browser consumes `/events` via fetch-streaming, reconnect hand-rolled
    off `Last-Event-ID` — and it distinguishes a *transient drop* from a *dead
    credential*.** Not `EventSource` (Context fact 2). Two failure modes, two

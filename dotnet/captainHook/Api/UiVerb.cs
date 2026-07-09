@@ -71,19 +71,50 @@ public static class UiVerb
     {
         try
         {
-            var (cmd, args) =
-                OperatingSystem.IsWindows() ? ("cmd", $"/c start \"\" \"{url}\"") :
-                OperatingSystem.IsMacOS() ? ("open", url) :
-                ("xdg-open", url);
-            return Process.Start(new ProcessStartInfo(cmd, args)
+            var (cmd, args) = LauncherCommand(url, IsWsl());
+            var psi = new ProcessStartInfo(cmd)
             {
                 RedirectStandardOutput = true,   // openers can chatter; not our stdout's business
                 RedirectStandardError = true,
-            }) is not null;
+            };
+            // ArgumentList (not the single Arguments string): each arg crosses
+            // verbatim, so the URL's `#`/`&` and the WSL branch's quoted
+            // Start-Process argument survive without a second round of shell
+            // parsing mangling them.
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            return Process.Start(psi) is not null;
         }
         catch
         {
             return false;
         }
+    }
+
+    /// True on WSL, where a bare `xdg-open` is a silent no-op — there is no
+    /// Linux browser and no handler wired to the Windows one, so the "opener"
+    /// exits 0 having done nothing and the verb would falsely report success.
+    /// WSL exposes itself three ways; any one is enough.
+    internal static bool IsWsl() =>
+        Environment.GetEnvironmentVariable("WSL_DISTRO_NAME") is not null
+        || Environment.GetEnvironmentVariable("WSL_INTEROP") is not null
+        || (OperatingSystem.IsLinux() && SafeReadProcVersion().Contains("microsoft", StringComparison.OrdinalIgnoreCase));
+
+    private static string SafeReadProcVersion()
+    {
+        try { return File.Exists("/proc/version") ? File.ReadAllText("/proc/version") : ""; }
+        catch { return ""; }
+    }
+
+    /// The (command, argv) for opening `url`, factored pure so the platform
+    /// branching is unit-tested (like ApiAuthGate / ResolveUiFile). On WSL the
+    /// daemon binds 127.0.0.1, which Windows reaches via WSL2's localhost
+    /// forwarding, so handing the URL to the Windows shell's `Start-Process`
+    /// opens the real default browser — where a native `xdg-open` does nothing.
+    internal static (string Cmd, string[] Args) LauncherCommand(string url, bool isWsl)
+    {
+        if (OperatingSystem.IsWindows()) return ("cmd", ["/c", "start", "", url]);
+        if (OperatingSystem.IsMacOS()) return ("open", [url]);
+        if (isWsl) return ("powershell.exe", ["-NoProfile", "-Command", $"Start-Process '{url}'"]);
+        return ("xdg-open", [url]);
     }
 }
