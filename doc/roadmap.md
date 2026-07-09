@@ -604,8 +604,23 @@ run live*. The framework underneath is what exists today.
   display logic (`src/format.ts`) unit-tested. App slimmed to the shell; one
   theme-aware stylesheet. 31 web unit tests; chromium drive of all panels +
   trace ingest/filter, eyeballed light+dark; engine untouched, C# 417 green.
-  **Phase 5 complete — phase 6 next: `playwright-e2e` (the daemon fixture),
-  then phase 7's flow-doc capstone.**
+  Phase 5 complete.
+  `playwright-e2e` (2026-07-09; a @playwright/test suite in web/ — 10 tests, 5
+  files — driving the daemon's own same-origin /ui end to end: the shell's
+  bearer-exempt-but-inert boundary, the fragment token handoff (live/scrub/
+  reload/bad-token-dead), the read panels over real daemon data, the live
+  trace ingesting appended lines with dispatch-chip + text filters, and the
+  policy editor's write path incl. the ETag-adoption pin. The reasoning is the
+  daemon fixture: a fresh daemon per test, fully isolated from the live
+  ~/.captainHook tree (temp XDG_RUNTIME_DIR/log/harness/dispatch), readiness by
+  the 0600 api.json (polled, not slept), teardown SIGTERM-by-PID → await exit →
+  SIGKILL; globalSetup builds the engine + stages the fresh ui/. The phase's
+  named flakiness bit — the daemon's F#-actor warm starved under the browser's
+  CPU load (a 58s stall diagnosed) — and was root-caused + fixed three ways
+  (await-true-exit so drainers don't pile up, a thread-pool floor, one retry
+  for the all-cores-pegged residual; proven green under deliberate 4-core
+  saturation). Also driven headed via WSLg. Node/@playwright/test dev-only.
+  **Phase 6 complete — phase 7 next: `flow-doc-management-gui`, the capstone.**
 
 ## Later
 
