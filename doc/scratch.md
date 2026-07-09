@@ -43,6 +43,60 @@ Running list — jot ideas here, promote to DESIGN.md / real tasks when they fir
       every atomic rename-replace) or ctime, via a small `stat` P/Invoke (host is
       JIT, not the AOT leaf). See doc/platform.md § File locking (mtime resolution).
 
+## Use-case catalogue — "what can I do with captAInHook?" (README material)
+
+Raw material for a README section that answers *"what is this for?"* Organizing
+insight: **deterministic-data-pull + `Inject` is just ONE cell of a grid** — one
+Effect verb × one event × the deterministic-vs-LLM axis. The other four verbs are
+each an unexploited category. Frame the README by the closed Effect set (our own
+vocabulary) rather than a flat feature list.
+
+### By Effect verb
+
+- **`Decide` — guardrails & policy gates (PreToolUse).** Seeded by ADR-0005. Deny
+  destructive bash; gate writes to protected paths; secret-scan tool *inputs*
+  before they run; require approval for outbound network; rate-limit expensive
+  tools; block `--force` push to main. Our angle vs. the harness's native
+  permissions: **portable across harnesses, hot-reloadable, every decision lands
+  in the trail as a `Decide` trace.**
+- **`Replace` — rewrite the payload in flight.** Redact secrets/PII from prompts
+  before the model sees them; scrub/truncate giant tool outputs before they
+  re-enter context (token-budget win); expand house macros/aliases; canonicalize
+  inputs; enforce a structured-output schema on the way back. Quietest verb,
+  probably the most under-leveraged.
+- **`Background` — fire-and-forget side effects & observability.** The trail is
+  already JSONL — lean in. Per-tool telemetry + cost/token accounting to a
+  dashboard; audit stream to a SIEM; Slack/webhook on `Stop`; trigger CI or a
+  re-index on file writes; warm a cache. None of it touches model output ⇒ pure
+  `Background`.
+- **`Inject`, non-data-source.** Beyond data pulls: git/worktree state, ticket or
+  on-call status, budget-remaining warnings, staleness flags ("this file changed
+  since you last read it"), prior-decision reminders, RAG memory.
+
+### Two cross-cutting multipliers
+
+- **LLM-backed handlers — the actual thesis (DESIGN.md).** Splice an *LLM*
+  subsystem at a guaranteed seam, deterministically supervised. Semantic policy
+  ("does this bash command *look* destructive?" as `Decide`); prompt
+  classification → route to a different harness/model; auto-summarize long tool
+  output (`Replace`); self-critique injected at `Stop` ("you claimed done — did
+  tests actually run?"). The supervision/actor layer is what makes an unreliable
+  LLM call safe in the hot path.
+- **Lifecycle-event-specific plays** (free from the event set). `SessionStart`:
+  warm the daemon, health-check deps, auto-`/orient` context load. `Stop` /
+  `SubagentStop`: verification gates — block "done" until the suite is green;
+  aggregate subagent results. `PreCompact`: preserve critical state with our own
+  summarization before the harness compacts.
+
+### Highest-leverage under-explored picks (for the demo narrative)
+
+- **`Background` observability** — the trail is already the substrate; shortest
+  path to a demo people *feel*.
+- **LLM-backed `Decide`** — the only category that genuinely *requires* our
+  supervision story, so it's the most defensible differentiator vs. plain shell
+  hooks. Deterministic-inject is the safe opener; these two are where the
+  "composition primitive" claim earns its keep.
+
 ## Security follow-ups
 
 - [ ] **Trail-at-rest hardening** (surfaced by ADR-0007 auth-token-origin's

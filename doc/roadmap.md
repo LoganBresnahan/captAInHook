@@ -503,6 +503,26 @@ run live*. The framework underneath is what exists today.
   Playwright harness (Microsoft.Playwright, same xunit suite): the DOM +
   accessibility tree is the agent-legible surface — semantic locators and
   auto-waiting beat TUI screen-scraping for the agentic dev loop.
+  Design recorded in **ADR-0008** (accepted 2026-07-09): observability-first
+  v1 — five screens (live trace / supervision / policy editor / harnesses /
+  status) over the EXISTING API, no new data endpoints, no control verbs
+  (catalog + one-click install defer to item 10's trust model + the install
+  ops); a separate `web/` React+Vite project served same-origin from a disk
+  `ui/` dir (the third /deploy artifact; Node dev-only, built assets
+  committed); token handed off via URL *fragment* by a new `captainHook ui`
+  verb; islands + one Zustand store, TS types generated from the C# DTOs,
+  full-reload dev loop (HMR reserved). Playwright E2E lives in `web/`
+  driving the daemon's own `/ui` — supersedes the
+  Microsoft.Playwright-in-xunit leaning above. Trail growth split out to
+  **ADR-0009**: the opaque-cursor resume contract is honored by this GUI's
+  SSE client now; rotation/backfill deferred until growth bites.
+  Build order: ADR-0008 § Implementation plan (2026-07-09; 13 slices → 7
+  phases; critical path web-scaffold → dto-schema-codegen → zustand-store →
+  sse-fetch-client → read-panels-islands → playwright-e2e →
+  flow-doc-management-gui; adversarial verify on exactly 3 slices — the /ui
+  route's traversal guard + gate split, the SSE fetch client's
+  resume/reset/gap + dead-credential logic, and the policy editor's ETag
+  lifecycle; no ultracode). Tick slices here as they land.
 
 ## Later
 
