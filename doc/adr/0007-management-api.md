@@ -101,7 +101,9 @@ trust surface is N1 of ADR-0006 made worse.
      pays a dividend: one reader gets the whole story. Mechanics: portable
      stat-poll tail (inotify is Linux-only; hook rates make polling cheap);
      SSE event id = byte offset in the file, so `Last-Event-ID` reconnects
-     resume without loss.
+     resume without loss. *(id semantics superseded by ADR-0009 d2 — treat the
+     id as an opaque resume cursor, not a byte offset; this "byte offset" wording
+     is amended when trail segmentation lands.)*
    - **Backpressure as ADR-0004 d6 reserved it:** a bounded Channel per
      subscriber; a slow consumer gets drop-oldest plus an explicit gap
      marker event (count of dropped lines) rather than growing the daemon or

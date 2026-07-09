@@ -1,7 +1,8 @@
 # ADR-0008 — Management GUI: an observability surface served same-origin by the daemon
 
-**Status:** Proposed
-**Date:** 2026-07-08
+**Status:** Accepted
+**Date:** 2026-07-08 (accepted 2026-07-09; both open questions resolved — generated
+TS types (d6), full-reload dev loop (d7); trail rotation split out to ADR-0009)
 
 ## Context
 
@@ -116,12 +117,28 @@ decides the whole shape:
    the two leak channels (query-in-logs, token-in-history).
 
 4. **The browser consumes `/events` via fetch-streaming, reconnect hand-rolled
-   off `Last-Event-ID`.** Not `EventSource` (Context fact 2). On a dropped
-   stream — including a 401/403, which means the daemon rotated under a cutover —
-   the client **re-reads `api.json`** (new token, maybe new port) rather than
-   hammering the dead credential, then resumes from its last byte-offset id. A
-   `reset` frame re-anchors to 0; a `gap` frame is surfaced honestly in the trace
-   (the backpressure contract, ADR-0007 d5).
+   off `Last-Event-ID` — and it distinguishes a *transient drop* from a *dead
+   credential*.** Not `EventSource` (Context fact 2). Two failure modes, two
+   responses:
+   - **Transient drop, token still valid** (a network blip, a heartbeat gap): the
+     client reconnects and resumes from its last id — treated as an **opaque
+     resume cursor** (ADR-0009 d2), never a file offset the client reasons about,
+     so future trail segmentation stays non-breaking. A `reset` frame re-anchors to
+     0; a `gap` frame is surfaced honestly in the trace (the backpressure contract,
+     ADR-0007 d5).
+   - **401/403 — the daemon rotated under a cutover** (a `/deploy` swapped in a
+     successor with a fresh token, maybe a fresh port): the browser **cannot
+     self-heal.** It has no filesystem access, so it cannot re-read the 0600
+     `api.json` for the new credential, and the daemon must NOT embed the token
+     into the unauthenticated `/ui` shell to compensate — that would let any
+     co-located reader `curl /ui` and lift it, collapsing the 0600 trust root
+     (decision 2's inert-shell rule). So on a 401/403 the tab stops retrying and
+     surfaces **"session ended — re-run `captainHook ui`"**; the CLI verb
+     (decision 3) is the only path back to a live credential. Acceptable because
+     the GUI is a local operator tool, not an unattended dashboard — a cutover is
+     rare and a human is present. *(An earlier draft had the client "re-read
+     `api.json`" here; that is a CLI/test-client capability the browser does not
+     have — corrected 2026-07-09.)*
 
 5. **History is v1's one honest gap, and it rides the existing resume, not a new
    endpoint.** The trace opens "from now" (no `Last-Event-ID` ⇒ current end).
@@ -131,6 +148,16 @@ decides the whole shape:
    `?tail=N` affordance on `/events`, or a small `GET /trace?tail=N`) is the
    single most likely first addition and is called out as a revisit trigger, not
    built speculatively.
+
+   **This gap is entangled with a storage fact the GUI exposed: the trail file is
+   append-only and unbounded** (`Logging.fs` `File.AppendAllText`; no rotation —
+   `TrailTail` even notes rotation is "rare and manual"). Bounded backfill and
+   bounded *storage* are two halves of one problem — the resume id is an absolute
+   byte offset into that single ever-growing file, so segment rotation and the
+   backfill endpoint must be co-designed. That work is **ADR-0009** (trail
+   rotation + the global-monotonic resume id + retention horizon → `reset`), a
+   storage-layer decision amending ADR-0007 d5; this GUI is its first consumer.
+   ADR-0008 stays live-from-now and defers the rest to ADR-0009.
 
 6. **Stack: React + Vite, in a `web/` project — and it costs the architecture
    nothing.** The one native .NET web-UI option is Blazor, and it fights this
@@ -146,15 +173,21 @@ decides the whole shape:
    **React + Vite** — best-in-class Playwright/dev-loop synergy, and it refreshes
    the owner's React (an explicit project goal). Frontend deps kept deliberately
    lean to honor the project's minimalism (React + Vite + a thin SSE/fetch layer;
-   resist a state-manager / UI-kit pile-on — **decision 8** makes that concrete:
-   coordination rides a native event bus, not a store library), no CDN (loopback
-   is offline by nature) — the built bundle is self-contained.
+   resist a state-manager *pile-on* — **decision 8** lands on **one ~1KB store**
+   (Zustand), not a Redux stack and not a hand-rolled bus), no CDN (loopback is
+   offline by nature) — the built bundle is self-contained.
 
-   The one thing a C# UI would have bought — sharing the DTO records
-   (`StatusDto`, `PolicyDto`, …) with zero drift — is a small, bounded cost in
-   React: the data surface is ~6 DTOs and v1 adds no new data endpoint, so
-   hand-written TS interfaces (or codegen from the C#) carry near-zero churn.
-   *Open question (owner deciding): hand-written vs generated TS types.*
+   **TS types are generated from the C# DTOs, not hand-written** (resolved: the
+   owner wants the widely-used shape, and codegen makes drift a build failure, not
+   a silent bug). Because the server is a dumb `HttpListener` — no ASP.NET, so no
+   OpenAPI/Swagger for NSwag to consume — the natural pipeline is BCL-native:
+   .NET 10's `System.Text.Json.Schema.JsonSchemaExporter` emits JSON Schema from
+   the DTO records (a small build step or a test, adding no engine dependency),
+   and the `web/` build runs `json-schema-to-typescript` over it. The C# DTO is
+   the single source of truth; the ~6-DTO, no-new-endpoint surface keeps the
+   schema tiny. One cost: the `web/` build gains a build-order dependency on a
+   schema artifact the engine emits (checked into the repo, regenerated on DTO
+   change).
 
 7. **The dev loop is same-origin by default, HMR is an opt-in escape hatch.**
    The agent-driven Playwright loop is a first-class goal, and it decides how
@@ -169,48 +202,56 @@ decides the whole shape:
      403s it. Enabling it requires a **dev-only, env-gated Origin allowance**
      (e.g. `ApiAuthGate` honors a `CAPTAINHOOK_API_DEV_ORIGIN` *only* when the
      env var is set, never in a deployed daemon) — a bounded, explicit amendment
-     to ADR-0007's auth model. Reserved, not built, until the full-reload loop is
-     shown to chafe. *Open question (owner deciding): ship the HMR allowance in
-     v1, or start with the no-hole full-reload loop?*
+     to ADR-0007's auth model.
 
-8. **Frontend architecture: isolated islands over an event bus, not one
+   **Resolved: v1 ships the full-reload loop; HMR stays reserved, not built.** The
+   Playwright/agent loop — the first-class goal here — gets *nothing* from HMR
+   (Playwright navigates fresh each run, so HMR's state-preservation is a purely
+   human ergonomic), this is ~5 panels so the reload penalty is trivial, and the
+   full-reload loop keeps a security-surface API with **zero auth holes**. The
+   env-gated allowance is reserved for if hand-hacking the UI is later shown to
+   chafe — a reversible flip, not a v1 cost (revisit trigger).
+
+8. **Frontend architecture: isolated islands over one shared store, not a
    prop-threaded tree.** *How* the React is written, decided as deliberately as
    the stack. The default React shape — a single `<App>` root, shared state lifted
    to the top, props threaded down through components that don't care about them —
-   is rejected for this UI in favor of the **islands + bus** style: each screen in
-   decision 1's table mounts as its own `createRoot` (DOM siblings with no shared
-   React parent), owns its local view state, and coordinates with the others
-   *only* through an event bus that lives outside the tree. This is the shape the
-   owner already runs in the deepseek-moby project (isolated declarative
-   components over a `CustomEvent` bus), and — the load-bearing point — it is the
-   concrete realization of decision 6's "no state-manager" minimalism, not a
-   departure from it.
+   is rejected for this UI in favor of **islands + an external store**: each screen
+   in decision 1's table mounts as its own `createRoot` (DOM siblings with no
+   shared React parent), owns its local view state, and coordinates with the
+   others *only* through a single store that lives outside the tree. This keeps
+   the property the owner wants (isolated declarative components, no giant tree, no
+   prop drilling — the deepseek-moby taste) while landing on the widely-used tool
+   rather than a bespoke bus.
 
-   - **The bus is native, zero-dependency.** A thin `EventTarget` subclass
-     (`emit` / `on`, where `on` returns its own unsubscribe) — browser API, no
-     library. Two React bridges sit on top: **`useBusEvent`** for transient
-     signals (a `useEffect` that subscribes and returns the unsubscribe as
-     cleanup) and **`useBusState`** for a persistent value many islands read,
-     built on **`useSyncExternalStore`** — React's own first-class primitive for
-     "subscribe to a source of truth outside the tree," the same one Redux /
-     Zustand / Jotai wrap. So the style is against React's *default* but squarely
-     on its *grain*: it refreshes the owner's React on the real coordination
-     primitive rather than the props-and-Context path.
+   - **The store is Zustand, chosen over a hand-rolled `EventTarget` bus.** Both
+     kill the two things the owner objects to — the giant tree and prop drilling —
+     identically, because both are just `useSyncExternalStore` (React's own
+     primitive for "subscribe to a source of truth outside the tree") underneath;
+     Zustand *is* that primitive, shrink-wrapped. It wins on three counts: it is
+     what the ecosystem uses (the owner's stated reason, same as generated types —
+     transferable, not bespoke), it is ~1KB and needs **no provider** (so islands
+     each subscribe to the same store independently, no wrapping context), and it
+     is *less* code than hand-rolling atoms + fold logic. The style is against
+     React's *default* but squarely on its *grain*.
 
-   - **SSE is the bus's natural upstream.** The fetch-streaming client
-     (decision 4) does not hand frames down a prop tree — it `emit`s each
-     dispatch / `reset` / `gap` frame onto the bus, and the Live-trace /
-     Supervision / Status islands subscribe to what they care about. The server is
-     *already* an event stream (ADR-0007's `/events`); islands + bus preserve that
-     nature end-to-end instead of flattening it into request/response state.
-     `PUT /policy`'s verdict (decision 1) likewise returns as a bus event the
-     Policy island renders.
+   - **The UI is state-shaped, not event-shaped — so a store fits better than a
+     bus.** Almost everything rendered is *state* (current status / policy /
+     handlers, the accumulating trace list), not fire-and-forget signals. The one
+     genuine event source is the SSE stream, and the clean pattern is to **fold
+     each frame into the store** in the `onMessage` handler (decision 4): one
+     reducer, one place state ever mutates — cleaner than a bus's N listeners
+     mutating N things. Islands subscribe to the slices they care about
+     (`useStore(s => s.trace)`); `PUT /policy`'s verdict (decision 1) lands in the
+     store the same way. The server's event nature (ADR-0007's `/events`) is
+     preserved *into* the store, then read as state.
 
    - **Props are not purged — drilling is.** A leaf taking a prop or two from its
-     immediate parent *within* one island stays; the bus is for cross-island and
-     "far" state, exactly the threading the owner objects to. The discipline the
-     style demands: events named per concern and atoms kept few, or an event bus
-     rots into implicit spaghetti (the negative below).
+     immediate parent *within* one island stays; the store is for cross-island and
+     "far" state, exactly the threading the owner objects to. If a genuinely
+     transient cross-island signal ever appears (a toast), a ~10-line `EventTarget`
+     alongside is fine — but it is not built speculatively, and a store slice
+     covers nearly every case.
 
 ## Consequences
 
@@ -223,12 +264,13 @@ decides the whole shape:
   `web/` React+Vite project gets its native toolchain and the Playwright loop the
   agent-dev goal wants — an asset rebuild, not an engine rebuild, and the UI's
   release cadence decouples from the engine's double-green + swap.
-- **Coordination adds no dependency and keeps the tree shallow.** The islands+bus
-  style (decision 8) realizes decision 6's no-state-manager minimalism with a
-  native `EventTarget` + `useSyncExternalStore` — no store library, no prop
-  drilling — and the SSE stream stays an event stream all the way to render, and
-  each island mounts and E2E-tests alone (a natural fit for a panel-at-a-time
-  Playwright loop).
+- **Coordination is one ~1KB store and the tree stays shallow.** The islands +
+  Zustand style (decision 8) keeps decision 6's minimalism (one tiny, provider-
+  less store — not a Redux stack) while killing prop drilling; SSE frames fold
+  into the store in one reducer (decision 4), and each island mounts and
+  E2E-tests alone (a natural fit for a panel-at-a-time Playwright loop). The store
+  is `useSyncExternalStore` underneath, so the style is on React's grain and
+  serves the owner's refresh-React goal on a tool the ecosystem actually uses.
 - **Same-origin (default loop) keeps the auth model strict and CORS absent.** The
   Origin gate stays exactly as hardened; there is no second origin to allow, no
   preflight — unless the HMR escape hatch (decision 7) is deliberately enabled in
@@ -238,9 +280,12 @@ decides the whole shape:
   query-param shape would open.
 - **No new write-authz surface.** Observability + the existing policy write only,
   so item 10's trust model stays legitimately deferred.
-- **Cutover is already handled.** The fetch-streaming client re-discovers on
-  401/403, so a deploy that rotates the daemon reconnects the tab to the
-  successor with no special-casing (ADR-0007's cutover pays this dividend).
+- **Transient stream drops self-heal; a *cutover* asks for a re-launch.** The
+  fetch-streaming client resumes a network blip from its last id with the same
+  token (ADR-0007's resume pays this dividend). A cutover that rotates the
+  credential (401/403) is honestly *not* self-healing — the browser can't read the
+  new `api.json` — so the tab prompts "re-run `captainHook ui`" (decision 4). A
+  clean line, not a hidden gap: a local operator tool with a human present.
 
 ### Negative
 
@@ -250,28 +295,35 @@ decides the whole shape:
   serve-within-one-dir.
 - **A third deploy artifact.** The `ui/` dir stages into the `/deploy` swap
   beside the two executables. Not wire-coupled (no skew hazard), but one more
-  thing that must move, and a Node/npm build prerequisite creeps toward the repo
-  for a *source* build of the UI (mitigable by shipping prebuilt assets so the
-  UI source-build stays opt-in).
+  thing that must move. **Node/npm is a dev-only build tool, never a runtime or
+  deploy dependency:** the built assets are committed to the repo, so deploy and
+  anyone *running* captAInHook need no Node — only someone *modifying* the UI runs
+  `npm install && npm run build`. The `/ui` route itself is pure C# static-file
+  streaming with zero Node. Cost of committing built assets: they can drift from
+  source, so a UI change is edit → rebuild → recommit (the agent loop does this
+  anyway; a CI freshness check is the mitigation if it bites).
 - **The `/ui` shell is unauthenticated.** A deliberate, bounded hole (inert
   bytes, Host-gated, no data) — but it *is* an exemption in a surface whose whole
   point was "credential on every request," and it must be held to serving inert
   static bytes forever (a data leak into the shell would breach the gate). Pinned
   by a test that the shell route carries no daemon state.
-- **DTO types are re-expressed in TypeScript.** The one thing a C# UI would have
-  shared for free; a ~6-DTO, no-new-endpoint surface makes the drift risk small,
-  but it is real (hand-written or generated — the open question).
-- **History is unbounded or absent in v1.** "From now" is honest but thin; a user
-  opening the tab mid-session sees only what happens next until they choose to
-  replay (potentially the whole file). The bounded-tail follow-up addresses it
-  when friction appears.
-- **The bus is a non-default React idiom with its own failure mode.** Islands + a
-  `CustomEvent` bus is against React's props-and-Context default, so it reads as
-  less familiar to a React reader, and an unnamed-event free-for-all rots into
-  implicit spaghetti. Held in check by naming events per concern, keeping atoms
-  few, and the fact that the primitives (`useSyncExternalStore`) are themselves
-  idiomatic — Zustand is the same idea shrink-wrapped if native-bus coordination
-  ever chafes (revisit trigger).
+- **DTO types are re-expressed in TypeScript — but generated, not hand-kept.**
+  The one thing a C# UI would have shared for free; codegen from the DTOs
+  (decision 6) makes drift a build failure rather than a silent bug, at the cost
+  of a schema-emit build step and a build-order dependency the `web/` build must
+  honor.
+- **History is unbounded or absent in v1, on top of an unbounded trail file.**
+  "From now" is honest but thin, and the trail it tails is append-only with no
+  rotation — so the file grows without bound and `Last-Event-ID: 0` replays all of
+  it. Both are deferred *together* to **ADR-0009** (rotation + retention +
+  bounded backfill); v1 lives with live-from-now and a growing file.
+- **Islands-over-a-store is a non-default React shape.** A conventional React
+  reader expects one `<App>` tree; independent `createRoot` islands sharing an
+  external store reads as unfamiliar, and one global store can become a dumping
+  ground. Held in check by Zustand *slices* (islands subscribe to only what they
+  read), folding SSE in one reducer (decision 4), and the fact that the primitive
+  (`useSyncExternalStore`) and Zustand itself are thoroughly idiomatic — this is a
+  recognized pattern, not a bespoke one.
 
 ## Alternatives considered
 
@@ -296,13 +348,19 @@ decides the whole shape:
 - **Vanilla JS/HTML, no framework.** The leanest option (no build step), but the
   live trace + policy editor have enough interactivity to want a framework, and
   it does not serve the React-refresh goal.
-- **Conventional prop-tree React** (single root, state lifted to the top / React
-  Context, or a store library — Zustand, Redux). Rejected for v1: it is the
-  default shape the owner set out to avoid, and the app is a handful of
-  independent panels over a server event stream — the exact case islands + an
-  event bus fit best (decision 8). Zustand is noted not as wrong but as the
-  community-blessed form of the same `useSyncExternalStore` idea, the fallback if
-  the native bus is shown to chafe.
+- **Conventional prop-tree React** (single `<App>` root, state lifted to the top
+  / React Context, or a heavy store — Redux + toolkit). Rejected: the prop-tree /
+  lifted-state / Context default is the shape the owner set out to avoid, and a
+  Redux stack is the "state-manager pile-on" decision 6 warns against. The chosen
+  middle is one ~1KB store (Zustand) under islands (decision 8) — no drilling, no
+  stack.
+- **A hand-rolled `EventTarget` event bus** (the deepseek-moby shape, an earlier
+  draft of decision 8). Considered and rejected in favor of Zustand: both solve
+  drilling identically (both are `useSyncExternalStore` underneath), but the bus
+  is bespoke — it teaches nothing transferable (the owner's explicit reason for
+  choosing widely-used tools), is more code (hand-rolled atoms + fold logic), and
+  is event-shaped where this UI is state-shaped. A tiny `EventTarget` survives
+  only as the reserved escape hatch for a genuinely transient signal (decision 8).
 - **Token via query parameter** (`/ui?t=...`). Rejected: query strings land in
   server access logs and browser history — exactly the two places a bearer must
   not. The fragment is sent to neither.
@@ -318,17 +376,18 @@ decides the whole shape:
 
 - **The full-reload dev loop chafes** ⇒ enable the env-gated Vite HMR origin
   allowance (decision 7) — the reserved, prod-refused escape hatch.
-- **"Scroll back" friction is observed** ⇒ add a bounded history affordance
-  (`/events?tail=N` or `GET /trace?tail=N`), the named v1 gap.
+- **"Scroll back" friction is observed, or the trail file grows painful** ⇒
+  **ADR-0009** (trail rotation + retention + bounded backfill) — the two are one
+  problem (decision 5); v1's live-from-now is the placeholder until it lands.
 - **A control verb earns its way in** (a genuinely long Background task worth
   abandoning; a handler worth restarting from the UI) ⇒ its own ADR or an
   amendment here, co-designed with item 10's write-authz trust model.
-- **The TS/DTO drift bites** (a hand-written type diverges from a shipped DTO) ⇒
-  move to generated types (JSON schema from the DTOs, or NSwag).
-- **Native-bus coordination gets gnarly** (a panel's state outgrows a few atoms,
-  or the event wiring turns implicit and hard to trace) ⇒ adopt Zustand for that
-  surface — the same external-store idea, shrink-wrapped — or XState for a
-  genuinely stateful panel (decision 8).
+- **The schema-codegen step is friction** (the emit build step or the build-order
+  dependency chafes on a ~6-DTO surface) ⇒ fall back to hand-written TS interfaces
+  and pin them with a test that they match the DTOs.
+- **The single store gets gnarly** (a panel's state outgrows a Zustand slice — a
+  wizard, an editor with undo) ⇒ reach for XState for that one panel (a state
+  machine as the external truth), still islands, still no prop tree (decision 8).
 - **A second production origin becomes unavoidable** (e.g. an embedded webview
   with a custom scheme) ⇒ revisit the same-origin decision and the Origin gate
   together.
@@ -339,10 +398,10 @@ decides the whole shape:
 the `/ui` static route + MIME map + disk streaming (path-traversal-guarded) from
 the `ui/` dir in `dotnet/captainHook/Api/`; the `captainHook ui` verb in
 `Program.cs`; the frontend as a separate **`web/`** React+Vite project whose build
-emits to the deploy's `ui/` dir; the frontend's islands + event-bus wiring
-(`web/src/bus.*`, the `useBusEvent` / `useBusState` hooks, per-screen `createRoot`
-mounts, and the SSE→bus adapter feeding decision 4's fetch-stream frames onto the
-bus); Playwright E2E in `web/`; the `/deploy` skill
-gaining a `ui/`-staging step; the token-handoff, same-origin serving, and
+emits to the deploy's `ui/` dir (committed, prebuilt); the frontend's islands +
+Zustand wiring (`web/src/store.*`, per-screen `createRoot` mounts, and the
+SSE→store fold in the decision-4 fetch-stream `onMessage`); the DTO→JSON-Schema→TS
+codegen step (`JsonSchemaExporter` + `json-schema-to-typescript`); Playwright E2E
+in `web/`; the `/deploy` skill gaining a `ui/`-staging step; the token-handoff, same-origin serving, and
 unauthenticated-inert-shell behavior pinned in the test suite; mechanics recorded
 in a `doc/flow/management-gui.md` and this ADR's decisions cited where they land.
