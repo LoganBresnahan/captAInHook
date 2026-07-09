@@ -7,3 +7,8 @@ dist/
 
 # tsc incremental state (build artifact)
 tsconfig.tsbuildinfo
+
+# Playwright E2E run artifacts (traces, videos, reports — regenerated per run)
+test-results/
+playwright-report/
+
