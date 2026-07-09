@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "captAInHook management API v1",
+  "description": "GENERATED from the C# DTOs (dotnet/captainHook/Api/ApiDtos.cs \u002B ApiDiscovery.cs) by ApiSchema.Export \u2014 do not edit. Regenerate: CAPTAINHOOK_SCHEMA_UPDATE=1 dotnet test dotnet/captainHookTests/captainHookTests.csproj --filter ApiSchemaTests",
+  "$defs": {
+    "StatusDto": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "uptimeMs": {
+          "type": "integer"
+        },
+        "active": {
+          "type": "integer"
+        },
+        "served": {
+          "type": "integer"
+        },
+        "backgroundPending": {
+          "type": "integer"
+        },
+        "openStreams": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "pid",
+        "uptimeMs",
+        "active",
+        "served",
+        "backgroundPending",
+        "openStreams"
+      ]
+    },
+    "PolicyDto": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "default": {
+              "type": "string"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "event": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "handler": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "project": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "session": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "decision": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "event",
+                  "handler",
+                  "project",
+                  "session",
+                  "decision"
+                ]
+              }
+            }
+          },
+          "required": [
+            "default",
+            "rules"
+          ]
+        },
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "etag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "error",
+        "policy",
+        "raw",
+        "path",
+        "etag"
+      ]
+    },
+    "HarnessesDto": {
+      "type": "object",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "responseAdapter": {
+                "type": "string"
+              },
+              "request": {
+                "type": "object",
+                "properties": {
+                  "eventNameField": {
+                    "type": "string"
+                  },
+                  "sessionIdField": {
+                    "type": "string"
+                  },
+                  "cwdField": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "eventNameField",
+                  "sessionIdField",
+                  "cwdField"
+                ]
+              },
+              "events": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "install": true
+            },
+            "required": [
+              "name",
+              "responseAdapter",
+              "request",
+              "events",
+              "install"
+            ]
+          }
+        }
+      },
+      "required": [
+        "harnesses"
+      ]
+    },
+    "HandlersDto": {
+      "type": "object",
+      "properties": {
+        "handlers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "failMode": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer"
+              },
+              "dead": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "event",
+              "name",
+              "failMode",
+              "generation",
+              "dead"
+            ]
+          }
+        }
+      },
+      "required": [
+        "handlers"
+      ]
+    },
+    "ApiDiscovery": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer"
+        },
+        "token": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "port",
+        "token",
+        "pid",
+        "version"
+      ]
+    }
+  }
+}
