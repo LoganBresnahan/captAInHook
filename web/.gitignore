@@ -1,0 +1,6 @@
+# Dev-only build tooling — never committed (ADR-0008: Node is dev-only).
+node_modules/
+.vite/
+
+# Build output goes to ../ui/ (committed there), never here.
+dist/

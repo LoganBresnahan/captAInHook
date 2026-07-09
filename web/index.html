@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>captAInHook</title>
+  </head>
+  <body>
+    <!-- Islands mount into their own roots (ADR-0008 d8); this is the shell the
+         daemon serves unauthenticated, then the bundle authenticates itself via
+         the fragment-token handoff (d3). No secrets, no state — inert bytes. -->
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
