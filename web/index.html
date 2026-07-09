@@ -7,10 +7,12 @@
     <title>captAInHook</title>
   </head>
   <body>
-    <!-- Islands mount into their own roots (ADR-0008 d8); this is the shell the
-         daemon serves unauthenticated, then the bundle authenticates itself via
+    <!-- Islands (ADR-0008 d8): each div is its own createRoot mount — DOM
+         siblings, no shared React parent; coordination is the store. The shell
+         is served unauthenticated, then the bundle authenticates itself via
          the fragment-token handoff (d3). No secrets, no state — inert bytes. -->
     <div id="app"></div>
+    <div id="policy"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

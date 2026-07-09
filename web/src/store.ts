@@ -66,7 +66,7 @@ export const TRACE_CAP = 2000;
  * island renders this; the 200 case ALSO refreshes the policy slice (the PUT
  * echoes the fresh PolicyDto — one round-trip, no re-GET). */
 export type PolicyVerdict =
-  | { kind: "written"; etag: string }
+  | { kind: "written"; etag: string | null }   // null = server sent no tag (never today) — re-seed via GET, do NOT hold ""
   | { kind: "invalid"; violations: string[] }        // 422 — the daemon's own parser said no
   | { kind: "mismatch"; current: string | null }     // 412 — adopt `current` before retrying
   | { kind: "failed"; detail: string };              // 500 / network
