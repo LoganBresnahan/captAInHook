@@ -618,12 +618,21 @@ public sealed class ApiHost : IDisposable
         Interlocked.Increment(ref _openStreams);
         try
         {
-            // Reconnect hint first — also the first flush, which commits the
-            // response headers so the client sees the stream is live.
-            await WriteFrameAsync(output, "retry: 1000\n\n", _stop.Token);
-
+            // Anchor BEFORE the first flush: constructing the subscription
+            // stats the trail — the "from now" anchor for an id-less connect —
+            // and the first WriteFrameAsync commits the response headers,
+            // which is the moment the client observes "live". This order makes
+            // anchor ≤ headers ≤ client-live, so a line appended the instant
+            // the client goes live can never sit behind the anchor, silently
+            // undeliverable on this stream AND on every resume of it.
+            // (Adversarial verify, 2026-07-09: the old flush-first order lost
+            // a line appended in the flush→stat window — reproduced live.)
             var subscription = new TrailSubscription(
                 _sse!.TrailPath, lastId, _sse.Poll, _sse.Heartbeat, _sse.Capacity);
+
+            // Reconnect hint — the first flush; the client's fetch resolves here.
+            await WriteFrameAsync(output, "retry: 1000\n\n", _stop.Token);
+
             await subscription.RunAsync(
                 (e, ct) => WriteFrameAsync(output, Frame(e), ct), _stop.Token);
         }
@@ -644,7 +653,9 @@ public sealed class ApiHost : IDisposable
 
     /// One SseEvent as a text/event-stream frame. Trail lines are shipped as
     /// opaque `data:` payloads (JSONL is single-line by construction — no
-    /// embedded newlines to escape) with the byte offset as `id:`; a reset
+    /// embedded newlines to escape — and CR-free: both golden emitters escape
+    /// control characters, which matters because a raw CR would terminate the
+    /// SSE line early and truncate the payload) with the byte offset as `id:`; a reset
     /// re-anchors the client's Last-Event-ID to 0 (the id space restarted);
     /// heartbeats are comments — EventSource ignores them, dead sockets don't.
     private static string Frame(SseEvent e) => e switch
