@@ -109,3 +109,14 @@ vocabulary) rather than a flat feature list.
       means the shim/`WireJsonl` creating the dir 0700 + the trail file 0600 —
       a wire-lib (AOT leaf) change, cross-platform-guarded, likely an ADR-0004
       amendment. See doc/platform.md § Runtime directories (the residual note).
+- [ ] **`captainHook ui` token-in-argv exposure** (noted landing ADR-0008's
+      ui-cli-verb, 2026-07-09). The verb hands `http://…/ui#t=<token>` to the
+      OS opener via argv, which is briefly world-readable in
+      `/proc/<pid>/cmdline` while xdg-open runs — a hostile OTHER-user on the
+      box can race it and steal the bearer, stepping around the 0600 api.json
+      trust root. Narrower than a query param (no logs/history/server) and
+      inherent to decision 3's "CLI opens browser" shape — browsers take URLs
+      no other way. Hardening candidate if multi-user boxes ever matter: open
+      a token-free `/ui` and hand the credential over a one-time, expiring
+      redirect (or local ws pairing) instead of the URL. Comment lives at
+      `UiVerb.DefaultLauncher`.

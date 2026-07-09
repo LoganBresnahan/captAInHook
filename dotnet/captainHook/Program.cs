@@ -50,6 +50,11 @@ switch (inv.Mode)
             apiPort: ApiHost.ResolvePort(Environment.GetEnvironmentVariable("CAPTAINHOOK_API_PORT")));
     }
 
+    case Mode.Ui:
+        // Human command (ADR-0008 decision 3): open the GUI with the bearer
+        // token in the URL fragment. Stdout is fine here — not hook mode.
+        return await UiVerb.RunAsync(Console.Out, Console.Error);
+
     case Mode.Doctor:
     {
         // Human command, not hook mode: the report goes to stdout on purpose.

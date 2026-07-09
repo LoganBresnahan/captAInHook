@@ -21,6 +21,10 @@ public enum Mode
     Doctor,
     /// `actors-demo` — drive the F# actor layer directly.
     ActorsDemo,
+    /// `ui` — open the management GUI in the default browser with the bearer
+    /// token in the URL fragment (ADR-0008 decision 3). Engine-only; the shim
+    /// refuses it like every other non-hook verb.
+    Ui,
 }
 
 /// One parsed invocation: the mode plus the hook-dispatch arguments that shim
@@ -33,6 +37,8 @@ public sealed record Invocation(Mode Mode, string? EventName, string HarnessName
             return new(Mode.ActorsDemo, null, "claude-code");
         if (args.Length > 0 && args[0] == "doctor")
             return new(Mode.Doctor, null, "claude-code");
+        if (args.Length > 0 && args[0] == "ui")
+            return new(Mode.Ui, null, "claude-code");
 
         string? eventName = null;
         var harnessName = "claude-code";
