@@ -394,17 +394,28 @@ decides the whole shape:
 
 ## Ground truth (at acceptance)
 
-*To be filled by the implementation slices (see `/adr-plan`).* Expected homes:
-the `/ui` static route + MIME map + disk streaming (path-traversal-guarded) from
-the `ui/` dir in `dotnet/captainHook/Api/`; the `captainHook ui` verb in
-`Program.cs`; the frontend as a separate **`web/`** React+Vite project whose build
-emits to the deploy's `ui/` dir (committed, prebuilt); the frontend's islands +
-Zustand wiring (`web/src/store.*`, per-screen `createRoot` mounts, and the
-SSE→store fold in the decision-4 fetch-stream `onMessage`); the DTO→JSON-Schema→TS
-codegen step (`JsonSchemaExporter` + `json-schema-to-typescript`); Playwright E2E
-in `web/`; the `/deploy` skill gaining a `ui/`-staging step; the token-handoff, same-origin serving, and
-unauthenticated-inert-shell behavior pinned in the test suite; mechanics recorded
-in a `doc/flow/management-gui.md` and this ADR's decisions cited where they land.
+All 13 slices landed 2026-07-09 (roadmap item 6). Mechanics live in
+[doc/flow/management-gui.md](../flow/management-gui.md); this table is the
+decision→code index.
+
+| decision | where it landed |
+|---|---|
+| d2 `/ui` static route + MIME + traversal guard + bearer-exempt split | `dotnet/captainHook/Api/ApiHost.cs` (`ServeUiAsync`, `IsUiPath`, `ResolveUiFile`, `Mime`, `HandleAsync`); `ApiAuthGate.EvaluateShell`; `uiDir` in `Core/DaemonHost.cs` |
+| d3 token handoff (fragment → sessionStorage → scrub → bearer) | `web/src/auth.ts`; the `captainHook ui` verb `Api/UiVerb.cs` + `Mode.Ui` (`captainHookWire/Cli.cs`, `Program.cs`, shim refusal `captainShim/ShimMain.cs`) |
+| d4 fetch-streaming client (opaque cursor, reset/gap, dead-credential) | `web/src/sse.ts` (`runEventStream` + protocol layer); the from-now anchor fix in `Api/ApiHost.cs` `ServeEventsAsync` |
+| d1 policy editor + ETag lifecycle | `web/src/policy.ts` (`submitPolicy`), `web/src/PolicyPanel.tsx`; server path in `Api/ApiPolicyWriter.cs` (ADR-0007) |
+| d1 read islands | `web/src/{StatusPanel,SupervisionPanel,HarnessesPanel,TracePanel}.tsx`, shared `api.ts`, pure `format.ts` |
+| d6 stack + DTO→schema→TS codegen | `web/` React+Vite+Zustand; `Api/ApiSchema.cs` (`Export`) → `web/schema/api.schema.json` → `web/scripts/gen-types.mjs` → `web/src/api.gen.ts` |
+| d8 islands over one store | `web/src/store.ts` (`useStore`, `foldTrace`), `web/src/main.tsx` mount table, `web/index.html` leaf divs |
+| d2/d7 same-origin serving, third deploy artifact, full-reload loop | `.claude/skills/deploy/SKILL.md` (`ui/` staging + shell check); Vite `base:'/ui/'` `web/vite.config.ts` |
+| pins (route/guard/inert-shell, codegen drift, verb, unit, E2E) | `dotnet/captainHookTests/{ApiUiRouteTests,ApiSchemaTests,UiVerbTests}.cs`; `web/src/*.test.ts`; `web/e2e/*.spec.ts` + the isolated daemon fixture `web/e2e/fixtures.ts` |
+| SSE resume-cursor contract this consumes | ADR-0009 d2 (`doc/adr/0009-trail-rotation.md`) |
+
+Adversarial verify (3 slices, per the plan) confirmed the traversal guard + gate
+scoping (no encoded escape; `/ui/../api/v1/*` meets the full 401), the SSE
+client's resume/reset/gap + dead-credential logic (and CAUGHT the server's
+from-now anchor race, fixed), and the policy ETag discipline (and caught the
+`""`-If-Match blind-write trap, fixed).
 
 ## Implementation plan
 

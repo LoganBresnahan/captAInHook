@@ -496,7 +496,7 @@ run live*. The framework underneath is what exists today.
   aggregation as the centralized layer this API eventually fronts —
   never a shared remote daemon on the hot path (ADR-0004's transport
   revisit trigger stands).
-- [ ] **6. GUI v1: browser UI** — localhost web app served by the daemon.
+- [x] **6. GUI v1: browser UI** — localhost web app served by the daemon.
   Catalog + one-click install, live dispatch traces, supervision view
   (restarts/escalations as they happen). Web-first per the GUI direction
   below; on WSL2 this is the *best* UX, not a fallback. Lands WITH a
@@ -620,7 +620,14 @@ run live*. The framework underneath is what exists today.
   (await-true-exit so drainers don't pile up, a thread-pool floor, one retry
   for the all-cores-pegged residual; proven green under deliberate 4-core
   saturation). Also driven headed via WSLg. Node/@playwright/test dev-only.
-  **Phase 6 complete — phase 7 next: `flow-doc-management-gui`, the capstone.**
+  Phase 6 complete.
+  `flow-doc-management-gui` (2026-07-09, the capstone — terminal by
+  construction: `doc/flow/management-gui.md` (request-lifecycle ASCII diagram +
+  why-prose for islands/store/handoff/`/ui`-route/SSE-client/ETag/codegen/
+  deploy/E2E + a ground-truth table naming every file, symbol, and test), and
+  ADR-0008's placeholder Ground-truth section back-filled as a decision→code
+  index. Docs-only; symbols cross-checked against the code. **ADR-0008
+  complete: all 7 phases, all 13 slices landed; item 6 checked.**
 
 ## Later
 
