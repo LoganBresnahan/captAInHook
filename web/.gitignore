@@ -4,3 +4,6 @@ node_modules/
 
 # Build output goes to ../ui/ (committed there), never here.
 dist/
+
+# tsc incremental state (build artifact)
+tsconfig.tsbuildinfo
