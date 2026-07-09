@@ -1,12 +1,17 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { StatusPanel } from "./StatusPanel.tsx";
+import { SupervisionPanel } from "./SupervisionPanel.tsx";
+import { HarnessesPanel } from "./HarnessesPanel.tsx";
 import { PolicyPanel } from "./PolicyPanel.tsx";
+import { TracePanel } from "./TracePanel.tsx";
 import { bootstrapToken } from "./auth.ts";
 import { useStore } from "./store.ts";
 import { startEventStream } from "./sse.ts";
+import "./styles.css";
 
-// The mount table (ADR-0008 d8): every island is its own createRoot on a
+// The mount table (ADR-0008 d8): every screen is its own createRoot on a
 // sibling div — no shared React parent, the store is the only coordination.
 //
 // Startup order is load-bearing (d3): the token bootstrap runs before ANY
@@ -23,7 +28,11 @@ const mount = (id: string, node: React.ReactNode) => {
 };
 
 mount("app", <App />);
+mount("status", <StatusPanel />);
+mount("supervision", <SupervisionPanel />);
+mount("harnesses", <HarnessesPanel />);
 mount("policy", <PolicyPanel />);
+mount("trace", <TracePanel />);
 
 // The stream rides the session: start once the bearer proves live, stop when
 // the session dies (the client also self-reports dead on a 401/403 reconnect —

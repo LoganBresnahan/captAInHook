@@ -3,16 +3,16 @@ import { apiFetch, clearToken } from "./auth.ts";
 import { useStore } from "./store.ts";
 import type { StatusDto } from "./api.gen.ts";
 
-// Scaffold shell — now the store's first consumer (decision 8 proven end to
-// end: state lives outside the tree, this island subscribes to the slices it
-// reads and mutates nothing directly). Real screens — Live trace, Supervision,
-// Policy, Harnesses, Status — arrive as sibling islands in later slices. The
-// session states are decision 4's: no-session (inert shell, say how to get
-// one), live, and dead-credential (401/403 ⇒ stop, re-run `captainHook ui`;
-// the browser cannot re-read api.json, so there is no self-heal to attempt).
+// The app shell (ADR-0008 d8): header + the session banner, and the OWNER of
+// the session lifecycle — the one fetch that turns `checking` into `live` (the
+// bearer works) or `dead` (401/403 — a cutover rotated the token; decision 4's
+// no-self-heal, because the browser cannot re-read the 0600 api.json). It seeds
+// the store's `status` too, so the panels have a first value the instant they
+// mount. Everything ELSE the daemon shows lives in its own island (Status,
+// Supervision, Harnesses, Policy, Trace); this is just the chrome around them.
 export function App() {
   const session = useStore((s) => s.session);
-  const status = useStore((s) => s.status);
+  const stream = useStore((s) => s.stream);
   const setSession = useStore((s) => s.setSession);
   const setStatus = useStore((s) => s.setStatus);
 
@@ -32,28 +32,20 @@ export function App() {
   }, [session, setSession, setStatus]);
 
   return (
-    <main>
+    <header className="app-header">
       <h1>captAInHook</h1>
-      {session === "none" && (
-        <p>
-          No session — launch with <code>captainHook ui</code> (it reads the
-          daemon's credential and opens this page with a one-time token).
-        </p>
-      )}
-      {session === "checking" && <p>Connecting…</p>}
-      {session === "dead" && (
-        <p>
-          Session ended — the daemon was replaced or restarted. Re-run{" "}
-          <code>captainHook ui</code> for a fresh session.
-        </p>
-      )}
-      {session === "live" && status && (
-        <p data-session="live">
-          Connected to captaind {status.version} (pid {status.pid}) — up{" "}
-          {Math.round(status.uptimeMs / 1000)}s, {status.served} hooks served.
-          Screens land in later slices.
-        </p>
-      )}
-    </main>
+      <p className="session-line" data-session={session}>
+        {session === "none" && (
+          <>No session — launch with <code>captainHook ui</code> (it reads the daemon's credential and opens this page with a one-time token).</>
+        )}
+        {session === "checking" && <>Connecting…</>}
+        {session === "dead" && (
+          <>Session ended — the daemon was replaced or restarted. Re-run <code>captainHook ui</code> for a fresh session.</>
+        )}
+        {session === "live" && (
+          <span className={`conn conn-${stream}`}>Connected{stream === "retrying" ? " · reconnecting the stream…" : ""}</span>
+        )}
+      </p>
+    </header>
   );
 }

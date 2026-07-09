@@ -5,14 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>captAInHook</title>
-    <script type="module" crossorigin src="/ui/assets/index-BoZEZtn8.js"></script>
+    <script type="module" crossorigin src="/ui/assets/index-nt13xKqn.js"></script>
+    <link rel="stylesheet" crossorigin href="/ui/assets/index-Dt-4H073.css">
   </head>
   <body>
     <!-- Islands (ADR-0008 d8): each div is its own createRoot mount — DOM
          siblings, no shared React parent; coordination is the store. The shell
          is served unauthenticated, then the bundle authenticates itself via
-         the fragment-token handoff (d3). No secrets, no state — inert bytes. -->
+         the fragment-token handoff (d3). No secrets, no state — inert bytes.
+         The wrapping elements are layout scaffold only; islands mount into the
+         leaf divs by id. -->
     <div id="app"></div>
-    <div id="policy"></div>
+    <main class="layout">
+      <div class="grid">
+        <div id="status"></div>
+        <div id="supervision"></div>
+        <div id="harnesses"></div>
+        <div id="policy"></div>
+      </div>
+      <div id="trace"></div>
+    </main>
   </body>
 </html>
