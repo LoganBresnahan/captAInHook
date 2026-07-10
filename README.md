@@ -138,3 +138,7 @@ Maps of the system live in [doc/flow/](doc/flow/); decisions in
 The core remains a **one-spec / N-runtime harness**: the same contracts are
 planned in Node (event loop) and BEAM (actors) to compare concurrency
 philosophies on one real workload. See [DESIGN.md](DESIGN.md).
+
+## License
+
+[Apache-2.0](LICENSE).
