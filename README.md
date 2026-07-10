@@ -2,6 +2,14 @@
 
 *Lifecycle hooks as the composition primitive for agents.*
 
+> **Work in progress — building in public.** The framework layer (dispatch
+> engine, daemon + native shim, dispatch policy, management API, browser GUI)
+> works and is dogfooded live on the maintainer's own sessions; the payload
+> handlers it exists to carry (retrieval, memory, tool gating) and the
+> install/catalog UX are not built yet. Validated on Linux/WSL2 only. See
+> [Status](#status) for the precise line between the two, and
+> [doc/roadmap.md](doc/roadmap.md) for what's next.
+
 A framework for splicing deterministic **or** LLM-backed subsystems into an AI
 agent's loop at guaranteed seams — turning *"the model might call the tool"*
 into *"the framework always runs the right subsystem, within a latency budget,
@@ -67,7 +75,11 @@ thesis and the per-event effect contracts.
 
 ## Status
 
-v0 on the .NET runtime:
+**Work in progress.** The infrastructure below works today and runs live on the
+maintainer's own Claude Code sessions; the product layer on top of it does not
+exist yet. Development is on Linux (WSL2) — other platforms are untested.
+
+### Works today (dogfooded live)
 
 - **Hook dispatch core (C#)** — registry → concurrent fan-out under a latency
   budget → fail-open/fail-closed → deterministic effect merge; each handler
@@ -80,11 +92,44 @@ v0 on the .NET runtime:
   hand-rolled one_for_one supervisor (restart intensity on an injectable
   monotonic clock, escalation), plus a bounded-Channels hot-path actor.
   Decision record: [ADR-0001](doc/adr/0001-actor-runtime-fsharp-hybrid.md).
+- **Warm daemon + native shim** — a long-lived daemon serves hooks over a
+  versioned Unix socket; the deployed hook command is a Native-AOT shim
+  (~16ms per warm hook vs ~140ms cold JIT), with at-most-once dispatch,
+  graceful drain, idle self-exit, and a wire-skew guard so mismatched
+  artifacts fail safe to a collapsed in-process run
+  ([ADR-0004](doc/adr/0004-daemon-topology.md)).
+- **Dispatch policy** — a user-editable `~/.captainHook/dispatch.json` decides
+  per-event / per-handler / per-project whether an arriving hook gets worked
+  (the hook is always *answered*); hot-reloaded, malformed ⇒ deny-all loudly
+  ([ADR-0006](doc/adr/0006-dispatch-policy.md)).
+- **Management API** — loopback HTTP + SSE on the daemon (bearer-token auth):
+  status, handlers, harnesses, policy read/write, and a live event stream
+  tailing the trail with lossless resume
+  ([ADR-0007](doc/adr/0007-management-api.md)).
+- **Browser GUI** — served by the daemon at `/ui`, opened via `captainHook ui`:
+  live dispatch traces, supervision view, policy editor, harness registry —
+  observability-first, driven end-to-end by Playwright
+  ([ADR-0008](doc/adr/0008-management-gui.md)).
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
   kept pure for the hook protocol.
-- **Tests** — xunit suite; the bar is green twice in a row (`/shipshape`
-  verifies coverage, docs, and logging conventions).
+- **Tests** — xunit suite (400+) plus web unit tests and Playwright E2E; the
+  bar is green twice in a row (`/shipshape` verifies coverage, docs, and
+  logging conventions).
+
+### Not implemented yet
+
+- **Real handlers** — the payloads the framework exists for (retrieval on
+  prompt submit, session memory, tool-call gating). Today the only shipped
+  handler is a demo echo; installing captAInHook gets you the rails, not yet
+  the cargo.
+- **Catalog + one-click install** and the hook **trust model** — the GUI is
+  read/observe + policy edit only; no install/uninstall operations yet.
+- **Trail rotation** — the JSONL trail grows unbounded (design recorded in
+  [ADR-0009](doc/adr/0009-trail-rotation.md), deliberately deferred).
+- **Desktop shell / TUI** — browser-only for now.
+- **Node & BEAM runtimes** — the one-spec / N-runtime comparison is still the
+  thesis, not yet the code.
 
 Maps of the system live in [doc/flow/](doc/flow/); decisions in
 [doc/adr/](doc/adr/); direction in [doc/roadmap.md](doc/roadmap.md). The
