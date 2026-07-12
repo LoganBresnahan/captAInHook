@@ -668,6 +668,15 @@ run live*. The framework underneath is what exists today.
   kill-discipline-teardown → handlers-hot-reload; adversarial verify on 9
   slices; ultracode on exactly one — resident-child-runtime). Tick slices
   here as they land.
+  Slices landed: `child-wire-contract` (2026-07-12; `Core/ExecWire.cs` —
+  the envelope encoder (deterministic field order, omit-null, payload
+  re-written compact, single-line guarantee pinned for resident line
+  framing) + the strict answer parser (closed four-shape grammar,
+  collect-every-violation, duplicate/unknown/trailing/second-object all
+  MALFORMED per the never-guess house rules, `Empty` as its own exit-code-
+  blind case, one leading BOM stripped); 38 golden/strictness tests; no
+  runtime path reaches the codec until the adapter lands — the golden suite
+  IS the slice's verification per the plan).
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process
