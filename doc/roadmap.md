@@ -738,6 +738,46 @@ run live*. The framework underneath is what exists today.
   deny-wins-merge. Suite 481 green twice. **Phase 2 complete.** Not yet
   user-reachable — registration is code-only until phase 3's
   handlers.json.)
+  `handlers-json-registry` (2026-07-12; decision 4 — ExecHandler goes
+  USER-REACHABLE. `Core/ExecHandlersFile.cs`: strict per-entry parser +
+  `PolicyResolution`-shaped tri-state (Absent ⇒ zero exec handlers, silent;
+  whole-file malformed ⇒ zero + loud `handlers.malformed`, directory/
+  unreadable/empty all Malformed-never-Absent; Loaded ⇒ valid entries
+  register, invalid entries warn-and-skip with every violation collected —
+  the deliberate FILE-strict/ENTRY-lenient split of d4, N2's tension);
+  entry fields name/command/args/events/mode/failMode/budgetMs/
+  readinessTimeoutMs/env/passEnv/cwd, events canonicalized at parse,
+  duplicate names and post-canon duplicate events rejected, budget bounds
+  mirror `Registry.CheckBudget` as DATA validation (a bad value skips the
+  entry, never throws — probed exactly at the boundary). Registration via
+  one shared `HookRun.RegisterExecHandlers` (factory overload — restart ⇒
+  fresh handler, the resident-slice shape); `handlersPath` threaded
+  policyPath-style through CollapsedAsync + DaemonHost.RunAsync, all three
+  Program.cs entry points feed `ExecHandlersFile.ResolvePath()`
+  (`CAPTAINHOOK_HANDLERS_FILE` override; null = zero exec = test-safe);
+  resident entries parse valid but skip loudly until phase 5;
+  `handlers.slowShape` warns oneshot-on-PreToolUse; collapsed re-reads per
+  dispatch, daemon reads once at warm-up (hot reload = phase 7).
+  **Adversarial verify (skeptic, probed live) earned its keep — the exact
+  predicted bug class**: camelCase / upper-kebab / all-lower event
+  spellings parsed valid and registered workers that NEVER fired (silent
+  dead handlers visible as live in /handlers) — `Canon` only rewrites
+  kebab and the runner map was case-sensitive; fixed structurally by a
+  case-INSENSITIVE runner map (casing can never split the event space —
+  DispatchPolicy's case-insensitive match, registration-side), pinned by a
+  parser-routed three-spelling firing test. Also fixed: loudness asymmetry
+  — parse-valid env/passEnv/cwd/readinessTimeoutMs were silently inert on
+  registered oneshot entries while resident skipped loudly ⇒ new
+  `handlers.fieldIgnored` warn until phases 4/5 wire them; CLAUDE.md env
+  list gains CAPTAINHOOK_HANDLERS_FILE. Known holes recorded, not fixed:
+  slowShape keys on the literal PreToolUse (a user harness's other
+  decide-capable events draw no warn — needs spec data, revisit with the
+  harness-timeout-hint slice); unknown-event typos register silently dead
+  (vocabulary warn deferred; phase 8's expected-vs-registered view is the
+  backstop). 46 tests incl. the kebab-file-fires-on-canonical-dispatch
+  full loop and a collapsed E2E (child inject in the real hook answer).
+  Suite 527 green twice. **Phase 3 complete — user payloads are live on
+  the collapsed and daemon paths.**)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

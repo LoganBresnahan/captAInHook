@@ -38,7 +38,7 @@ public static class DaemonHost
         Registry? registry = null, TimeSpan? drainDeadline = null,
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
         int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null,
-        string? uiDir = null)
+        string? uiDir = null, string? handlersPath = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -78,7 +78,7 @@ public static class DaemonHost
         // re-read per dispatch only when the file's (mtime,size) moves (ADR-0006
         // decision 6). Absent when no path is configured (tests) => allow all.
         var policy = new ReloadingPolicy(policyPath);
-        var dispatcher = new Dispatcher(registry ?? HookRun.BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
+        var dispatcher = new Dispatcher(registry ?? HookRun.BuildDefaultRegistry(handlersPath), budget: TimeSpan.FromSeconds(2));
 
         // Listening ⟺ ready: the first connect a shim ever makes against this
         // daemon already finds warm workers.

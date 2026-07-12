@@ -93,7 +93,13 @@ public sealed class Dispatcher
                                  Worker<(HookEvent, HandlerContext), Effect> Worker);
 
     private readonly TimeSpan _budget;
-    private readonly Dictionary<string, List<Runner>> _runners = new();
+    // Case-INSENSITIVE event lookup: a casing difference must never split the
+    // event space — "userPromptSubmit" in a handlers.json entry registers a
+    // worker that MUST fire when the canonical "UserPromptSubmit" dispatches
+    // (the ADR-0006 silent-grant lesson's registration-side twin, caught live
+    // by this slice's adversarial verify). DispatchPolicy matches events
+    // case-insensitively for exactly the same reason.
+    private readonly Dictionary<string, List<Runner>> _runners = new(StringComparer.OrdinalIgnoreCase);
 
     // The LONG-LIVED background queue (ADR-0004: built here, once). Background
     // effects outlive their responses in a daemon by design: DispatchAsync

@@ -47,7 +47,8 @@ switch (inv.Mode)
         // CAPTAINHOOK_API_PORT moves it; 0 disables. Resolution is silent
         // like IDLE_MS above — malformed falls back to the default.
         return await DaemonHost.RunAsync(idleWindow: idle, policyPath: DispatchPolicy.ResolvePath(),
-            apiPort: ApiHost.ResolvePort(Environment.GetEnvironmentVariable("CAPTAINHOOK_API_PORT")));
+            apiPort: ApiHost.ResolvePort(Environment.GetEnvironmentVariable("CAPTAINHOOK_API_PORT")),
+            handlersPath: ExecHandlersFile.ResolvePath());
     }
 
     case Mode.Ui:
@@ -119,10 +120,10 @@ switch (inv.Mode)
         return await HookRun.CollapsedAsync(inv,
             new StringReader(System.Text.Encoding.UTF8.GetString(stdinBytes)),
             Console.Out, Console.Error, probe, dispatchId: dispatchId,
-            policyPath: DispatchPolicy.ResolvePath());
+            policyPath: DispatchPolicy.ResolvePath(), handlersPath: ExecHandlersFile.ResolvePath());
     }
 
     default: // Mode.Collapsed (--no-daemon)
         return await HookRun.CollapsedAsync(inv, Console.In, Console.Out, Console.Error, probe,
-            policyPath: DispatchPolicy.ResolvePath());
+            policyPath: DispatchPolicy.ResolvePath(), handlersPath: ExecHandlersFile.ResolvePath());
 }

@@ -16,8 +16,11 @@ public static class HookRun
 {
     /// The default handler wiring, shared by every mode that dispatches.
     /// Register everything BEFORE the Dispatcher ctor — workers spawn from a
-    /// registry snapshot.
-    public static Registry BuildDefaultRegistry()
+    /// registry snapshot. `handlersPath` is ADR-0010 d4's registration file:
+    /// null ⇒ zero exec handlers (the test-safe default, the policyPath
+    /// idiom); Program.cs passes ExecHandlersFile.ResolvePath() so all three
+    /// production entry points read the same file.
+    public static Registry BuildDefaultRegistry(string? handlersPath = null)
     {
         var registry = new Registry()
             .On("SessionStart", new EchoHandler())
@@ -29,7 +32,92 @@ public static class HookRun
         if (Environment.GetEnvironmentVariable("CAPTAINHOOK_PROBE") == "1")
             registry.On("UserPromptSubmit", new LatencyProbeHandler(TimeSpan.FromMilliseconds(150)));
 
+        // Exec handlers register AFTER the coded set, in file order — the
+        // registration order Merge depends on stays deterministic: coded
+        // first, then handlers.json top to bottom.
+        if (handlersPath is not null)
+            RegisterExecHandlers(registry, ExecHandlersFile.Resolve(handlersPath));
+
         return registry;
+    }
+
+    /// ADR-0010 d4's registration semantics over a resolved handlers file —
+    /// one shared routine so the collapsed and daemon paths cannot drift.
+    /// Absent is silent (zero-config default). Malformed registers NOTHING
+    /// and is loud (`handlers.malformed`). Loaded registers each valid
+    /// oneshot entry via the FACTORY overload (a supervised restart gets a
+    /// fresh handler — the shape the resident slice requires); invalid
+    /// entries arrive pre-skipped from the parser (`handlers.entrySkipped`);
+    /// resident entries parse as valid data but are SKIPPED loudly until the
+    /// resident-child-runtime slice lands their runtime. A oneshot entry on a
+    /// before-tools event draws `handlers.slowShape` (d7: loud guidance — a
+    /// cold interpreter per TOOL CALL re-imposes the tax item 12 killed).
+    public static void RegisterExecHandlers(Registry registry, ExecHandlersResolution resolution)
+    {
+        switch (resolution)
+        {
+            case ExecHandlersResolution.Absent:
+                return;
+
+            case ExecHandlersResolution.Malformed m:
+                Log.Error("handlers", "handlers.malformed", new LogFields { Msg = m.Error });
+                return;
+
+            case ExecHandlersResolution.Loaded(var entries, var skipped):
+                foreach (var s in skipped)
+                    Log.Warn("handlers", "handlers.entrySkipped", new LogFields
+                    {
+                        Msg = string.Join("; ", s.Violations),
+                        Data = new Dictionary<string, object> { ["entry"] = s.Label },
+                    });
+
+                foreach (var entry in entries)
+                {
+                    // Loudness symmetry: resident entries get a loud skip
+                    // below, so parse-valid fields the CURRENT slices cannot
+                    // honor yet must be loud too — a user who wrote env/cwd
+                    // deserves to know they are inert until the
+                    // child-env-allowlist (phase 4) / resident (phase 5)
+                    // slices wire them (adversarial-verify find).
+                    var inert = new List<string>();
+                    if (entry.Env.Count > 0) inert.Add("env");
+                    if (entry.PassEnv.Count > 0) inert.Add("passEnv");
+                    if (entry.Cwd is not null) inert.Add("cwd");
+                    if (entry.ReadinessTimeout is not null) inert.Add("readinessTimeoutMs");
+                    if (inert.Count > 0 && entry.Mode == ExecMode.Oneshot)
+                        Log.Warn("handlers", "handlers.fieldIgnored", new LogFields
+                        {
+                            Msg = $"not yet enforced (lands with the config-env/resident slices): {string.Join(", ", inert)}",
+                            Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                        });
+
+                    if (entry.Mode == ExecMode.Resident)
+                    {
+                        Log.Warn("handlers", "handlers.entrySkipped", new LogFields
+                        {
+                            Msg = "mode 'resident' is not yet runnable — parses as valid, lands with the resident-child-runtime slice",
+                            Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                        });
+                        continue;
+                    }
+
+                    foreach (var evt in entry.Events)
+                    {
+                        if (evt == "PreToolUse")
+                            Log.Warn("handlers", "handlers.slowShape", new LogFields
+                            {
+                                HookEvent = evt,
+                                Msg = $"oneshot handler '{entry.Name}' on a before-tools event: a process spawn on EVERY tool call, serially, on the agent's critical path — prefer mode 'resident'",
+                                Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                            });
+                        var e = entry;   // capture per closure
+                        registry.On(evt, e.Name,
+                            () => new ExecHandler(e.Name, e.Command, e.Args, e.OnFailure),
+                            e.OnFailure, e.Budget);
+                    }
+                }
+                return;
+        }
     }
 
     /// Run one hook dispatch in-process: resolve harness, read stdin, dispatch
@@ -43,7 +131,7 @@ public static class HookRun
         Invocation inv,
         TextReader stdin, TextWriter stdout, TextWriter stderr,
         ColdStartProbe? probe = null, string? harnessDir = null, string? dispatchId = null,
-        string? policyPath = null)
+        string? policyPath = null, string? handlersPath = null)
     {
         // Resolve the harness BEFORE touching stdin/stdout: an unknown name must
         // put a clear error on stderr and NOTHING on stdout (the host parses stdout).
@@ -86,7 +174,7 @@ public static class HookRun
             return 0;
         }
 
-        var dispatcher = new Dispatcher(BuildDefaultRegistry(), budget: TimeSpan.FromSeconds(2));
+        var dispatcher = new Dispatcher(BuildDefaultRegistry(handlersPath), budget: TimeSpan.FromSeconds(2));
         probe?.DispatcherBuilt();
         var result = await dispatcher.DispatchAsync(evt, dispatchId, gate.Excluded);
         probe?.Dispatched();
