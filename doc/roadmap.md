@@ -662,6 +662,12 @@ run live*. The framework underneath is what exists today.
   engine seam: handler teardown on worker restart/drain (a resident child
   must die with its generation). Design: **ADR-0010** (supersedes the
   item-15 capability-API framing and dissolves item 11's payload half).
+  Build order: ADR-0010 § Implementation plan (2026-07-12; 14 slices → 8
+  phases; critical path child-wire-contract → exec-handler-adapter →
+  handlers-json-registry → child-env-allowlist → resident-child-runtime →
+  kill-discipline-teardown → handlers-hot-reload; adversarial verify on 9
+  slices; ultracode on exactly one — resident-child-runtime). Tick slices
+  here as they land.
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process
