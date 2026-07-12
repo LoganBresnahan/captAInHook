@@ -67,11 +67,15 @@ The `/deploy` skill *performs* this; this doc explains what it leaves behind.
   dispatchId; a cold one is `shim.fallback` + `shim.spawnDaemon` +
   `shim.delegated` wrapping the engine's collapsed `dispatch.*`; a partial
   deploy is `shim.wireSkew` + `shim.delegated` (hook still answers).
-- **Worst cases, by design**: daemon wedged → the shim's 5s response deadline
-  fires once (`shim.deliveryFailed`, exit 1, zero stdout — the prompt
-  proceeds without the hook's effect), and the wedged daemon must be killed
-  manually until doctor lands. Daemon dead → every prompt collapses (~200ms,
-  today's pre-daemon cost) and respawns; nothing breaks.
+- **Worst cases, by design**: daemon crashes mid-dispatch → the shim sees
+  EOF (`shim.deliveryFailed`, exit 1, zero stdout — the prompt proceeds
+  without the hook's effect; at-most-once forbids the retry). Daemon wedged
+  (accepts, never answers, never closes) → the shim has NO post-delivery
+  timer of its own (ADR-0010 decision 9 — handler budgets are unbounded, so
+  a slow answer is legitimate); the harness's own hook timeout is the
+  backstop that kills the shim, and `doctor` sweeps the wedged daemon.
+  Daemon dead → every prompt collapses (~200ms, the pre-daemon cost) and
+  respawns; nothing breaks.
 
 ## Redeploy = new identity
 

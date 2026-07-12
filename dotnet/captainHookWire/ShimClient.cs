@@ -26,27 +26,26 @@ public abstract record ForwardOutcome
 }
 
 /// The shim's warm path: connect to the daemon's socket, forward the framed
-/// request, relay the framed response. Deadlines are phase-scoped, not one
-/// umbrella: the PRE-DELIVERY phase (connect + request write) is a small
-/// multiple of a warm round-trip — its expiry proves non-delivery and permits
-/// fallback — while the RESPONSE phase must cover the daemon's full dispatch
-/// budget + grace (a legitimate slow handler is not a wedged daemon), and its
-/// expiry is a failed dispatch, not a retry. A daemon that accepts but never
-/// answers — wedged accept loop, mid-drain listener — is thereby bounded: the
-/// agent host is never hung on a UDS backlog that connect() happily enters.
+/// request, relay the framed response. Only the PRE-DELIVERY phase (connect +
+/// request write) carries a shim-side deadline — a small multiple of a warm
+/// round-trip, whose expiry proves non-delivery and permits fallback. Past
+/// the at-most-once boundary the shim waits for the answer or EOF with NO
+/// timer of its own (ADR-0010 decision 9): handler budgets are per-handler
+/// and unbounded, so the shim cannot know how long a legitimate answer takes
+/// — and it doesn't need to. The daemon always answers within its handlers'
+/// bounded windows; a daemon crash closes the socket (EOF ⇒
+/// FailedAfterDelivery, never a retry); a truly wedged daemon is backstopped
+/// by the harness's own hook timeout killing the shim process — the
+/// harness's patience is the harness's, not a shim guess.
 public static class ShimClient
 {
     /// Connect + write budget: a warm daemon does both in single-digit ms;
     /// 250ms is generous headroom without a human-noticeable stall.
     public static readonly TimeSpan PreDeliveryTimeout = TimeSpan.FromMilliseconds(250);
 
-    /// Response budget: the daemon's 2s dispatch budget + grace + margin.
-    /// Expiry here does NOT permit fallback — the dispatch was delivered.
-    public static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(5);
-
     public static async Task<ForwardOutcome> TryForwardAsync(
         string socketPath, HookRequest req,
-        TimeSpan? preDeliveryTimeout = null, TimeSpan? responseTimeout = null)
+        TimeSpan? preDeliveryTimeout = null)
     {
         var sw = Stopwatch.StartNew();
         using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -104,9 +103,9 @@ public static class ShimClient
 
         try
         {
-            using var rcts = new CancellationTokenSource(responseTimeout ?? ResponseTimeout);
+            // No response timer, deliberately: wait for the answer or EOF.
             var stream = new NetworkStream(sock, ownsSocket: false);
-            var payload = await Frame.ReadAsync(stream, rcts.Token);
+            var payload = await Frame.ReadAsync(stream);
             if (payload is null)
                 return Failed(req, sw, "daemon closed the connection before answering");
 

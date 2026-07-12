@@ -677,6 +677,18 @@ run live*. The framework underneath is what exists today.
   blind case, one leading BOM stripped); 38 golden/strictness tests; no
   runtime path reaches the codec until the adapter lands — the golden suite
   IS the slice's verification per the plan).
+  `shim-timeout-removal` (2026-07-12; decision 9's shim layer — the 5s
+  post-delivery `ResponseTimeout` deleted at the type level (no parameter
+  left to configure): past the at-most-once boundary the shim waits for the
+  answer or EOF with no timer of its own; the wedged-daemon test's premise
+  replaced by a TCS-gated late-answer pin (delivered + observed-still-
+  waiting → released → relayed), the EOF fail-safes unchanged and still
+  pinned; flow docs rewritten to the harness-backstop doctrine
+  (hook-dispatch, live-deployment — including a stale "until doctor lands");
+  adversarially verified by a wall-clock drive: a real 6.0s-late answer
+  relayed by the IL ShimClient where the old timer abandoned at 5s. Deployed
+  shim behavior changes only at the next /deploy — both artifacts swap
+  together, so no skew window. Suite 457 green twice. **Phase 1 complete.**)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

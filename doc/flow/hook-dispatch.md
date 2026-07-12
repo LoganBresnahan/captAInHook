@@ -89,12 +89,16 @@ In shim mode (`hook <event>` without `--no-daemon`) the binary first tries the
 content-identity socket (`Core/ShimClient.cs`): connect + forward the framed
 request (the shim-minted dispatchId, event, harness, raw stdin bytes
 verbatim), relay the framed response (stdout bytes byte-identically, trace to
-stderr, exit code). Deadlines are phase-scoped: pre-delivery (connect + write,
-250ms) — expiry proves non-delivery and permits the collapsed fallback the
-diagram above shows — versus response (5s, covering the daemon's dispatch
-budget + grace) — expiry is a FAILED dispatch (zero stdout bytes, exit 1),
+stderr, exit code). Only the pre-delivery phase carries a shim deadline
+(connect + write, 250ms) — expiry proves non-delivery and permits the
+collapsed fallback the diagram above shows. Past delivery the shim waits for
+the answer or EOF with NO timer of its own (ADR-0010 decision 9): handler
+budgets are per-handler and unbounded, so a slow answer is a legitimate
+answer; the daemon always answers within its handlers' bounded windows; a
+daemon crash is an EOF ⇒ a FAILED dispatch (zero stdout bytes, exit 1),
 never a retry, because the daemon may already be running non-idempotent
-Background effects. The at-most-once boundary is the request frame's write
+Background effects; and a truly wedged daemon is backstopped by the
+harness's own hook timeout killing the shim process. The at-most-once boundary is the request frame's write
 completion, encoded in `ForwardOutcome`: only `NotDelivered` falls back —
 and the boundary is EXACT: `Frame.WriteAsync`'s `committed` marker fires the
 instant the last payload byte is accepted by the transport, so a deadline

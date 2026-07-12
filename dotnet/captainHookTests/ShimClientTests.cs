@@ -82,27 +82,38 @@ public class ShimClientTests
     }
 
     [Fact]
-    public async Task AcceptsButNeverAnswers_DeadlineFires_FailedAfterDelivery_NeverFallback()
+    public async Task AnswerArrivesLate_NoShimTimer_RelayedNotAbandoned()
     {
-        // The wedged-daemon case decision 2 exists for: connect succeeds, the
-        // request is fully written, then silence. The request MAY be running —
-        // Background effects and all — so this is a FAILED dispatch, and the
-        // shim-side deadline bounds the wait instead of hanging the agent host.
-        var silent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // ADR-0010 decision 9: past the at-most-once boundary the shim has NO
+        // timer — handler budgets are unbounded, so a slow answer is a
+        // legitimate answer. The old 5s ResponseTimeout is gone at the type
+        // level (there is no parameter to configure); this pins the behavior:
+        // the daemon holds the answer until the TEST releases it — strictly
+        // after the request was consumed and the shim was observed still
+        // waiting — and the answer is relayed, not abandoned. Deterministic,
+        // TCS-gated, no real sleeps. The wait's bound is now EOF (the two
+        // daemon-dies tests below) or, live, the harness's own hook timeout
+        // killing the shim process.
+        var consumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stdout = "{\"late\":true}"u8.ToArray();
         var (server, path, dir) = await ServeOnceAsync(async conn =>
         {
             await using var s = new NetworkStream(conn);
             await Frame.ReadAsync(s);        // consume the request…
-            await silent.Task;               // …then never answer
+            consumed.TrySetResult();
+            await release.Task;              // …hold the answer hostage…
+            await Frame.WriteAsync(s, new HookResponse(0, stdout, "").Encode());
         });
         using var _ = dir;
 
-        var outcome = await ShimClient.TryForwardAsync(path, Req(),
-            responseTimeout: TimeSpan.FromMilliseconds(300));
+        var forward = ShimClient.TryForwardAsync(path, Req());
+        await consumed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(forward.IsCompleted);   // delivered, unanswered ⇒ still waiting
+        release.TrySetResult();
 
-        var f = Assert.IsType<ForwardOutcome.FailedAfterDelivery>(outcome);
-        Assert.Contains("deadline", f.Reason);
-        silent.TrySetResult();               // release the server task
+        var a = Assert.IsType<ForwardOutcome.Answered>(await forward.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(stdout, a.StdoutBytes);
         await server.WaitAsync(TimeSpan.FromSeconds(5));
     }
 

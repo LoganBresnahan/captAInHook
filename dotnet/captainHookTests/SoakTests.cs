@@ -112,9 +112,10 @@ public class SoakTests
             await gate.WaitAsync();
             try
             {
+                // Queueing behind 199 siblings is legal — and post-delivery the
+                // shim has no timer at all (ADR-0010 d9), so no budget to pass.
                 return await ShimClient.TryForwardAsync(dir.Paths.SocketPath,
-                    new HookRequest($"soak{i:D4}", "user-prompt-submit", "claude-code", "{}"u8.ToArray()),
-                    responseTimeout: TimeSpan.FromSeconds(30));   // queueing behind 199 siblings is legal
+                    new HookRequest($"soak{i:D4}", "user-prompt-submit", "claude-code", "{}"u8.ToArray()));
             }
             finally { gate.Release(); }
         }));
