@@ -73,6 +73,16 @@ its lessons are imported wholesale (§ Pattern lineage).
      remaining lifetime is its own, reaped asynchronously, exit code recorded
      in the trail, the dispatch never blocked on child exit. (The Worker's
      reply-then-crash semantics, extended to processes.)
+     *(2026-07-12 adapter amendment — the temporal resolution: strictness
+     binds up to and including the answer LINE — same-line trailing garbage
+     is a protocol failure, post-answer stdout is linger chatter, drained
+     and discarded; an already-returned effect cannot be failed
+     retroactively. Grandchildren decouple pipe-EOF from child-exit, so
+     exit and answer are RACED and every post-exit pipe join is bounded —
+     `sleep 30 & exit 0` yields its decided Noop at child-exit speed, never
+     a counted wedge. Reply-then-linger is a daemon-mode pattern: collapsed
+     mode abandons the reaper at exit and a lingering child's later writes
+     get SIGPIPE — its own risk, documented.)*
    - **stderr** is the child's diagnostic channel → captured to the trail
      (`exec.stderr`, truncated), never stdout. A nonzero exit *before* an
      answer ⇒ failure ⇒ fail mode.

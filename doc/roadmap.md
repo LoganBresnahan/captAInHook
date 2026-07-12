@@ -688,7 +688,56 @@ run live*. The framework underneath is what exists today.
   adversarially verified by a wall-clock drive: a real 6.0s-late answer
   relayed by the IL ShimClient where the old timer abandoned at 5s. Deployed
   shim behavior changes only at the next /deploy — both artifacts swap
-  together, so no skew window. Suite 457 green twice. **Phase 1 complete.**)
+  together, so no skew window. Suite 457 green twice. **Phase 1 complete.**
+  Deployed 2026-07-12 — live hooks ride the no-post-delivery-timer shim.)
+  `per-handler-budget-windows` (2026-07-12; decision 9's dispatcher layer —
+  `HandlerSpec.Budget` + `Registry.On` budget overloads; each `RunGuarded`
+  gets its OWN CTS/deadline/ask-window sized to its handler's effective
+  budget (override may EXCEED the default — a min-clamp under the old shared
+  token could only shorten), grace scales with the effective budget
+  (explicit ctor grace still wins, the classification-test seam);
+  `HandlerContext` gains optional `DispatchId` (the adapter's envelope
+  correlation); trail truth: `dispatch.start` keeps the default budgetMs,
+  overridden handlers carry their own on `handler.*` lines. **Adversarial
+  verify (skeptic) earned its keep**: caught the int-ms ask-window OVERFLOW —
+  a ≥24.8-day budget (d9 blesses "no upper bound") went negative and faulted
+  every dispatch with a misleading trail; fixed by registration-time
+  `CheckBudget` (positive, ≤ ceiling, loud at construction) — plus three
+  stale dispatch-wide-budget claims in hook-dispatch.md (fixed same commit).
+  Skeptic-confirmed clean: CTS-dispose lifetime not worsened, classification
+  travel headroom ≥98ms on every path, no overload mis-binding, no test
+  depending on the old wall-time bound. Named carry-in → kill-discipline
+  slice (N6): a budget > the daemon's 10s drain deadline can now cut a
+  live dispatch at cutover — the drain-vs-long-dispatch decision the ADR
+  already defers; consider a loud construction-time warn there. 6 tests.)
+  `exec-handler-adapter` (2026-07-12; decisions 1/2/5/6's oneshot core —
+  `Handlers/ExecHandler.cs`, the ONE coded handler that makes the closed set
+  extensible in user space: spawn per dispatch, envelope out on stdin (then
+  EOF), answer = first non-empty stdout line strict-parsed by ExecWire,
+  reply-then-linger (effect counts when parsed; an async reaper owns the
+  afterlife — drains pipes so a chatty lingerer can't wedge, records
+  exec.exit), exit-0-empty ⇒ Noop, nonzero-before-answer / protocol garbage
+  ⇒ fail mode (child killed on protocol error), budget cancel ⇒ best-effort
+  tree kill + honored-cancel OCE (setpgid rigor deferred to
+  kill-discipline). Env allowlist BAKED into this first spawn site
+  (`Clear()` + PATH/HOME/USER/SHELL/LANG/LC_*/TZ/TMPDIR — sequencing risk 2
+  closed; config env/passEnv arrive with handlers.json); cwd = event cwd
+  else runtime home. Trail: exec.spawn/answered/exit/stderr/kill/
+  protocolError. **Adversarial verify (skeptic, reproduced live) earned its
+  keep**: grandchildren decouple pipe-EOF from child-exit — `sleep 30 &
+  exit 0` (the everyday daemon idiom) rode the GRANDCHILD's lifetime,
+  burning the budget and counting the decided-Noop case as a WEDGE toward
+  escalation (stderr variant) or skipping the kill entirely (stdout
+  variant); fixed by racing exit vs answer with BOUNDED post-exit pipe
+  joins (PipeGrace 250ms — buffered answers still parsed, pinned by three
+  grandchild tests), plus a torn stderr-tail read on the protocol-error
+  path (lock + join-before-read). d2 amendment recorded: strictness binds
+  through the answer line, post-answer stdout is linger chatter; linger is
+  a daemon-mode pattern (collapsed abandons the reaper, late writers get
+  SIGPIPE). 18 tests incl. dispatcher-integration fail-open/fail-closed/
+  deny-wins-merge. Suite 481 green twice. **Phase 2 complete.** Not yet
+  user-reachable — registration is code-only until phase 3's
+  handlers.json.)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process
