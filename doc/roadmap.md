@@ -638,34 +638,59 @@ run live*. The framework underneath is what exists today.
   reasons (SSH-side admin, terminal-native users) — not as the agent's
   feedback instrument: the feedback pyramid is API assertions (bulk) →
   Playwright over the web UI (visual) → TUI capture only to test the TUI.
-- [ ] **9. Real handlers** — the payloads the framework exists for: retriever
-  (forced-RAG on UserPromptSubmit) and memory (SessionStart/Stop,
-  cavemem-shaped); the tool-gate (item 13 / ADR-0005) rejoins them as a
-  payload. These deliberately wait for item 6 — the retriever needs
-  retrieval infrastructure and all are better built once the GUI can show
-  them running.
+- [ ] **9. Exec handlers — user processes as payloads** *(2026-07-12 reframe;
+  was "Real handlers" — retriever/memory as framework code)*. The payload
+  surface is the user's own process in any language: one coded `ExecHandler`
+  adapts a configured command into the existing dispatch — normalized event
+  envelope in on stdin, one strict-parsed Effect out on stdout, supervised
+  like any worker. Two modes: `oneshot` (spawn per dispatch; session-edge
+  events) and `resident` (daemon-held warm child over lock-step JSONL —
+  the pharos-mcp kept-warm pattern; eager spawn at registration, ready-line
+  handshake; effectively mandatory for before-tools events, where a cold
+  interpreter re-imposes the per-tool-call tax item 12 killed).
+  Registration via `~/.captainHook/handlers.json` (strict per-entry parse,
+  warn-and-skip entries, stat-gate hot reload, canonicalized events);
+  budgets are per-handler and **unbounded by design** — sensible per-event
+  defaults, but the user may wait as long as they want (per-handler ask
+  windows; the shim's 5s post-delivery clamp is removed — wait until answer
+  or EOF; the harness's own timeout recorded as spec data + loud
+  registration warn, never auto-edited — ADR-0010 d9);
+  child env is a stripped allowlist + explicit `env`/`passEnv` from day one
+  (sandboxing itself deferred to item 10's trigger). The original payloads
+  survive as proof: retriever + memory land as demo scripts riding the seam;
+  the tool-gate stays ADR-0005 (in-process, fail-closed, deferred). New
+  engine seam: handler teardown on worker restart/drain (a resident child
+  must die with its generation). Design: **ADR-0010** (supersedes the
+  item-15 capability-API framing and dissolves item 11's payload half).
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
-  policy story: what may a running handler *reach* — datastores, external
-  agents/LLMs, network, filesystem, spawn, token/cost budgets. The
-  enforcement principle to hold: handlers affect the loop only via the
-  closed `Effect` set (ADR-0002) and reach the world only via
-  `HandlerContext` — ctx hands out capabilities, policy gates what ctx
-  hands out. Becomes real (and gets its ADR) with item 9's first
-  egress-bearing handler; pairs with item 10's trust model; ADR-0004 N2's
-  process isolation is the backstop for untrusted handler code.
+  policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
+  2026-07-12: payloads are user processes, so there is no in-process
+  capability API to design — the process boundary is the isolation seam.)*
+  What remains: the env-allowlist policy ships WITH item 9 (ADR-0010 d5);
+  sandboxing (namespaces, seccomp, cgroup caps, network deny) is the
+  enforcement half, deferred to item 10's trust-model trigger with ADR-0004
+  N2's process isolation as the backstop. The old `HandlerContext`-hands-out-
+  capabilities principle survives only for first-party *in-process* handlers,
+  if an egress-bearing one ever exists.
 - [ ] **10. Hook trust model** — installing a hook = installing arbitrary code
   that runs on every prompt. The install UX must show exactly what will
   execute, from where, before touching settings. **Rides WITH items 5–6**
   (the install operations and install UX are its only real surface), not a
-  phase of its own.
+  phase of its own. *(Made concrete by ADR-0010: installing = a command line
+  + `handlers.json` entry the GUI shows verbatim; this item's trigger also
+  gates the sandboxing half of item 15.)*
 - [ ] **11. N-runtime harness** — port the core spec to Node and BEAM
   (DESIGN.md's comparison thesis — still the point of the exercise).
+  *(Halved by ADR-0010: payloads are already N-language by construction;
+  what remains to port is the core spec itself — shim/daemon/dispatch.)*
 
 ## Parking lot
 
 - **Mobile** — a responsive browser UI over LAN already answers the likely
   need; no app until a real use case demands one.
 - **Community registry** — discovery/versioning for shared hooks & skills.
+  (Plausible under ADR-0010: a shared hook is a script + manifest, not a
+  compiled plugin.)
 - **shipshape as a Stop-hook** — the repo verifying itself with the very
   mechanism it demonstrates.
 - **Packaging** — single-file publish for the JIT engine (the shim's

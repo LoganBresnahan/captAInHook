@@ -44,6 +44,14 @@ deterministic seam calling an arbitrarily intelligent subsystem.
 socket rather than localhost TCP, and single-binary mode survives as the
 collapsed fallback (and the no-daemon path for CI/one-off runs).
 
+**Update (2026-07-12):** the "unbounded payload" half of the thesis is
+committed to **user processes**: [ADR-0010](doc/adr/0010-exec-handlers.md)'s
+exec handlers — a configured command per handler in any language, normalized
+event in on stdin, one strict-parsed Effect out on stdout, run `oneshot` or
+kept **warm** as a `resident` child under the daemon's supervision (the
+pharos-mcp pattern). In-process C# handlers remain for first-party
+fail-closed gates (ADR-0005).
+
 ## Lifecycle events & effect contracts
 
 | Event            | Handler receives            | Allowed effects                                   |
