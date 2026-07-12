@@ -26,8 +26,8 @@ harness's wire format — with a structured JSONL trail the whole way.
 │        │                                                                  │
 │        ▼                                        structured log (JSONL)    │
 │ Dispatcher.DispatchAsync(evt, dispatchId)       ── dispatch.start         │
-│   CancellationTokenSource(budget)                                         │
-│   Task.WhenAll ── FAN-OUT: all handlers run concurrently                  │
+│   Task.WhenAll ── FAN-OUT: all handlers run concurrently,                 │
+│                   each under its OWN budget window (ADR-0010 d9)          │
 │    ┌───────────────┼────────────────┐                                     │
 │    ▼               ▼                ▼                                     │
 │ RunGuarded      RunGuarded       RunGuarded   each: a CLASSIFIED ask      │
@@ -166,19 +166,23 @@ defines *what* it emits, and config never becomes a template language.
 Handlers run concurrently via `Task.WhenAll` on the thread pool, so dispatch
 wall-time tracks the *slowest* handler, not the sum. Each `RunGuarded` is a
 **classified ask against the handler's supervised worker** (ADR-0004
-decision 5): the dispatch-wide `CancellationTokenSource(budget)` cancels
-`ctx.Ct` at the budget, while the ask itself waits **budget + grace** (default
-10% of budget, clamped 100ms–1s) so a token-honoring handler's cancellation
-reply — which leaves the handler *at* the budget — lands inside the window
-instead of racing it. No-answer outcomes are then unambiguous and classified:
+decision 5): a PER-HANDLER `CancellationTokenSource` (ADR-0010 d9 — each
+handler's window is its own budget, spec-overridable past the dispatcher
+default, unbounded up to the int-ms ceiling) cancels `ctx.Ct` at that
+handler's budget, while the ask itself waits **budget + grace** (default 10%
+of the handler's effective budget, clamped 100ms–1s) so a token-honoring
+handler's cancellation reply — which leaves the handler *at* the budget —
+lands inside the window instead of racing it. No-answer outcomes are then unambiguous and classified:
 `cancelled` (the handler honored its token — a timeout, never a fault),
 `wedged` (received but silent — the supervisor abandons the worker and it
 counts toward escalation), `backlogged` (never received, queued behind a busy
 sibling — uncounted), and `dead` (already-escalated worker — fails fast in
 ~0ms instead of burning the budget). All four degrade to the handler's
 fail-mode effect; classification changes what the *supervisor counts*, never
-what the dispatch returns. Worst-case dispatch wall time is budget + grace,
-paid only when a handler never answers.
+what the dispatch returns. Worst-case dispatch wall time is the max over
+its handlers of (budget_i + grace_i), paid only when a handler never
+answers; `dispatch.start` logs the default budget, and a handler whose spec
+overrides it carries its own `budgetMs` on its `handler.*` lines.
 
 ## Handlers as supervised workers
 

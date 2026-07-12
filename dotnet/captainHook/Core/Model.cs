@@ -20,7 +20,10 @@ public abstract record Effect
     public sealed record Noop : Effect;
 }
 
-public sealed record HandlerContext(DateTimeOffset Deadline, CancellationToken Ct);
+/// DispatchId rides along (optional) so a handler that crosses a process
+/// boundary — ExecHandler's child envelope (ADR-0010 d2) — can carry the SAME
+/// correlation id the trail uses; in-process handlers ignore it.
+public sealed record HandlerContext(DateTimeOffset Deadline, CancellationToken Ct, string? DispatchId = null);
 
 /// A unit of work spliced into the loop at a lifecycle event.
 public interface IHandler

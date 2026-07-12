@@ -5,10 +5,12 @@ using CaptainHook.Actors;
 namespace CaptainHook.Core;
 
 /// A CHILD SPEC, not a live handler: everything the dispatcher needs to
-/// (re)create a handler — its name, fail mode, and a factory. This is the OTP
-/// child-spec idea ported to the registry: "restart" means "run the factory
-/// again", so a restarted worker gets a genuinely fresh handler.
-internal sealed record HandlerSpec(string Name, FailMode OnFailure, Func<IHandler> Factory);
+/// (re)create a handler — its name, fail mode, a factory, and (ADR-0010
+/// decision 9) an optional per-handler budget that may EXCEED the dispatcher
+/// default. This is the OTP child-spec idea ported to the registry: "restart"
+/// means "run the factory again", so a restarted worker gets a genuinely
+/// fresh handler.
+internal sealed record HandlerSpec(string Name, FailMode OnFailure, Func<IHandler> Factory, TimeSpan? Budget = null);
 
 public sealed class Registry
 {
@@ -28,13 +30,42 @@ public sealed class Registry
         return this;
     }
 
+    /// Instance registration with a per-handler budget window (ADR-0010 d9):
+    /// unbounded by design — larger OR smaller than the dispatcher default.
+    public Registry On(string eventType, IHandler handler, TimeSpan budget)
+    {
+        _specs.Add((eventType, new HandlerSpec(handler.Name, handler.OnFailure, () => handler,
+            CheckBudget(budget, $"{eventType}/{handler.Name}"))));
+        return this;
+    }
+
     /// Spec registration: the factory runs once at Dispatcher construction and
     /// once per supervised restart, so a restart yields a genuinely fresh
     /// handler (fresh state, not just a fresh mailbox).
-    public Registry On(string eventType, string name, Func<IHandler> factory, FailMode onFailure = FailMode.Open)
+    public Registry On(string eventType, string name, Func<IHandler> factory, FailMode onFailure = FailMode.Open,
+                       TimeSpan? budget = null)
     {
-        _specs.Add((eventType, new HandlerSpec(name, onFailure, factory)));
+        _specs.Add((eventType, new HandlerSpec(name, onFailure, factory,
+            budget is { } b ? CheckBudget(b, $"{eventType}/{name}") : null)));
         return this;
+    }
+
+    /// "Unbounded by design" still lives inside int-millisecond ask-window
+    /// math (windowMs = budgetMs + graceMs in the F# ask layer): a budget
+    /// past ~24.8 days would overflow NEGATIVE and fault every dispatch of
+    /// that handler with a misleading trail (caught by this slice's
+    /// adversarial verify). Reject at REGISTRATION — a config bug should
+    /// surface at construction, loudly, not per-dispatch.
+    internal static TimeSpan CheckBudget(TimeSpan budget, string owner)
+    {
+        const double maxMs = int.MaxValue - 3_600_000;   // an hour of grace headroom
+        if (budget <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(budget),
+                $"{owner}: budget must be positive (got {budget})");
+        if (budget.TotalMilliseconds > maxMs)
+            throw new ArgumentOutOfRangeException(nameof(budget),
+                $"{owner}: budget exceeds the ask-window ceiling (~24.8 days; int-ms math)");
+        return budget;
     }
 
     /// Everything the Dispatcher needs to spawn one worker per registration.
@@ -53,13 +84,15 @@ public sealed class Dispatcher
 {
     private sealed record Outcome(string Name, Effect Effect);
 
-    /// A registered handler, converged onto the actor layer: the spec's name
-    /// and fail mode ride along in C#, while the handler itself lives inside a
-    /// supervised F# Worker actor and is only ever reached via ask.
-    private sealed record Runner(string Name, FailMode OnFailure, Worker<(HookEvent, HandlerContext), Effect> Worker);
+    /// A registered handler, converged onto the actor layer: the spec's name,
+    /// fail mode, and RESOLVED budget window (per-handler override or the
+    /// dispatcher default, with its grace) ride along in C#, while the handler
+    /// itself lives inside a supervised F# Worker actor and is only ever
+    /// reached via ask.
+    private sealed record Runner(string Name, FailMode OnFailure, TimeSpan Budget, TimeSpan Grace, bool BudgetOverridden,
+                                 Worker<(HookEvent, HandlerContext), Effect> Worker);
 
     private readonly TimeSpan _budget;
-    private readonly TimeSpan _grace;
     private readonly Dictionary<string, List<Runner>> _runners = new();
 
     // The LONG-LIVED background queue (ADR-0004: built here, once). Background
@@ -78,15 +111,23 @@ public sealed class Dispatcher
     /// handlers BEFORE constructing the Dispatcher; later Registry.On calls are
     /// not picked up. The optional supervisor is the test seam (inject one
     /// built on a fake clock to make restart-window math deterministic).
-    /// `grace` (default: 10% of budget, clamped 100ms..1s) widens the ask
-    /// window past the budget so a token-honoring handler's cancellation reply
-    /// lands INSIDE it — that reply leaves the handler AT the budget and needs
-    /// a beat to travel (ADR-0004 decision 5). Worst-case dispatch wall time
-    /// is budget + grace, paid only when a handler never answers.
+    /// `grace` (default: 10% of the handler's EFFECTIVE budget, clamped
+    /// 100ms..1s) widens the ask window past the budget so a token-honoring
+    /// handler's cancellation reply lands INSIDE it — that reply leaves the
+    /// handler AT the budget and needs a beat to travel (ADR-0004 decision
+    /// 5). Worst-case dispatch wall time is max over its handlers of
+    /// (budget_i + grace_i), paid only when a handler never answers
+    /// (ADR-0010 d9: per-handler windows).
     public Dispatcher(Registry registry, TimeSpan budget, Supervisor? supervisor = null, TimeSpan? grace = null)
     {
-        _budget = budget;
-        _grace = grace ?? TimeSpan.FromMilliseconds(Math.Clamp(budget.TotalMilliseconds * 0.10, 100, 1000));
+        _budget = Registry.CheckBudget(budget, "dispatcher default");
+        // Grace scales with each handler's EFFECTIVE budget (ADR-0010 d9: a
+        // 10-minute window deserves more reply-travel headroom than a 100ms
+        // one — a fixed grace mis-sized against a small budget would turn an
+        // honoring handler's cancellation reply into a counted wedge). An
+        // explicit ctor grace (the classification-test seam) still wins for
+        // every handler.
+        var graceOverride = grace;
         _sideConsumer = Task.Run(ConsumeSideAsync);
         var sup = supervisor ?? new Supervisor("dispatcher", maxRestarts: 3, TimeSpan.FromSeconds(5));
 
@@ -110,11 +151,16 @@ public sealed class Dispatcher
                 return req => h.HandleAsync(req.Item1, req.Item2);
             });
 
+            var effective = spec.Budget ?? _budget;
             if (!_runners.TryGetValue(eventType, out var list))
                 _runners[eventType] = list = new List<Runner>();
-            list.Add(new Runner(spec.Name, spec.OnFailure, worker));
+            list.Add(new Runner(spec.Name, spec.OnFailure, effective,
+                graceOverride ?? GraceFor(effective), spec.Budget is not null, worker));
         }
     }
+
+    private static TimeSpan GraceFor(TimeSpan budget) =>
+        TimeSpan.FromMilliseconds(Math.Clamp(budget.TotalMilliseconds * 0.10, 100, 1000));
 
     public async Task<DispatchResult> DispatchAsync(HookEvent e, string? dispatchId = null,
                                                     IReadOnlySet<string>? excludedHandlers = null)
@@ -137,6 +183,9 @@ public sealed class Dispatcher
 
         // Structured trail alongside the human Trace: dispatch.start now, and a
         // span that stamps durMs onto dispatch.done when the whole run finishes.
+        // budgetMs here is the dispatcher DEFAULT; a handler whose spec
+        // overrides it carries its own budgetMs on its handler.* trail lines
+        // (ADR-0010 d9 trail truthfulness).
         Log.Info("dispatcher", "dispatch.start", Fields(e, dispatchId,
             data: new Dictionary<string, object>
             {
@@ -145,13 +194,14 @@ public sealed class Dispatcher
             }));
         using var span = Log.Span("dispatcher", "dispatch.done", Fields(e, dispatchId));
 
-        using var budgetCts = new CancellationTokenSource(_budget);
-
         // FAN-OUT: every handler runs concurrently on the work-stealing thread
-        // pool. This is the .NET analogue of BEAM's Task.async_stream or Node's
-        // Promise.allSettled — but backed by real, parallel threads.
+        // pool, each under its OWN budget window (ADR-0010 d9 — the dispatch
+        // completes when every handler has answered or hit its own window;
+        // WhenAll gives that for free). This is the .NET analogue of BEAM's
+        // Task.async_stream or Node's Promise.allSettled — but backed by real,
+        // parallel threads.
         var outcomes = await Task.WhenAll(
-            handlers.Select(h => RunGuarded(h, e, dispatchId, budgetCts.Token, trace)));
+            handlers.Select(h => RunGuarded(h, e, dispatchId, trace)));
 
         // Route fire-and-forget effects onto the LONG-LIVED side channel; keep
         // loop-effects to merge. The response never waits on background work —
@@ -237,10 +287,14 @@ public sealed class Dispatcher
         }
     }
 
-    private async Task<Outcome> RunGuarded(Runner r, HookEvent e, string? dispatchId, CancellationToken budgetCt, Trace trace)
+    private async Task<Outcome> RunGuarded(Runner r, HookEvent e, string? dispatchId, Trace trace)
     {
         var sw = Stopwatch.StartNew();
-        var ctx = new HandlerContext(DateTimeOffset.UtcNow + _budget, budgetCt);
+        // Per-handler window (ADR-0010 d9): each runner gets its own CTS and
+        // deadline sized to ITS budget — an override may exceed the dispatcher
+        // default (a min-clamp under one shared token could only ever shorten).
+        using var budgetCts = new CancellationTokenSource(r.Budget);
+        var ctx = new HandlerContext(DateTimeOffset.UtcNow + r.Budget, budgetCts.Token, dispatchId);
         try
         {
             // Dispatch IS a CLASSIFIED ask (ADR-0004 decision 5): the budget
@@ -251,13 +305,13 @@ public sealed class Dispatcher
             // reports wedges to the supervisor — the supervisor owns all
             // counting; this method only converts outcomes to effects and logs.
             var res = await r.Worker.AskClassifiedAsync(
-                (e, ctx), (int)_budget.TotalMilliseconds, (int)_grace.TotalMilliseconds, dispatchId ?? "");
+                (e, ctx), (int)r.Budget.TotalMilliseconds, (int)r.Grace.TotalMilliseconds, dispatchId ?? "");
             switch (res.Status)
             {
                 case AskStatus.Ok:
                     trace.Handler(r.Name, sw.Elapsed, "ok");
                     Log.Info("dispatcher", "handler.ok", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                        data: Handler(r.Name)));
+                        data: HandlerData(r)));
                     return new Outcome(r.Name, res.Reply);
 
                 case AskStatus.Faulted when res.Error is OperationCanceledException:
@@ -285,13 +339,13 @@ public sealed class Dispatcher
                     // the budget per dispatch (carry-in b).
                     trace.Handler(r.Name, sw.Elapsed, $"DEAD -> fail-{Mode(r)}");
                     Log.Warn("dispatcher", "handler.dead", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                        data: Handler(r.Name, failMode: Mode(r))));
+                        data: HandlerData(r, Mode(r))));
                     return new Outcome(r.Name, Fail(r));
 
                 default:   // AskStatus.Faulted, non-cancellation: the handler crashed
                     trace.Handler(r.Name, sw.Elapsed, $"ERROR -> fail-{Mode(r)} ({res.Error.Message})");
                     Log.Error("dispatcher", "handler.error", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                        msg: res.Error.Message, data: Handler(r.Name, failMode: Mode(r))));
+                        msg: res.Error.Message, data: HandlerData(r, Mode(r))));
                     return new Outcome(r.Name, Fail(r));
             }
         }
@@ -301,7 +355,7 @@ public sealed class Dispatcher
             // into a status; anything landing here is infrastructure failure.
             trace.Handler(r.Name, sw.Elapsed, $"ERROR -> fail-{Mode(r)} ({ex.Message})");
             Log.Error("dispatcher", "handler.error", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds,
-                msg: ex.Message, data: Handler(r.Name, failMode: Mode(r))));
+                msg: ex.Message, data: HandlerData(r, Mode(r))));
             return new Outcome(r.Name, Fail(r));
         }
     }
@@ -309,7 +363,7 @@ public sealed class Dispatcher
     private Outcome Timeout(Runner r, HookEvent e, string? dispatchId, Stopwatch sw, Trace trace, string classification)
     {
         trace.Handler(r.Name, sw.Elapsed, $"TIMEOUT({classification}) -> fail-{Mode(r)}");
-        var data = Handler(r.Name, failMode: Mode(r));
+        var data = HandlerData(r, Mode(r));
         data["classification"] = classification;
         Log.Warn("dispatcher", "handler.timeout", Fields(e, dispatchId, sw.Elapsed.TotalMilliseconds, data: data));
         return new Outcome(r.Name, Fail(r));
@@ -328,6 +382,16 @@ public sealed class Dispatcher
             Msg = msg,
             Data = data,
         };
+
+    /// Handler(...) plus ADR-0010 d9 trail truthfulness: a spec-overridden
+    /// budget rides on that handler's own trail lines (dispatch.start's
+    /// budgetMs stays the dispatcher default).
+    private static Dictionary<string, object> HandlerData(Runner r, string? failMode = null)
+    {
+        var d = Handler(r.Name, failMode);
+        if (r.BudgetOverridden) d["budgetMs"] = r.Budget.TotalMilliseconds;
+        return d;
+    }
 
     private static Dictionary<string, object> Handler(string name, string? failMode = null)
     {
