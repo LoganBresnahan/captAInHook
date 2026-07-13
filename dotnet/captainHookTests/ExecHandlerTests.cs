@@ -196,6 +196,81 @@ public class ExecHandlerTests
     }
 
     [Fact]
+    public async Task PassEnv_NamedVarCrosses_UnnamedStaysAbsent()
+    {
+        // The canary-ABSENCE discipline extended to passEnv: only the NAMED
+        // variable crosses; a sibling secret set in the same parent stays out.
+        Environment.SetEnvironmentVariable("CAPTAINHOOK_TEST_PASSED", "crossed");
+        Environment.SetEnvironmentVariable("CAPTAINHOOK_TEST_SECRET", "sekrit");
+        try
+        {
+            var h = new ExecHandler("passer", "/bin/sh",
+                ["-c", """printf '{"effect":"inject","text":"%s|%s"}\n' "${CAPTAINHOOK_TEST_PASSED:-ABSENT}" "${CAPTAINHOOK_TEST_SECRET:-ABSENT}" """],
+                passEnv: ["CAPTAINHOOK_TEST_PASSED"]);
+            var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(), Ctx()));
+            Assert.Equal("crossed|ABSENT", eff.Text);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CAPTAINHOOK_TEST_PASSED", null);
+            Environment.SetEnvironmentVariable("CAPTAINHOOK_TEST_SECRET", null);
+        }
+    }
+
+    [Fact]
+    public async Task EnvLiteral_Applied_AndBeatsInherited()
+    {
+        // Literal env{} lands, and explicit beats the allowlisted inherit
+        // (HOME is allowlisted — the literal must still win).
+        var h = new ExecHandler("literal", "/bin/sh",
+            ["-c", """printf '{"effect":"inject","text":"%s|%s"}\n' "${MY_LITERAL:-ABSENT}" "$HOME" """],
+            env: new Dictionary<string, string> { ["MY_LITERAL"] = "42", ["HOME"] = "/custom-home" });
+        var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(), Ctx()));
+        Assert.Equal("42|/custom-home", eff.Text);
+    }
+
+    [Fact]
+    public async Task PassEnvNameParentLacks_SilentlySkipped()
+    {
+        var h = new ExecHandler("skipper", "/bin/sh",
+            ["-c", """printf '{"effect":"inject","text":"%s"}\n' "${NOT_SET_ANYWHERE_XYZ:-ABSENT}" """],
+            passEnv: ["NOT_SET_ANYWHERE_XYZ"]);
+        var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(), Ctx()));
+        Assert.Equal("ABSENT", eff.Text);   // nothing to pass — not an error
+    }
+
+    [Fact]
+    public async Task ConfigCwd_BeatsEventCwd()
+    {
+        var configDir = Directory.CreateTempSubdirectory("exec-configcwd-");
+        var eventDir = Directory.CreateTempSubdirectory("exec-eventcwd-");
+        try
+        {
+            var h = new ExecHandler("cwd-config", "/bin/sh",
+                ["-c", """printf '{"effect":"inject","text":"%s"}\n' "$PWD" """],
+                cwd: configDir.FullName);
+            var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(cwd: eventDir.FullName), Ctx()));
+            Assert.Equal(configDir.FullName, eff.Text);
+        }
+        finally { configDir.Delete(); eventDir.Delete(); }
+    }
+
+    [Fact]
+    public async Task BadConfigCwd_FallsThroughToEventCwd()
+    {
+        var eventDir = Directory.CreateTempSubdirectory("exec-eventcwd-");
+        try
+        {
+            var h = new ExecHandler("cwd-fallback", "/bin/sh",
+                ["-c", """printf '{"effect":"inject","text":"%s"}\n' "$PWD" """],
+                cwd: "/no/such/dir/xyz");
+            var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(cwd: eventDir.FullName), Ctx()));
+            Assert.Equal(eventDir.FullName, eff.Text);   // bad cwd never fails the spawn
+        }
+        finally { eventDir.Delete(); }
+    }
+
+    [Fact]
     public async Task Cwd_IsTheEventsCwd_WhenItExists()
     {
         var dir = Directory.CreateTempSubdirectory("exec-cwd-");

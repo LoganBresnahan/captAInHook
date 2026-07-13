@@ -33,7 +33,11 @@ public sealed record HarnessSpec(
     HarnessRequestSpec Request,
     string ResponseAdapter,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Events,
-    JsonElement Install)   // v1: raw data passthrough — do not over-model
+    JsonElement Install,   // v1: raw data passthrough — do not over-model
+    TimeSpan? HookTimeoutHint = null)   // ADR-0010 d9: the harness's hook-command
+                                        // timeout, INFORMATIONAL — we warn from it
+                                        // (handlers.budgetBeyondHarness), never
+                                        // enforce or auto-edit harness config
 {
     /// The effect kinds a spec may declare. Background is deliberately absent:
     /// background effects never survive Merge, so they never reach the gate.
@@ -102,9 +106,21 @@ public sealed record HarnessSpec(
         // backing JsonDocument so the spec outlives the parse.
         var install = root.TryGetProperty("install", out var inst) ? inst.Clone() : default;
 
+        // hookTimeoutHintMs: optional, informational (ADR-0010 d9) — the
+        // harness's own hook-command timeout. Claude Code speaks seconds in
+        // ITS config; the spec speaks milliseconds like every budget field.
+        TimeSpan? hint = null;
+        if (root.TryGetProperty("hookTimeoutHintMs", out var th))
+        {
+            if (th.ValueKind == JsonValueKind.Number && th.TryGetInt64(out var ms) && ms > 0)
+                hint = TimeSpan.FromMilliseconds(ms);
+            else
+                errs.Add($"'hookTimeoutHintMs' must be a positive integer millisecond count (got {th.GetRawText()})");
+        }
+
         return errs.Count > 0
             ? null
-            : new HarnessSpec(name!, request, adapter!, events, install);
+            : new HarnessSpec(name!, request, adapter!, events, install, hint);
     }
 
     static string? Str(JsonElement obj, string prop) =>

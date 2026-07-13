@@ -778,6 +778,25 @@ run live*. The framework underneath is what exists today.
   full loop and a collapsed E2E (child inject in the real hook answer).
   Suite 527 green twice. **Phase 3 complete — user payloads are live on
   the collapsed and daemon paths.**)
+  `child-env-allowlist` + `harness-timeout-hint` (2026-07-13, the phase-4
+  config batch. Env: ExecHandler consumes the entry's `env`/`passEnv`/`cwd`
+  — precedence fixed-allowlist ∪ passEnv-names-from-parent, literal env{}
+  applied LAST (explicit beats inherited), a passEnv name the parent lacks
+  silently skips; cwd rungs config → event → runtime home, each only if it
+  EXISTS (bad cwd never fails a spawn; the resolved choice + any fallback
+  ride exec.spawn's data); `handlers.fieldIgnored` shrinks to
+  readinessTimeoutMs. Hint: `HarnessSpec.HookTimeoutHint`
+  (`hookTimeoutHintMs`, optional, strict-validated; embedded claude-code
+  declares 60000 — Claude Code's hook-command default), threaded from the
+  DEFAULT spec at both registration sites; a budget past it draws
+  `handlers.budgetBeyondHarness` — loud, informational, never auto-synced
+  (d9). Verified by the plan's decisive drive, one real collapsed run:
+  secret=ABSENT (canary stripped), passed=crossed (named passthrough),
+  literal=from-config (explicit add), the warn firing with the entry named,
+  and phase 2's per-handler budgetMs visible on handler.ok. 13 new tests
+  (canary-absence for passEnv, literal-beats-inherited, cwd precedence +
+  bad-cwd fallback, hint parse rules, embedded-spec pin, warn/no-warn).
+  Suite 535 green twice. **Phase 4 complete.**)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

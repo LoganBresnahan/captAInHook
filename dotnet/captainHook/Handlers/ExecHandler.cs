@@ -57,7 +57,10 @@ public sealed class ExecHandler(
     string name,
     string command,
     IReadOnlyList<string>? args = null,
-    FailMode onFailure = FailMode.Open) : IHandler
+    FailMode onFailure = FailMode.Open,
+    IReadOnlyDictionary<string, string>? env = null,
+    IReadOnlyList<string>? passEnv = null,
+    string? cwd = null) : IHandler
 {
     public string Name => name;
     public FailMode OnFailure => onFailure;
@@ -104,7 +107,8 @@ public sealed class ExecHandler(
         };
         foreach (var a in args ?? []) psi.ArgumentList.Add(a);
         ApplyEnvAllowlist(psi);
-        ApplyCwd(psi, e.Cwd);
+        var (resolvedCwd, cwdFallback) = ResolveCwd(e.Cwd);
+        if (resolvedCwd is not null) psi.WorkingDirectory = resolvedCwd;
 
         Process proc;
         try
@@ -119,10 +123,13 @@ public sealed class ExecHandler(
                 $"exec handler '{name}': cannot start '{command}' — {ex.Message}");
         }
 
-        Log.Info("exec", "exec.spawn", F(e, ctx, data: new Dictionary<string, object>
+        var spawnData = new Dictionary<string, object>
         {
             ["handler"] = name, ["pid"] = proc.Id, ["command"] = command, ["mode"] = "oneshot",
-        }));
+        };
+        if (resolvedCwd is not null) spawnData["cwd"] = resolvedCwd;
+        if (cwdFallback) spawnData["cwdFallback"] = true;   // configured cwd missing — fell through
+        Log.Info("exec", "exec.spawn", F(e, ctx, data: spawnData));
 
         // All three pipes serviced CONCURRENTLY from the start — the classic
         // full-pipe-buffer deadlock (child blocked writing stderr while we
@@ -319,30 +326,41 @@ public sealed class ExecHandler(
         finally { proc.Dispose(); }
     }
 
-    private static void ApplyEnvAllowlist(ProcessStartInfo psi)
+    private void ApplyEnvAllowlist(ProcessStartInfo psi)
     {
         // ProcessStartInfo.Environment starts PRE-POPULATED with the parent
         // env — Clear() is the whole security property (a missing Clear ships
         // "inherit everything + adds" with every positive test green).
+        // Precedence (decision 5): fixed allowlist ∪ passEnv NAMES cross from
+        // the parent env (a passEnv name the parent lacks is silently skipped
+        // — nothing to pass); the entry's literal env{} is applied LAST, so
+        // explicit always beats inherited.
         psi.Environment.Clear();
         foreach (DictionaryEntry kv in Environment.GetEnvironmentVariables())
         {
             var k = (string)kv.Key;
-            if ((AllowedEnv.Contains(k) || k.StartsWith("LC_", StringComparison.Ordinal)) && kv.Value is string v)
+            var allowed = AllowedEnv.Contains(k)
+                          || k.StartsWith("LC_", StringComparison.Ordinal)
+                          || (passEnv?.Contains(k) ?? false);
+            if (allowed && kv.Value is string v)
                 psi.Environment[k] = v;
         }
+        foreach (var (k, v) in env ?? new Dictionary<string, string>())
+            psi.Environment[k] = v;
     }
 
-    private static void ApplyCwd(ProcessStartInfo psi, string? eventCwd)
+    /// Cwd precedence (decision 4): the entry's configured cwd, else the
+    /// event's cwd, else the runtime home — each rung only if it EXISTS
+    /// (bad-cwd falls through rather than failing the spawn); the resolved
+    /// choice and any fallback ride exec.spawn's data.
+    private (string? Cwd, bool Fallback) ResolveCwd(string? eventCwd)
     {
-        if (eventCwd is not null && Directory.Exists(eventCwd))
-            psi.WorkingDirectory = eventCwd;
-        else
-        {
-            var home = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".captainHook");
-            if (Directory.Exists(home)) psi.WorkingDirectory = home;
-        }
+        if (cwd is not null && Directory.Exists(cwd)) return (cwd, false);
+        var fellBack = cwd is not null;   // configured but missing
+        if (eventCwd is not null && Directory.Exists(eventCwd)) return (eventCwd, fellBack);
+        var home = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".captainHook");
+        return (Directory.Exists(home) ? home : null, fellBack);
     }
 
     private static string StderrTail(StringBuilder buf)

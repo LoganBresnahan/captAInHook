@@ -6,6 +6,7 @@
     "cwdField": "cwd"
   },
   "response": { "adapter": "claude-hook-json" },
+  "hookTimeoutHintMs": 60000,
   "events": {
     "SessionStart":     { "effects": ["inject"] },
     "UserPromptSubmit": { "effects": ["inject"] },

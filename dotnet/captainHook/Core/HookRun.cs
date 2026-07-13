@@ -20,7 +20,7 @@ public static class HookRun
     /// null ⇒ zero exec handlers (the test-safe default, the policyPath
     /// idiom); Program.cs passes ExecHandlersFile.ResolvePath() so all three
     /// production entry points read the same file.
-    public static Registry BuildDefaultRegistry(string? handlersPath = null)
+    public static Registry BuildDefaultRegistry(string? handlersPath = null, TimeSpan? harnessTimeoutHint = null)
     {
         var registry = new Registry()
             .On("SessionStart", new EchoHandler())
@@ -36,7 +36,7 @@ public static class HookRun
         // registration order Merge depends on stays deterministic: coded
         // first, then handlers.json top to bottom.
         if (handlersPath is not null)
-            RegisterExecHandlers(registry, ExecHandlersFile.Resolve(handlersPath));
+            RegisterExecHandlers(registry, ExecHandlersFile.Resolve(handlersPath), harnessTimeoutHint);
 
         return registry;
     }
@@ -52,7 +52,13 @@ public static class HookRun
     /// resident-child-runtime slice lands their runtime. A oneshot entry on a
     /// before-tools event draws `handlers.slowShape` (d7: loud guidance — a
     /// cold interpreter per TOOL CALL re-imposes the tax item 12 killed).
-    public static void RegisterExecHandlers(Registry registry, ExecHandlersResolution resolution)
+    /// `harnessTimeoutHint` is decision 9's informational boundary: the
+    /// harness's own hook-command timeout (from the default HarnessSpec's
+    /// hookTimeoutHintMs). A budget past it draws
+    /// `handlers.budgetBeyondHarness` — loud, never enforced, never
+    /// auto-synced into harness config.
+    public static void RegisterExecHandlers(Registry registry, ExecHandlersResolution resolution,
+                                            TimeSpan? harnessTimeoutHint = null)
     {
         switch (resolution)
         {
@@ -73,21 +79,22 @@ public static class HookRun
 
                 foreach (var entry in entries)
                 {
-                    // Loudness symmetry: resident entries get a loud skip
-                    // below, so parse-valid fields the CURRENT slices cannot
-                    // honor yet must be loud too — a user who wrote env/cwd
-                    // deserves to know they are inert until the
-                    // child-env-allowlist (phase 4) / resident (phase 5)
-                    // slices wire them (adversarial-verify find).
-                    var inert = new List<string>();
-                    if (entry.Env.Count > 0) inert.Add("env");
-                    if (entry.PassEnv.Count > 0) inert.Add("passEnv");
-                    if (entry.Cwd is not null) inert.Add("cwd");
-                    if (entry.ReadinessTimeout is not null) inert.Add("readinessTimeoutMs");
-                    if (inert.Count > 0 && entry.Mode == ExecMode.Oneshot)
+                    // Loudness symmetry: parse-valid fields the CURRENT
+                    // slices cannot honor yet are loud (adversarial-verify
+                    // find). env/passEnv/cwd are enforced as of the
+                    // child-env-allowlist slice; only the resident-slice
+                    // field remains inert on a oneshot entry.
+                    if (entry.ReadinessTimeout is not null && entry.Mode == ExecMode.Oneshot)
                         Log.Warn("handlers", "handlers.fieldIgnored", new LogFields
                         {
-                            Msg = $"not yet enforced (lands with the config-env/resident slices): {string.Join(", ", inert)}",
+                            Msg = "not yet enforced (lands with the resident slice): readinessTimeoutMs",
+                            Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                        });
+
+                    if (harnessTimeoutHint is { } hint && entry.Budget is { } b && b > hint)
+                        Log.Warn("handlers", "handlers.budgetBeyondHarness", new LogFields
+                        {
+                            Msg = $"budget {b.TotalMilliseconds:F0}ms exceeds the harness's hook timeout (~{hint.TotalMilliseconds:F0}ms): the harness may abandon the shim before the answer — the daemon still completes the work, but the effect is lost (ADR-0010 d9)",
                             Data = new Dictionary<string, object> { ["entry"] = entry.Name },
                         });
 
@@ -112,7 +119,8 @@ public static class HookRun
                             });
                         var e = entry;   // capture per closure
                         registry.On(evt, e.Name,
-                            () => new ExecHandler(e.Name, e.Command, e.Args, e.OnFailure),
+                            () => new ExecHandler(e.Name, e.Command, e.Args, e.OnFailure,
+                                                  e.Env, e.PassEnv, e.Cwd),
                             e.OnFailure, e.Budget);
                     }
                 }
@@ -174,7 +182,7 @@ public static class HookRun
             return 0;
         }
 
-        var dispatcher = new Dispatcher(BuildDefaultRegistry(handlersPath), budget: TimeSpan.FromSeconds(2));
+        var dispatcher = new Dispatcher(BuildDefaultRegistry(handlersPath, spec.HookTimeoutHint), budget: TimeSpan.FromSeconds(2));
         probe?.DispatcherBuilt();
         var result = await dispatcher.DispatchAsync(evt, dispatchId, gate.Excluded);
         probe?.Dispatched();

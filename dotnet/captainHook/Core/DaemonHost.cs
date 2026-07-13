@@ -78,7 +78,12 @@ public static class DaemonHost
         // re-read per dispatch only when the file's (mtime,size) moves (ADR-0006
         // decision 6). Absent when no path is configured (tests) => allow all.
         var policy = new ReloadingPolicy(policyPath);
-        var dispatcher = new Dispatcher(registry ?? HookRun.BuildDefaultRegistry(handlersPath), budget: TimeSpan.FromSeconds(2));
+        // The budget-vs-harness-timeout warn compares against the DEFAULT
+        // harness's hint (registration is harness-agnostic; per-dispatch
+        // harness selection comes later) — informational only, ADR-0010 d9.
+        var dispatcher = new Dispatcher(
+            registry ?? HookRun.BuildDefaultRegistry(handlersPath, harnesses.Current.Get("claude-code").HookTimeoutHint),
+            budget: TimeSpan.FromSeconds(2));
 
         // Listening ⟺ ready: the first connect a shim ever makes against this
         // daemon already finds warm workers.

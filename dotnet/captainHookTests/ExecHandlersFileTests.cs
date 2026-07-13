@@ -305,19 +305,67 @@ public class ExecRegistrationTests
     }
 
     [Fact]
-    public void InertFields_OnRegisteredOneshot_WarnedLoudly()
+    public void InertFields_OnlyReadinessTimeoutRemains_WarnedLoudly()
     {
-        // Loudness symmetry (adversarial-verify MED): resident gets a loud
-        // skip; parse-valid-but-unenforced fields must be loud too.
+        // Loudness symmetry (adversarial-verify MED): env/passEnv/cwd are
+        // ENFORCED as of the child-env-allowlist slice (no warn — they work);
+        // only the resident-slice field stays inert on a oneshot entry.
         using var captured = new CapturedLog();
         var registry = new Registry();
         HookRun.RegisterExecHandlers(registry, Loaded(
-            new ExecEntry("with-env", "/bin/true", [], ["Stop"], ExecMode.Oneshot, FailMode.Open,
-                null, null, new Dictionary<string, string> { ["K"] = "v" }, ["PATH2"], "/tmp")));
+            new ExecEntry("with-all", "/bin/true", [], ["Stop"], ExecMode.Oneshot, FailMode.Open,
+                null, TimeSpan.FromSeconds(3),
+                new Dictionary<string, string> { ["K"] = "v" }, ["PATH2"], "/tmp")));
 
         var warn = Assert.Single(captured.Events.ToArray(), e => e.Evt == "handlers.fieldIgnored");
-        Assert.Contains("env", warn.Fields.Msg);
-        Assert.Contains("cwd", warn.Fields.Msg);
+        Assert.Contains("readinessTimeoutMs", warn.Fields.Msg);
+        Assert.DoesNotContain("env", warn.Fields.Msg);
+        Assert.DoesNotContain("cwd", warn.Fields.Msg);
+    }
+
+    [Fact]
+    public void BudgetBeyondHarnessHint_DrawsTheWarn_UnderStaysSilent()
+    {
+        using var captured = new CapturedLog();
+        var registry = new Registry();
+        HookRun.RegisterExecHandlers(registry, Loaded(
+                Entry("patient", "true", ["Stop"], budget: TimeSpan.FromSeconds(120)),
+                Entry("prompt", "true", ["Stop"], budget: TimeSpan.FromSeconds(5))),
+            harnessTimeoutHint: TimeSpan.FromSeconds(60));
+
+        var warn = Assert.Single(captured.Events.ToArray(), e => e.Evt == "handlers.budgetBeyondHarness");
+        Assert.Equal("patient", warn.Fields.Data!["entry"]);
+        Assert.Contains("abandon the shim", warn.Fields.Msg);
+    }
+
+    [Fact]
+    public void EmbeddedClaudeCodeSpec_CarriesTheHint()
+    {
+        // The embedded default declares Claude Code's 60s hook-command
+        // timeout; an invalid embedded spec throws at load, so this also
+        // guards the json edit itself.
+        var spec = new HarnessRegistry(Path.Combine(Path.GetTempPath(),
+            "captainhook-no-such-dir-" + Guid.NewGuid().ToString("N"))).Get("claude-code");
+        Assert.Equal(TimeSpan.FromSeconds(60), spec.HookTimeoutHint);
+    }
+
+    [Fact]
+    public void HookTimeoutHint_ParseRules()
+    {
+        static HarnessSpec? P(string json, out IReadOnlyList<string> errs)
+        {
+            using var doc = JsonDocument.Parse(json);
+            return HarnessSpec.TryParse(doc.RootElement, out errs);
+        }
+
+        const string b = """{"name":"t","response":{"adapter":"generic-json"}""";
+        Assert.Null(P(b + "}", out _)!.HookTimeoutHint);                          // absent ⇒ null
+        Assert.Equal(TimeSpan.FromSeconds(30),
+            P(b + ""","hookTimeoutHintMs":30000}""", out _)!.HookTimeoutHint);
+        Assert.Null(P(b + ""","hookTimeoutHintMs":"60s"}""", out var e1));        // wrong type ⇒ invalid spec
+        Assert.Contains(e1, v => v.Contains("hookTimeoutHintMs"));
+        Assert.Null(P(b + ""","hookTimeoutHintMs":0}""", out var e2));            // non-positive ⇒ invalid
+        Assert.NotEmpty(e2);
     }
 
     [Fact]
