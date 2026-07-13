@@ -163,7 +163,22 @@ its lessons are imported wholesale (§ Pattern lineage).
      seam today; `ExecHandler`'s child must not outlive its generation. Same
      at daemon drain: resident children are terminated in the drain sequence,
      and idle-exit implies children die with the daemon (respawned eagerly on
-     the next daemon spawn).
+     the next daemon spawn). *(2026-07-12 kill-discipline amendment — the
+     seam as built: `IHandler` stays teardown-free; disposal threads through
+     the Dispatcher's C# factory closure (worker id → current instance;
+     swap-on-restart disposes the replaced instance unless it is the SAME
+     reference — instance registration's reuse contract — or still shared by
+     another slot), and the escalation path — where `MarkDead` never re-runs
+     the factory — disposes the last instance via a new additive
+     `Supervisor.SubscribeEscalated` (the settable `OnEscalated` stays the
+     host's; infrastructure must not be clobberable by it). Both paths
+     fire-and-forget the disposal: the supervisor's one-at-a-time fault
+     mailbox never blocks on a kill-grace window. Kill mechanics:
+     `ProcessStartInfo.CreateNewProcessGroup` is Windows-only, so the group
+     is made by spawning through `setsid(1)` — exec-in-place, pid preserved,
+     pgid == pid — and killed via libc `kill(-pid)` TERM→2s→KILL; setsid
+     absent degrades to the /proc tree walk, flagged per-spawn
+     (doc/platform.md § Process groups).)*
    - Escalated workers fast-fail per fail mode, unchanged.
 
 7. **Latency doctrine is loud guidance, not a hard gate.** Config may put any
@@ -278,7 +293,30 @@ child-process specifics; children that speak MCP.
   one-worker-per-handler model, now reachable), and interacts with the drain
   deadline — a deploy/cutover drain that fires mid-long-dispatch must either
   wait out the remaining budget or cut it loudly; decided at implementation,
-  named here.
+  named here. *(2026-07-12 kill-discipline resolution: **cut, loudly.** The
+  drain deadline is the daemon's own contract — a budget can defer it but
+  never extend it. The drain gains a third phase that ALWAYS runs after the
+  in-flight wait and background drain: every handler instance is disposed
+  (`Dispatcher.DisposeHandlersAsync` — exec children die TERM→2s
+  grace→KILL, group-wide), which unwedges a still-running dispatch into its
+  fail mode in milliseconds, so a short post-kill window usually still
+  relays the fail-mode answer instead of slamming the socket. Trail:
+  `daemon.drainChildren` (always, when instances had teardown) +
+  `daemon.drainCut` (cut/resolved counts); registration pre-warns the exact
+  configs this can bite (`handlers.budgetBeyondDrain`, when budget + grace
+  exceeds the drain deadline). Idle-exit takes the same path — children die
+  with the daemon, respawned eagerly by its successor. The child phase runs
+  OUTSIDE the 10s drain deadline, under its own 6s bound (blown ⇒
+  `daemon.drainChildrenTimeout`, exit anyway): skipping it to stay under
+  the deadline would trade a bounded wait for an unbounded orphan. The
+  phase also awaits kills already in flight — a budget cancel's detached
+  TERM→grace→KILL keeps its child tracked until concluded, and
+  restart-evicted instances' disposals are registered pending — so a drain
+  can never exit ahead of a SIGKILL it owes (the adversarial-verify orphan
+  find). On a drain TIMEOUT the background intake closes first, so a
+  cut dispatch's sibling Background effect lands on the loud
+  `side.dropped` path instead of silently starting doomed work. Doctor's
+  reap grace grew 12s→18s to cover the whole tail.)*
 
 ## Pattern lineage — pharos-mcp (`~/pharos-mcp`)
 

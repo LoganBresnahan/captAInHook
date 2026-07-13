@@ -58,6 +58,17 @@ own mechanics live in [flow/management-api.md](flow/management-api.md):
 | `dotnet foo.dll` makes `Environment.ProcessPath` the MUXER | Under framework-dependent `dotnet <dll>` invocation, ProcessPath is `/…/dotnet`, not the app — a self-respawn would exec `dotnet --daemon` (a CLI error). Only the apphost executable yields the app's own path. | `DaemonSpawner`'s muxer guard (refuses + `shim.spawnFailed`); the `/deploy` skill's apphost requirement (doc/flow/live-deployment.md). |
 | .NET cannot preemptively kill user code | No `Thread.Abort`; a wedged, token-ignoring handler's task can only be abandoned, not destroyed (the honest cost of not being on the BEAM). | ADR-0004 decision 5's abandon-and-respawn + leak accounting; wedges count toward escalation. |
 
+## Process groups (exec-handler kill discipline)
+
+| Fact | Detail | What leans on it |
+| --- | --- | --- |
+| `ProcessStartInfo.CreateNewProcessGroup` is Windows-only | Present in the .NET 10 surface but throws `PlatformNotSupportedException` on Unix (probed 2026-07-12, SDK 10.0.301); .NET exposes no setpgid seam around its fork/exec. | Why the group is made by a *spawn wrapper* instead of a start-info flag (ADR-0010 d6 kill-discipline amendment). |
+| `setsid(1)` execs IN PLACE when the caller is not a group leader | util-linux setsid forks only if it already leads a group; a freshly forked child never does, so `setsid <cmd>` keeps the pid (`Process.Id` IS the payload) and yields pgid == sid == pid. Grandchildren inherit the group. Probed 2026-07-12: pid preserved; `kill(-pid, TERM)` took a backgrounded grandchild; a `trap '' TERM` group survived TERM and died to `kill(-pid, KILL)`. | `ExecHandler`'s spawn prefix + `ProcessGroup.TermThenKillAsync` (libc `kill(2)` P/Invoke, the Doctor.cs precedent); `KillDisciplineTests`. |
+| Ignored signal dispositions survive fork+exec | `trap '' TERM` in a payload script leaves SIG_IGN set in every descendant — a whole group can shrug off SIGTERM. | Why TERM→grace→**SIGKILL** escalation exists (and is trailed: second `exec.kill` line, `how=kill`). |
+| `Process.Kill(entireProcessTree)` walks /proc descendants only | A grandchild that reparents to init (double-fork daemonizer) leaves the walkable tree and survives; a process group keeps it reachable. | The degrade path when setsid is absent from PATH (flagged per-spawn: `exec.spawn` `pgroup=false`) — group kill is the primary for exactly this gap. |
+| Signal-0 liveness counts zombies as alive | `kill(pid, 0)` succeeds on an exited-but-unreaped child; `kill(-pgid, 0)` likewise while any member (zombie included) remains. | `ProcessGroup.IsAlive` prefers `Process.HasExited` for the leader (the runtime reaps its own children) and probes the GROUP once the leader is gone — a leader-only check reads `sleep 300 & exit 0` as dead and orphans the grandchild; tests treat /proc state `Z` as dead. |
+| A pgid persists while any member lives | The group survives its leader's exit (orphaned process group); the pgid cannot be recycled until every member is dead and reaped. | Group-probe liveness after leader exit; the accepted residual (a stray signal needs a full pid-space wrap inside the ≤3s kill window). |
+
 ## Native AOT (captainShim)
 
 | Fact | Detail | What leans on it |

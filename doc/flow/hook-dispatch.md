@@ -123,7 +123,13 @@ the daemon DRAINS (decision 4): listener closes first (mid-drain hooks get
 refused → collapse, never hang), in-flight dispatches still get their
 responses, queued/running Background effects complete — both phases under
 one deadline (default 10s; a blown deadline exits anyway and logs
-`daemon.drainTimeout` with the dropped counts) — then socket and pidfile are
+`daemon.drainTimeout` with the dropped counts) — then the CHILD PHASE runs
+unconditionally (ADR-0010 N6): every handler instance is disposed
+(`DisposeHandlersAsync` — exec children killed TERM→grace→KILL, group-wide;
+`daemon.drainChildren`), which cuts any dispatch whose budget outlasted the
+deadline into its fail mode fast enough that a short post-kill window
+usually still relays the answer (`daemon.drainCut`; pre-warned at
+registration by `handlers.budgetBeyondDrain`) — then socket and pidfile are
 Under concurrency (soaked at 200 dispatches / 16-wide): dispatch-scoped
 machinery is per-call by construction, per-worker serialization is the
 ordering guarantee (a bare `++` in a stateful handler yields a perfect

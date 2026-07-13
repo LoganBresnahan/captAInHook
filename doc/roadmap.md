@@ -797,6 +797,47 @@ run live*. The framework underneath is what exists today.
   (canary-absence for passEnv, literal-beats-inherited, cwd precedence +
   bad-cwd fallback, hint parse rules, embedded-spec pin, warn/no-warn).
   Suite 535 green twice. **Phase 4 complete.**)
+  `kill-discipline-teardown` (2026-07-12, phase 5's first chunk — the seam
+  + mechanics + drain; resident-child-runtime is the second chunk. Teardown
+  seam: disposal threads through the Dispatcher's C# factory closure
+  (worker id → current instance; swap-on-restart disposes the REPLACED
+  instance unless same-reference — the instance-registration reuse contract
+  — or still shared by another slot), and escalation — where MarkDead never
+  re-runs the factory — disposes the LAST instance via a new additive
+  `Supervisor.SubscribeEscalated` (the settable OnEscalated stays the
+  host's slot; the N3 orphan hole closed). Both paths fire-and-forget so
+  the one-fault-at-a-time supervisor mailbox never waits a kill grace.
+  Kill mechanics: .NET's CreateNewProcessGroup is Windows-only
+  (PlatformNotSupportedException probed), so spawn goes through setsid(1)
+  — exec-in-place, pid preserved, pgid == sid == pid, grandchildren die
+  with the group — and TERM→2s grace→KILL lands via libc kill(-pid)
+  (`ProcessGroup`); TERM-ignorers draw a second exec.kill how=kill line;
+  setsid-absent degrades to tree walk, flagged pgroup=false per spawn.
+  ExecHandler tracks every live child, implements IAsyncDisposable
+  (teardown kills all, refuses new spawns), and budget/protocol kills send
+  TERM synchronously then escalate OFF the dispatch path (OCE rethrows
+  immediately). N6 DECIDED: cut, loudly — the drain gains an unconditional
+  child phase after in-flight + background (Dispatcher.DisposeHandlersAsync,
+  own 6s bound; ADR-0010 N6 amendment), daemon.drainChildren +
+  daemon.drainCut trail it, handlers.budgetBeyondDrain pre-warns at
+  registration, Doctor grace 12s→18s covers the tail. Three-skeptic
+  adversarial round confirmed and fixed: leader-keyed liveness (a dead
+  leader's surviving group read "gone" — IsAlive now probes the GROUP),
+  drain-outruns-detached-SIGKILL (children stay tracked until their kill
+  concludes; evicted instances' disposals registered pending and awaited
+  by the drain), duplicate-worker-id corruption (ctor re-probes ids;
+  Supervisor.Spawn refuses duplicates), a throwing restart factory
+  silently killing the supervisor loop (escalates instead), drain-timeout
+  background effects silently starting doomed work (intake closed →
+  side.dropped), reaper exit-code lost to teardown Dispose (cached),
+  setsid probed for the execute bit. Residue documented, not defended:
+  collapsed-mode kills are TERM-only (exit can outrun the detached KILL);
+  a gracefully-concluded child's daemonized survivors are its own
+  (kill paths take the group, graceful exit releases it — ExecHandler
+  header). 12 tests (pgid==pid end-to-end, grandchild dies with group,
+  SIGKILL escalation, dead-leader group teardown, drain-awaits-kill,
+  restart/escalation/singleton/shared disposal, lingerer teardown, the N6
+  daemon E2E asserting the cut still ANSWERS). Suite 547 green twice.)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

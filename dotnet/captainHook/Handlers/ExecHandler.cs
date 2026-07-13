@@ -31,21 +31,42 @@ namespace CaptainHook.Handlers;
 ///                            dispatcher's existing machinery).
 ///   * garbage / trailing content on the answer line ⇒ protocol error ⇒
 ///                            child killed, handler failure ⇒ fail mode.
-///   * budget cancellation  ⇒ child killed (best-effort process tree; the
-///                            setpgid discipline is the kill-discipline
-///                            slice), OperationCanceledException rethrown so
-///                            the classified ask counts it as an honored
-///                            cancel. `exec.kill` in the trail.
+///   * budget cancellation  ⇒ child killed — SIGTERM to its process group
+///                            now, grace → SIGKILL escalated OFF the
+///                            dispatch path (ProcessGroup) — and
+///                            OperationCanceledException rethrown so the
+///                            classified ask counts it as an honored
+///                            cancel. `exec.kill` in the trail (a second
+///                            line with how=kill when TERM was ignored).
 ///
 /// Grandchildren decouple pipe-EOF from child-exit (a backgrounded process
 /// inherits the fds), so exit and answer are raced and every post-exit pipe
 /// join is bounded by PipeGrace — a `sleep 30 & exit 0` child yields its
-/// decided Noop immediately, and the grandchild itself is the
-/// kill-discipline slice's business (setpgid). Reply-then-linger is a
+/// decided Noop immediately, and the grandchild dies with the child's
+/// process group (the setsid spawn — ProcessGroup). WHO the group belongs
+/// to follows one rule: KILL paths (budget, protocol error, teardown) take
+/// the whole group, leader dead or not; a GRACEFUL conclusion (answered, or
+/// EOF + exit 0) releases it when the pipes close — a payload that
+/// deliberately daemonizes (redirects its fds, exits 0) has left the
+/// dispatch and its survivors are its own business, while one still holding
+/// the answer channel is attached and dies at teardown. Reply-then-linger is a
 /// DAEMON-mode pattern: in collapsed mode the engine exits after the
 /// effect, abandoning the reaper (no exec.exit line) and closing the pipe
 /// read-ends — a lingering child that writes afterwards gets SIGPIPE. Its
 /// own risk; documented, not defended.
+///
+/// TEARDOWN (kill-discipline slice): the handler owns its children's
+/// lifetime end-to-end — every spawn is tracked live, and DisposeAsync
+/// (invoked by the Dispatcher's teardown seam on supervised replacement,
+/// escalation, and daemon drain) kills whatever is still running
+/// TERM→grace→KILL and refuses new spawns. A child must never outlive its
+/// handler generation, and no child survives the daemon. In COLLAPSED mode
+/// the guarantee is TERM-only: the kill's SIGTERM is sent synchronously on
+/// the dispatch path, but the engine exits right after the effect, so the
+/// detached grace→SIGKILL escalation may never land — a budget-killed child
+/// that ignores TERM can outlive a collapsed run (same abandonment family
+/// as the reaper; the daemon path has no such hole — the drain awaits the
+/// kill).
 ///
 /// The child environment is STRIPPED from day one (decision 5): never
 /// inherited — a fixed allowlist only. Config-driven env{}/passEnv[] arrive
@@ -60,10 +81,27 @@ public sealed class ExecHandler(
     FailMode onFailure = FailMode.Open,
     IReadOnlyDictionary<string, string>? env = null,
     IReadOnlyList<string>? passEnv = null,
-    string? cwd = null) : IHandler
+    string? cwd = null) : IHandler, IAsyncDisposable
 {
     public string Name => name;
     public FailMode OnFailure => onFailure;
+
+    /// Whether spawns get their own process group (setsid found on PATH) —
+    /// decided once per process; the degraded case is flagged per-spawn.
+    private static readonly bool Pgrouped = ProcessGroup.SetsidPath is not null;
+
+    /// SIGTERM's window to work before SIGKILL. Small enough to fit inside
+    /// the daemon drain's child phase; large enough for a signal-handling
+    /// payload to flush and exit.
+    private static readonly TimeSpan KillGrace = TimeSpan.FromSeconds(2);
+
+    // Every child this INSTANCE has spawned and not yet seen off (value =
+    // pid, cached because Process.Id is unreadable after Dispose). Lock-
+    // guarded: the reaper untracks concurrently with new dispatch spawns,
+    // and DisposeAsync snapshots against both.
+    private readonly object _liveLock = new();
+    private readonly Dictionary<Process, int> _liveChildren = new();
+    private bool _disposed;
 
     /// Decision 5's fixed allowlist (exact names; LC_* by prefix). Explicit
     /// per-entry env/passEnv are handlers.json fields (phase 4) — this static
@@ -96,15 +134,27 @@ public sealed class ExecHandler(
 
     public async Task<Effect> HandleAsync(HookEvent e, HandlerContext ctx)
     {
+        lock (_liveLock)
+            if (_disposed)
+                throw new ObjectDisposedException(null, $"exec handler '{name}': torn down");
+
         var sw = Stopwatch.StartNew();
+        // The setsid prefix is the kill discipline's spawn half: it execs the
+        // payload IN PLACE (the fork child is never a group leader), so
+        // Process.Id is the payload's pid AND its pgid — kill(-pid) reaches
+        // every grandchild. See ProcessGroup. One trade: a missing command
+        // no longer throws Win32Exception at Start (setsid itself starts
+        // fine) — it surfaces as exit 127 with setsid's stderr naming the
+        // command, through the exited-nonzero path.
         var psi = new ProcessStartInfo
         {
-            FileName = command,
+            FileName = Pgrouped ? ProcessGroup.SetsidPath! : command,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
         };
+        if (Pgrouped) psi.ArgumentList.Add(command);
         foreach (var a in args ?? []) psi.ArgumentList.Add(a);
         ApplyEnvAllowlist(psi);
         var (resolvedCwd, cwdFallback) = ResolveCwd(e.Cwd);
@@ -122,11 +172,13 @@ public sealed class ExecHandler(
             throw new InvalidOperationException(
                 $"exec handler '{name}': cannot start '{command}' — {ex.Message}");
         }
+        Track(proc, e, ctx);
 
         var spawnData = new Dictionary<string, object>
         {
             ["handler"] = name, ["pid"] = proc.Id, ["command"] = command, ["mode"] = "oneshot",
         };
+        if (!Pgrouped) spawnData["pgroup"] = false;   // setsid absent — tree-walk kills only
         if (resolvedCwd is not null) spawnData["cwd"] = resolvedCwd;
         if (cwdFallback) spawnData["cwdFallback"] = true;   // configured cwd missing — fell through
         Log.Info("exec", "exec.spawn", F(e, ctx, data: spawnData));
@@ -189,6 +241,7 @@ public sealed class ExecHandler(
             var code = proc.ExitCode;
             Log.Info("exec", "exec.exit", F(e, ctx, sw.Elapsed.TotalMilliseconds,
                 data: new Dictionary<string, object> { ["handler"] = name, ["code"] = code }));
+            Untrack(proc);
             proc.Dispose();
             if (code == 0)
             {
@@ -213,7 +266,7 @@ public sealed class ExecHandler(
                 // Reply-then-linger: the effect returns NOW; the reaper owns
                 // the child's afterlife (drain, exit code, disposal) and can
                 // never fail the dispatch.
-                _ = ReapAsync(proc, e, ctx, name, sw, stderrTask, stderrBuf);
+                _ = ReapAsync(proc, e, ctx, sw, stderrTask, stderrBuf);
                 return effect;
 
             case ExecAnswer.Malformed(var violations):
@@ -237,8 +290,8 @@ public sealed class ExecHandler(
     /// The child's afterlife, observed but never awaited by a dispatch:
     /// drain remaining stdout (linger chatter — discarded, a returned effect
     /// cannot be failed retroactively), collect stderr, record the exit.
-    private static async Task ReapAsync(Process proc, HookEvent e, HandlerContext ctx, string name,
-                                        Stopwatch sw, Task stderrTask, StringBuilder stderrBuf)
+    private async Task ReapAsync(Process proc, HookEvent e, HandlerContext ctx,
+                                 Stopwatch sw, Task stderrTask, StringBuilder stderrBuf)
     {
         try
         {
@@ -248,10 +301,14 @@ public sealed class ExecHandler(
                 while (await proc.StandardOutput.ReadAsync(buf, 0, buf.Length) > 0) { }
             });
             await proc.WaitForExitAsync(CancellationToken.None);
+            // Cache the code BEFORE the pipe drains: a teardown kill can
+            // Dispose(proc) while a grandchild still holds the pipes, and a
+            // post-Dispose ExitCode read throws — losing the real exit line.
+            var code = proc.ExitCode;
             await drain;
             await stderrTask;
             Log.Info("exec", "exec.exit", F(e, ctx, sw.Elapsed.TotalMilliseconds,
-                data: new Dictionary<string, object> { ["handler"] = name, ["code"] = proc.ExitCode }));
+                data: new Dictionary<string, object> { ["handler"] = name, ["code"] = code }));
             if (stderrBuf.Length > 0)
                 Log.Info("exec", "exec.stderr", F(e, ctx,
                     msg: Truncate(stderrBuf.ToString(), 2048),
@@ -266,8 +323,68 @@ public sealed class ExecHandler(
         }
         finally
         {
+            // Untrack BEFORE Dispose so a concurrent DisposeAsync snapshot
+            // can never race a disposed Process (its cached pid would still
+            // be safe, but why hand it one).
+            Untrack(proc);
             proc.Dispose();
         }
+    }
+
+    /// Track a spawned child for teardown. Rechecked under the lock because
+    /// DisposeAsync can interleave between HandleAsync's entry guard and
+    /// Process.Start: a child spawned into a torn-down handler is killed on
+    /// the spot — teardown means NO survivors, not "none we noticed".
+    private void Track(Process proc, HookEvent e, HandlerContext ctx)
+    {
+        var pid = proc.Id;
+        lock (_liveLock)
+        {
+            if (!_disposed)
+            {
+                _liveChildren[proc] = pid;
+                return;
+            }
+        }
+        KillQuietly(proc, e, ctx, "spawned into torn-down handler");
+        throw new ObjectDisposedException(null, $"exec handler '{name}': torn down");
+    }
+
+    private void Untrack(Process proc)
+    {
+        lock (_liveLock) _liveChildren.Remove(proc);
+    }
+
+    /// Teardown — the Dispatcher's seam (supervised replacement, escalation,
+    /// drain): kill every live child TERM→grace→KILL as a group, refuse new
+    /// spawns, and don't return until the kills have concluded (the drain's
+    /// child phase awaits this; the restart/escalation paths fire-and-forget
+    /// it, so the supervisor's fault mailbox never blocks on a grace window).
+    public async ValueTask DisposeAsync()
+    {
+        KeyValuePair<Process, int>[] live;
+        lock (_liveLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            live = _liveChildren.ToArray();
+            _liveChildren.Clear();
+        }
+        await Task.WhenAll(live.Select(async kv =>
+        {
+            var (proc, pid) = (kv.Key, kv.Value);
+            var how = await ProcessGroup.TermThenKillAsync(pid, Pgrouped, proc, KillGrace);
+            if (how != "gone")
+                Log.Warn("exec", "exec.kill", new LogFields
+                {
+                    Msg = "teardown",
+                    Data = new Dictionary<string, object>
+                    {
+                        ["handler"] = name, ["pid"] = pid, ["how"] = how,
+                    },
+                });
+            proc.Dispose();
+        }));
     }
 
     private static async Task WriteEnvelopeAsync(Process proc, HookEvent e, HandlerContext ctx)
@@ -311,19 +428,53 @@ public sealed class ExecHandler(
         catch (Exception) { /* pipe torn by kill — the buffer holds what arrived */ }
     }
 
+    /// Kill one child from a dispatch path (budget cancel, protocol error):
+    /// SIGTERM its group NOW — logged, so the trail shows the kill at the
+    /// moment it was decided — then escalate grace→SIGKILL on a detached
+    /// task, because the dispatch is about to rethrow and an honored-cancel
+    /// OCE must reach the ask window without waiting out a stubborn child.
+    /// A TERM-ignorer draws a second exec.kill line with how=kill.
+    /// The child stays TRACKED until the escalation has CONCLUDED (the
+    /// drain-orphan find): untracking up front let a daemon exit outrun the
+    /// detached SIGKILL — DisposeAsync's snapshot must keep seeing the child
+    /// so the drain's awaited kill covers it; double-kill is idempotent.
     private void KillQuietly(Process proc, HookEvent e, HandlerContext ctx, string why)
     {
-        try
+        int pid;
+        lock (_liveLock)
+            if (!_liveChildren.TryGetValue(proc, out pid))
+                try { pid = proc.Id; } catch (Exception) { pid = 0; }
+
+        // GROUP-aware gate, never leader-only: a leader that exited between
+        // the cancel and this kill can leave live group members (`bad &
+        // exit`), and an early return here would leave them unsignaled
+        // forever (adversarial-verify find).
+        if (pid == 0 || !ProcessGroup.IsAlive(pid, Pgrouped, proc))
         {
-            if (!proc.HasExited)
-            {
-                proc.Kill(entireProcessTree: true);
-                Log.Warn("exec", "exec.kill", F(e, ctx, msg: why,
-                    data: new Dictionary<string, object> { ["handler"] = name, ["pid"] = proc.Id }));
-            }
+            Untrack(proc);
+            proc.Dispose();
+            return;
         }
-        catch (Exception) { /* already gone — the goal state */ }
-        finally { proc.Dispose(); }
+
+        // TERM lands SYNCHRONOUSLY — in collapsed mode the process can exit
+        // within ms of the effect reaching stdout, and a TERM living only in
+        // the detached task might never be sent. Only the grace→KILL
+        // escalation detaches; a TERM-ignorer in collapsed mode can still
+        // outlive it (documented residue — the daemon path is covered by the
+        // drain's awaited kill via the still-tracked child).
+        ProcessGroup.Term(pid, Pgrouped, proc);
+        Log.Warn("exec", "exec.kill", F(e, ctx, msg: why,
+            data: new Dictionary<string, object> { ["handler"] = name, ["pid"] = pid }));
+        _ = Task.Run(async () =>
+        {
+            var how = await ProcessGroup.TermThenKillAsync(pid, Pgrouped, proc, KillGrace, termSent: true);
+            if (how == "kill")
+                Log.Warn("exec", "exec.kill", F(e, ctx,
+                    msg: $"{why} — SIGKILL after {KillGrace.TotalSeconds:F0}s grace",
+                    data: new Dictionary<string, object> { ["handler"] = name, ["pid"] = pid, ["how"] = how }));
+            Untrack(proc);
+            proc.Dispose();
+        });
     }
 
     private void ApplyEnvAllowlist(ProcessStartInfo psi)

@@ -20,7 +20,8 @@ public static class HookRun
     /// null ⇒ zero exec handlers (the test-safe default, the policyPath
     /// idiom); Program.cs passes ExecHandlersFile.ResolvePath() so all three
     /// production entry points read the same file.
-    public static Registry BuildDefaultRegistry(string? handlersPath = null, TimeSpan? harnessTimeoutHint = null)
+    public static Registry BuildDefaultRegistry(string? handlersPath = null, TimeSpan? harnessTimeoutHint = null,
+                                                TimeSpan? drainBudgetHint = null)
     {
         var registry = new Registry()
             .On("SessionStart", new EchoHandler())
@@ -36,7 +37,8 @@ public static class HookRun
         // registration order Merge depends on stays deterministic: coded
         // first, then handlers.json top to bottom.
         if (handlersPath is not null)
-            RegisterExecHandlers(registry, ExecHandlersFile.Resolve(handlersPath), harnessTimeoutHint);
+            RegisterExecHandlers(registry, ExecHandlersFile.Resolve(handlersPath), harnessTimeoutHint,
+                                 drainBudgetHint);
 
         return registry;
     }
@@ -56,9 +58,15 @@ public static class HookRun
     /// harness's own hook-command timeout (from the default HarnessSpec's
     /// hookTimeoutHintMs). A budget past it draws
     /// `handlers.budgetBeyondHarness` — loud, never enforced, never
-    /// auto-synced into harness config.
+    /// auto-synced into harness config. `drainBudgetHint` is the N6
+    /// boundary, same doctrine: the daemon's drain deadline — a budget whose
+    /// ask window (budget + grace) outlasts it can be CUT at cutover or
+    /// idle-exit (child killed, effect lost), so registration says so
+    /// (`handlers.budgetBeyondDrain`). Collapsed mode passes null: no
+    /// daemon, no drain to be cut by.
     public static void RegisterExecHandlers(Registry registry, ExecHandlersResolution resolution,
-                                            TimeSpan? harnessTimeoutHint = null)
+                                            TimeSpan? harnessTimeoutHint = null,
+                                            TimeSpan? drainBudgetHint = null)
     {
         switch (resolution)
         {
@@ -95,6 +103,14 @@ public static class HookRun
                         Log.Warn("handlers", "handlers.budgetBeyondHarness", new LogFields
                         {
                             Msg = $"budget {b.TotalMilliseconds:F0}ms exceeds the harness's hook timeout (~{hint.TotalMilliseconds:F0}ms): the harness may abandon the shim before the answer — the daemon still completes the work, but the effect is lost (ADR-0010 d9)",
+                            Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                        });
+
+                    if (drainBudgetHint is { } drain && entry.Budget is { } db
+                        && db + Dispatcher.GraceFor(db) > drain)
+                        Log.Warn("handlers", "handlers.budgetBeyondDrain", new LogFields
+                        {
+                            Msg = $"budget {db.TotalMilliseconds:F0}ms (+grace) exceeds the daemon's drain deadline ({drain.TotalMilliseconds:F0}ms): a dispatch still running at cutover or idle-exit is CUT — its child is killed and the effect degrades to the fail mode (ADR-0010 N6)",
                             Data = new Dictionary<string, object> { ["entry"] = entry.Name },
                         });
 

@@ -22,7 +22,10 @@ public sealed class Registry
     /// returns THE SAME instance — so instance-registered handlers are NOT
     /// state-reset by a supervisor restart (fine for stateless handlers, which
     /// is what this overload is for). Use the factory overload when a restart
-    /// must produce fresh state.
+    /// must produce fresh state. NOTE the Dispatcher takes DISPOSAL ownership
+    /// of a disposable instance: never on restart (same-reference reuse), but
+    /// escalation of its last worker and the drain's child phase DO dispose
+    /// it — don't hand in an instance something else still uses.
     public Registry On(string eventType, params IHandler[] handlers)
     {
         foreach (var h in handlers)
@@ -101,6 +104,27 @@ public sealed class Dispatcher
     // case-insensitively for exactly the same reason.
     private readonly Dictionary<string, List<Runner>> _runners = new(StringComparer.OrdinalIgnoreCase);
 
+    // THE TEARDOWN SEAM (ADR-0010 d6, kill-discipline slice). IHandler has no
+    // teardown member and the F# lib must never see IHandler — so disposal
+    // threads through the C# factory closure: each worker's CURRENT handler
+    // instance is tracked here (worker id → instance), the closure swaps it
+    // on every factory run (disposing the replaced instance), the supervisor's
+    // escalation signal disposes the LAST instance (MarkDead never re-runs the
+    // factory — without this hook an escalated ExecHandler's child would
+    // orphan, the N3 leak class), and DisposeHandlersAsync is the drain's
+    // child phase. Disposal from restart/escalation paths is fire-and-forget:
+    // both run on the supervisor's one-at-a-time fault mailbox, which must
+    // never block behind a TERM→grace→KILL window.
+    private readonly object _teardownLock = new();
+    private readonly Dictionary<string, IHandler> _liveInstances = new(StringComparer.Ordinal);
+    // Fire-and-forget disposals still in flight (restart evictions,
+    // escalations). The drain must AWAIT these too (adversarial-verify find):
+    // an instance evicted seconds before cutover may be mid-TERM-grace on its
+    // lingering children — a drain that only covers CURRENT instances would
+    // let the daemon exit before that SIGKILL escalation lands.
+    private readonly HashSet<Task> _pendingDisposals = new();
+    private bool _tornDown;
+
     // The LONG-LIVED background queue (ADR-0004: built here, once). Background
     // effects outlive their responses in a daemon by design: DispatchAsync
     // enqueues and returns; this single consumer runs them in order. Collapsed
@@ -142,18 +166,28 @@ public sealed class Dispatcher
         // -> F# lib); the (event, ctx) tuple flows through it opaquely and only
         // the delegate below ever looks inside.
         var idCounts = new Dictionary<string, int>();
+        var usedIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (eventType, spec) in registry.Specs)
         {
             var baseId = $"{eventType}/{spec.Name}";
             var n = idCounts.TryGetValue(baseId, out var c) ? c + 1 : 1;
-            idCounts[baseId] = n;
             var id = n == 1 ? baseId : $"{baseId}#{n}";   // disambiguate name collisions
+            // Re-probe until genuinely unused: a handler literally NAMED
+            // "h#2" beside two "h" registrations would otherwise collide —
+            // and a duplicate worker id corrupts both supervision (one
+            // child's faults restart the other) and the teardown seam (the
+            // second TrackSwap disposes the first's live instance).
+            while (!usedIds.Add(id)) id = $"{baseId}#{++n}";
+            idCounts[baseId] = n;
 
             var worker = Worker<(HookEvent, HandlerContext), Effect>.Supervised(sup, id, () =>
             {
                 // Child spec in action: a restart re-runs THIS, so factory-
-                // registered handlers come back with fresh state.
+                // registered handlers come back with fresh state — and the
+                // REPLACED instance is disposed (teardown seam): its child
+                // must not outlive its generation.
                 var h = spec.Factory();
+                TrackSwap(id, h);
                 return req => h.HandleAsync(req.Item1, req.Item2);
             });
 
@@ -163,10 +197,127 @@ public sealed class Dispatcher
             list.Add(new Runner(spec.Name, spec.OnFailure, effective,
                 graceOverride ?? GraceFor(effective), spec.Budget is not null, worker));
         }
+
+        // Escalation half of the teardown seam. SubscribeEscalated, never
+        // OnEscalated: that slot belongs to the host (last-writer-wins), and
+        // silently clobbering it — or being clobbered — is exactly the bug
+        // class this seam exists to close.
+        sup.SubscribeEscalated((id, _) =>
+        {
+            IHandler? last = null;
+            lock (_teardownLock)
+                if (_liveInstances.Remove(id, out var h) && !SharedElsewhereNoLock(id, h))
+                    last = h;
+            if (last is not null) FireDispose(last, id, "escalated");
+        });
     }
 
-    private static TimeSpan GraceFor(TimeSpan budget) =>
+    /// Internal (not private) for the registration-time budget-vs-drain warn
+    /// (handlers.budgetBeyondDrain): the warn must compare the same
+    /// budget+grace the ask window will actually use.
+    internal static TimeSpan GraceFor(TimeSpan budget) =>
         TimeSpan.FromMilliseconds(Math.Clamp(budget.TotalMilliseconds * 0.10, 100, 1000));
+
+    /// Factory-closure half of the teardown seam: record the worker's new
+    /// current instance; dispose the one it replaced. Reference-equal swap =
+    /// instance registration's captured singleton coming back after a restart
+    /// — REUSED, never disposed. An instance still referenced by another
+    /// worker's slot (one singleton on several events) survives too, until
+    /// its last slot lets go. Post-drain restarts get their fresh instance
+    /// disposed on the spot: after teardown, NOTHING may hold a live child.
+    private void TrackSwap(string id, IHandler next)
+    {
+        IHandler? evicted = null;
+        var late = false;
+        lock (_teardownLock)
+        {
+            if (_tornDown)
+            {
+                late = true;
+            }
+            else
+            {
+                _liveInstances.TryGetValue(id, out var old);
+                _liveInstances[id] = next;
+                if (old is not null && !ReferenceEquals(old, next) && !SharedElsewhereNoLock(id, old))
+                    evicted = old;
+            }
+        }
+        if (late) FireDispose(next, id, "post-drain restart");
+        if (evicted is not null) FireDispose(evicted, id, "restart");
+    }
+
+    private bool SharedElsewhereNoLock(string exceptId, IHandler inst) =>
+        _liveInstances.Any(kv => kv.Key != exceptId && ReferenceEquals(kv.Value, inst));
+
+    /// Fire-and-forget disposal: the restart and escalation paths run on the
+    /// supervisor's fault mailbox, which processes one fault at a time and
+    /// must never wait out a kill-grace window. The in-flight task is
+    /// REGISTERED so the drain can await it — fire-and-forget, not
+    /// fire-and-lost.
+    private void FireDispose(IHandler h, string id, string reason)
+    {
+        var t = DisposeInstanceAsync(h, id, reason);
+        if (t.IsCompleted) return;
+        lock (_teardownLock) _pendingDisposals.Add(t);
+        t.ContinueWith(done =>
+        {
+            lock (_teardownLock) _pendingDisposals.Remove(done);
+        }, TaskScheduler.Default);
+    }
+
+    private static async Task DisposeInstanceAsync(IHandler h, string id, string reason)
+    {
+        if (h is not (IAsyncDisposable or IDisposable)) return;   // nothing to tear down
+        try
+        {
+            Log.Info("dispatcher", "handler.teardown", new LogFields { ActorId = id, Msg = reason });
+            if (h is IAsyncDisposable ad) await ad.DisposeAsync();
+            else ((IDisposable)h).Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("dispatcher", "handler.teardownError",
+                new LogFields { ActorId = id, Msg = $"{reason}: {ex.Message}" });
+        }
+    }
+
+    /// The drain's CHILD PHASE (ADR-0010 d6 + the N6 decision): dispose every
+    /// worker's current handler instance — an ExecHandler kills its live
+    /// children TERM→grace→KILL and refuses new spawns — each instance once,
+    /// however many slots share it. Awaited (unlike the restart/escalation
+    /// paths): the caller IS the drain and budgets for the grace window.
+    /// After this the dispatcher is torn down: any straggling supervised
+    /// restart has its fresh instance disposed immediately. Returns how many
+    /// instances had a teardown to run.
+    public async Task<int> DisposeHandlersAsync()
+    {
+        List<(string Id, IHandler H)> targets = new();
+        Task[] pending;
+        lock (_teardownLock)
+        {
+            _tornDown = true;
+            var seen = new HashSet<IHandler>(ReferenceEqualityComparer.Instance);
+            foreach (var (id, h) in _liveInstances)
+                if (seen.Add(h) && h is (IAsyncDisposable or IDisposable))
+                    targets.Add((id, h));
+            _liveInstances.Clear();
+            // Restart-evicted / escalation disposals still mid-flight: an
+            // instance evicted seconds ago may be mid-TERM-grace on its
+            // children — exiting before its SIGKILL escalation lands would
+            // orphan them (adversarial-verify find).
+            pending = _pendingDisposals.ToArray();
+        }
+        await Task.WhenAll(targets.Select(t => DisposeInstanceAsync(t.H, t.Id, "drain")).Concat(pending));
+        return targets.Count;
+    }
+
+    /// Drain-timeout companion (N6): close the background intake WITHOUT
+    /// awaiting the consumer. A dispatch cut by the child phase may still
+    /// resolve and try to enqueue a sibling's Background effect; with the
+    /// writer completed, that enqueue hits the loud side.dropped path instead
+    /// of silently STARTING work the exiting daemon will abandon mid-run.
+    public void CloseBackgroundIntake() => _side.Writer.TryComplete();
 
     public async Task<DispatchResult> DispatchAsync(HookEvent e, string? dispatchId = null,
                                                     IReadOnlySet<string>? excludedHandlers = null)
@@ -221,10 +372,11 @@ public sealed class Dispatcher
                 Interlocked.Increment(ref _sidePending);
                 if (!_side.Writer.TryWrite(new SideWork(o.Name, e, dispatchId, bg, trace)))
                 {
-                    // Unreachable while the drain's active==0 guard holds (no
-                    // dispatch can be mid-flight when the writer completes) —
-                    // but if that invariant ever slips, a silently dropped
-                    // background effect is the nightmare: be LOUD instead.
+                    // Reached DELIBERATELY by a drain-cut dispatch (N6): the
+                    // drain-timeout path closes the intake before the child
+                    // phase, so a cut dispatch's sibling Background effect
+                    // lands here — loud — instead of silently starting work
+                    // the exiting daemon would abandon mid-run.
                     Interlocked.Decrement(ref _sidePending);
                     Log.Error("dispatcher", "side.dropped", Fields(e, dispatchId,
                         msg: "background effect enqueued after queue completion — dropped",

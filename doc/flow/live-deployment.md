@@ -52,10 +52,14 @@ The `/deploy` skill *performs* this; this doc explains what it leaves behind.
   binary — pids get reused; never trust the pid alone.
 - **Kill it** — `kill <pid>` (SIGTERM) now drains gracefully: in-flight
   prompts get their responses, queued Background work completes (10s
-  deadline), socket and pidfile are removed on the way out
-  (`daemon.drainStart` → `daemon.drained` in the trail). `kill -9` remains
-  safe too — the kernel releases the lock, the next prompt collapses and
-  respawns. Never delete `.lock` files.
+  deadline), exec-handler children are killed in the drain's child phase
+  (TERM→2s grace→KILL, whole process groups — ADR-0010 N6; children never
+  outlive the daemon), and socket and pidfile are removed on the way out
+  (`daemon.drainStart` → `daemon.drained` [+ `daemon.drainChildren` /
+  `daemon.drainCut`] in the trail). `kill -9` remains safe too — the kernel
+  releases the lock, the next prompt collapses and respawns — though a -9
+  skips the child phase (doctor's orphan report is the phase-8 backstop).
+  Never delete `.lock` files.
 - **Sweep leftovers**: `~/.captainHook/bin/captainHook doctor` — dead
   pidfiles/sockets removed, pid-reused records cleaned without signaling the
   stranger, superseded daemons (their binary's path computes a different

@@ -157,14 +157,47 @@ escalates). The dispatcher spawns one worker per handler registration — see
     producer throttled to consumer pace — memory bounded by construction
 ```
 
+## The teardown seam (ADR-0010 kill discipline)
+
+A restart re-runs the factory — but the REPLACED instance may own an OS
+process (an `ExecHandler`'s child), and escalation (`MarkDead`) never re-runs
+the factory at all, so the last instance would orphan its child forever. The
+F# lib must never see `IHandler`, so disposal lives entirely on the C# side
+of the seam:
+
+```
+ factory runs (spawn/restart, supervisor loop)      escalation (fault loop)
+        │                                                  │
+        ▼                                                  ▼
+ Dispatcher.TrackSwap(id, fresh)               SubscribeEscalated(id, _)
+   worker id → current-instance map               remove id from the map
+   dispose the replaced instance ──┐              dispose the LAST instance ──┐
+     · unless SAME reference       │ fire-and-forget                          │
+       (instance-registration's    │ (the fault mailbox must                  │
+       reuse contract)             │  never wait a kill grace)                │
+     · unless still shared by      │                                          │
+       another slot                ▼                                          ▼
+                     h is IAsyncDisposable/IDisposable ⇒ `handler.teardown`
+```
+
+`SubscribeEscalated` is ADDITIVE (a list, invoked after the settable
+`OnEscalated`): the host's callback slot stays last-writer-wins, and the
+infrastructure hook can never be clobbered by a host assignment. Daemon
+drain calls `Dispatcher.DisposeHandlersAsync()` — every distinct current
+instance, once, awaited — as the drain's child phase (ADR-0010 N6); after
+it the dispatcher is torn down and a straggling restart's fresh instance is
+disposed on the spot.
+
 ## Ground truth
 
 | what | where |
 |---|---|
-| `ActorRef` (Post/Ask/Swap/Generation/IsDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`) | `dotnet/captainHookActors/Supervision.fs` |
+| `ActorRef` (Post/Ask/Swap/Generation/IsDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`, `SubscribeEscalated`) | `dotnet/captainHookActors/Supervision.fs` |
+| the teardown seam: `TrackSwap`, the escalation subscription, `DisposeHandlersAsync`, events `handler.teardown` / `handler.teardownError` | `dotnet/captainHook/Core/Dispatcher.cs` |
+| kill mechanics: setsid spawn prefix, `TermThenKillAsync` (TERM→grace→KILL, group-wide) | `dotnet/captainHook/Handlers/ProcessGroup.cs`, `ExecHandler.cs` |
 | `WorkMsg` DU (with receipt flag), `AskStatus`, `AskOutcome`, `Worker<'Req,'Reply>` (Supervised/AskAsync/AskClassifiedAsync, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `CounterMsg` DU, worker loop, `Counter` facade | `dotnet/captainHookActors/Counter.fs` |
 | `AuditWriter` bounded actor | `dotnet/captainHookActors/HotPath.fs` |
 | log events | `actor.spawn`, `actor.restart` (data: `kind` = cancelled/crash/wedge, `counted`), `actor.wedge`, `actor.escalate` (data: `kind`), `actor.staleExit`, `counter.increment/boom`, `audit.drain` |
-| pinned by | `dotnet/captainHookTests/ActorTests.cs`, `HotPathTests.cs`; the Worker path by `DispatcherTests.cs` and `ConvergenceTests.cs`; classification by `ClassificationTests.cs` |
+| pinned by | `dotnet/captainHookTests/ActorTests.cs`, `HotPathTests.cs`; the Worker path by `DispatcherTests.cs` and `ConvergenceTests.cs`; classification by `ClassificationTests.cs`; the teardown seam + kill mechanics by `KillDisciplineTests.cs` |
 | decision records | `doc/adr/0001-actor-runtime-fsharp-hybrid.md`, `doc/adr/0002-handlers-as-supervised-actors.md`, `doc/adr/0004-daemon-topology.md` (decision 5) |

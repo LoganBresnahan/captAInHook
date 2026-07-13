@@ -58,7 +58,12 @@ public static class Doctor
         Func<int, PidRecord, bool>? isOurProcess = null)
     {
         var dir = runtimeDir ?? RendezvousPaths.Resolve(version: "probe").RuntimeDir;
-        var graceSpan = grace ?? TimeSpan.FromSeconds(12);   // covers the daemon's 10s drain
+        // Covers the daemon's 10s drain PLUS its child phase (ADR-0010 N6:
+        // TERM→2s grace→KILL + reap beat + the 1s cut window run after the
+        // drain deadline; worst case ≈ 14.5s) with real headroom — a doctor
+        // SIGKILL landing mid-child-phase would abandon the very kills the
+        // phase exists to finish.
+        var graceSpan = grace ?? TimeSpan.FromSeconds(18);
         var ours = isOurProcess ?? DefaultIsOurs;
         var verdicts = new List<DoctorVerdict>();
         if (!Directory.Exists(dir)) return verdicts;

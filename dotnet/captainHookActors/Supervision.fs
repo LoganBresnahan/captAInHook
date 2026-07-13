@@ -88,10 +88,40 @@ type private ChildEntry =
 type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<int64>) =
     let windowMs = int64 window.TotalMilliseconds
     let mutable onEscalated = Action<string, exn>(fun _ _ -> ())
+    // ADDITIVE escalation subscriptions, distinct from the settable OnEscalated:
+    // infrastructure (the host Dispatcher's teardown seam) subscribes here so a
+    // host later ASSIGNING OnEscalated can never silently clobber it. Invoked on
+    // the supervisor's fault loop — subscribers must not block (fire-and-forget
+    // any real work).
+    let escalationSubs = ResizeArray<Action<string, exn>>()
     let children = ConcurrentDictionary<string, ChildEntry>()
 
     let agent =
         MailboxProcessor.Start(fun inbox ->
+            // Escalation, in one place: stop the child for good, mark its
+            // handle dead (asks fail fast), tell the host, then the additive
+            // subscribers (the Dispatcher's teardown seam rides these).
+            let escalate (entry: ChildEntry) id (err: exn) (kind: string) =
+                Log.Error(
+                    sprintf "sup:%s" name, "actor.escalate",
+                    LogFields(
+                        ActorId = id, Msg = err.Message,
+                        Data = dict [ "kind", box kind
+                                      "maxRestarts", box maxRestarts
+                                      "windowMs", box window.TotalMilliseconds ]))
+                entry.MarkDead()
+                onEscalated.Invoke(id, err)
+                let subs = lock escalationSubs (fun () -> escalationSubs.ToArray())
+                for s in subs do s.Invoke(id, err)
+
+            // Restart, guarded: a THROWING user factory would otherwise kill
+            // this supervisor's own mailbox body silently — no more restarts
+            // or escalations for anyone, the whole escalation seam dark
+            // (adversarial-verify find). A factory that cannot construct its
+            // handler is escalated on the spot.
+            let restartSafely (entry: ChildEntry) id =
+                try entry.Restart() with ex -> escalate entry id ex "restartFailed"
+
             // Count one FAULT (crash or wedge — the counted kinds) against the
             // sliding window; restart under budget, escalate over it.
             let count (entry: ChildEntry) id (err: exn) (kind: string) (history: Map<string, int64 list>) =
@@ -105,17 +135,8 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
 
                 if List.length attempts > maxRestarts then
                     // Budget blown: the fault is persistent, restarting is
-                    // pointless. Stop this child for good, mark its handle dead
-                    // (asks fail fast from here on) and tell the host.
-                    Log.Error(
-                        sprintf "sup:%s" name, "actor.escalate",
-                        LogFields(
-                            ActorId = id, Msg = err.Message,
-                            Data = dict [ "kind", box kind
-                                          "maxRestarts", box maxRestarts
-                                          "windowMs", box window.TotalMilliseconds ]))
-                    entry.MarkDead()
-                    onEscalated.Invoke(id, err)
+                    // pointless.
+                    escalate entry id err kind
                     Map.remove id history
                 else
                     Log.Warn(
@@ -127,7 +148,7 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
                                           "restart", box (List.length attempts)
                                           "maxRestarts", box maxRestarts
                                           "windowMs", box window.TotalMilliseconds ]))
-                    entry.Restart()   // factory re-runs -> fresh state, new mailbox
+                    restartSafely entry id   // factory re-runs -> fresh state, new mailbox
                     Map.add id attempts history
 
             let rec loop (history: Map<string, int64 list>) =
@@ -149,7 +170,7 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
                                         ActorId = id, Msg = err.Message,
                                         Data = dict [ "kind", box "cancelled"
                                                       "counted", box false ]))
-                                entry.Restart()
+                                restartSafely entry id
                                 return! loop history
                             | _ ->
                                 return! loop (count entry id err "crash" history)
@@ -183,9 +204,19 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
         Supervisor(name, maxRestarts, window, Func<int64>(fun () -> Environment.TickCount64))
 
     /// Host-facing escalation callback (an Action so C# can assign a lambda).
+    /// Last-writer-wins by design — the one host-owned slot. Infrastructure
+    /// that must OBSERVE every escalation uses SubscribeEscalated instead.
     member _.OnEscalated
         with get () = onEscalated
         and set v = onEscalated <- v
+
+    /// Additive escalation subscription (never clobbered by OnEscalated
+    /// assignment; invoked after it, in subscription order, on the fault
+    /// loop — do not block). The Dispatcher's handler-teardown seam lives on
+    /// this: MarkDead never re-runs the factory, so the LAST instance's
+    /// disposal has to hang off the escalation signal itself.
+    member _.SubscribeEscalated(cb: Action<string, exn>) =
+        lock escalationSubs (fun () -> escalationSubs.Add cb)
 
     /// The ask layer's narrow channel (ADR-0004 decision 5): report a wedge —
     /// an ask that was received but never answered within budget + grace — for
@@ -195,7 +226,13 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
         agent.Post(ChildWedged(id, gen, correlationId))
 
     /// Spawn a supervised child. `factory` runs once now and once per restart.
+    /// Duplicate ids are REFUSED loudly: a silent `children[id] <- entry`
+    /// overwrite would route one child's faults to the other's restart/
+    /// MarkDead closures — supervision and any id-keyed host seam (the
+    /// Dispatcher's teardown map) silently corrupt (adversarial-verify find).
     member _.Spawn<'Msg>(id: string, factory: Func<MailboxProcessor<'Msg>>) : ActorRef<'Msg> =
+        if children.ContainsKey id then
+            invalidOp (sprintf "supervisor '%s': duplicate child id '%s'" name id)
         Log.Info(sprintf "sup:%s" name, "actor.spawn", LogFields(ActorId = id))
         let handle = ActorRef<'Msg>(id)
         let rec start () =

@@ -81,8 +81,13 @@ public static class DaemonHost
         // The budget-vs-harness-timeout warn compares against the DEFAULT
         // harness's hint (registration is harness-agnostic; per-dispatch
         // harness selection comes later) — informational only, ADR-0010 d9.
+        // The drain hint feeds the same doctrine's N6 warn: a budget the
+        // drain deadline can cut is called out at registration, not
+        // discovered at cutover.
+        var drainBudget = drainDeadline ?? TimeSpan.FromSeconds(10);
         var dispatcher = new Dispatcher(
-            registry ?? HookRun.BuildDefaultRegistry(handlersPath, harnesses.Current.Get("claude-code").HookTimeoutHint),
+            registry ?? HookRun.BuildDefaultRegistry(handlersPath, harnesses.Current.Get("claude-code").HookTimeoutHint,
+                                                     drainBudget),
             budget: TimeSpan.FromSeconds(2));
 
         // Listening ⟺ ready: the first connect a shim ever makes against this
@@ -109,7 +114,6 @@ public static class DaemonHost
         // slow cadence, never fatal. Isolated from the dispatch path by
         // construction — its own listener and tasks, sharing no mutable state
         // with the serve loop below.
-        var drainBudget = drainDeadline ?? TimeSpan.FromSeconds(10);
 
         // Serve counters + monotonic clock, shared READ-ONLY with the API's GET
         // /status through the read model below (ADR-0007 d3). `stats` also feeds
@@ -315,6 +319,68 @@ public static class DaemonHost
                 {
                     ["active"] = stats.Active,
                     ["backgroundPending"] = dispatcher.BackgroundPending,
+                },
+            });
+            // A dispatch the child phase is about to cut may still resolve
+            // and enqueue a sibling's Background effect; close the intake so
+            // that lands on the loud side.dropped path instead of silently
+            // STARTING work this exiting daemon would abandon mid-run.
+            dispatcher.CloseBackgroundIntake();
+        }
+
+        // Phase 3 (ADR-0010 N6): CHILDREN DIE WITH THE DAEMON — always, after
+        // in-flight work has had its full chance up to the deadline and before
+        // the rendezvous cleanup. This is deliberately OUTSIDE the drain
+        // deadline (its own bound is the kill grace): skipping it to stay
+        // under the deadline would trade a bounded wait for an unbounded
+        // orphan. A dispatch still running here — its handler budget outlasted
+        // the drain deadline — is CUT: killing its child unwedges it into its
+        // fail mode in milliseconds, so a short post-kill window usually still
+        // relays the fail-mode answer instead of slamming the socket
+        // (registration warned exactly this: handlers.budgetBeyondDrain).
+        var cutCandidates = stats.Active;
+        var childSw = Stopwatch.StartNew();
+        var torn = 0;
+        try
+        {
+            // Bounded belt-and-braces: every current disposable is an
+            // ExecHandler whose teardown is ≤ kill-grace + reap by
+            // construction, but the moment a resident runtime or an embedder
+            // ships a hangable DisposeAsync, an unbounded await here would
+            // turn SIGTERM into a hang — the exact disease the drain
+            // deadline exists to cure.
+            torn = await dispatcher.DisposeHandlersAsync().WaitAsync(TimeSpan.FromSeconds(6));
+        }
+        catch (TimeoutException)
+        {
+            Log.Warn("daemon", "daemon.drainChildrenTimeout", new LogFields
+            {
+                DurMs = childSw.Elapsed.TotalMilliseconds,
+                Msg = "handler teardown outran its bound; exiting anyway — run doctor for orphans",
+            });
+        }
+        if (torn > 0)
+            Log.Info("daemon", "daemon.drainChildren", new LogFields
+            {
+                DurMs = childSw.Elapsed.TotalMilliseconds,
+                Data = new Dictionary<string, object> { ["handlers"] = torn },
+            });
+        if (cutCandidates > 0)
+        {
+            var resolveSw = Stopwatch.StartNew();
+            while (stats.Active > 0 && resolveSw.Elapsed < TimeSpan.FromSeconds(1))
+                await Task.Delay(20, CancellationToken.None);
+            // `candidates`, not `cut`: a dispatch may also complete naturally
+            // while the child phase runs — this line reports what was still
+            // in flight at the phase boundary, not proven kills (those are
+            // the exec.kill lines).
+            Log.Warn("daemon", "daemon.drainCut", new LogFields
+            {
+                DurMs = resolveSw.Elapsed.TotalMilliseconds,
+                Data = new Dictionary<string, object>
+                {
+                    ["candidates"] = cutCandidates,
+                    ["resolved"] = cutCandidates - stats.Active,
                 },
             });
         }
