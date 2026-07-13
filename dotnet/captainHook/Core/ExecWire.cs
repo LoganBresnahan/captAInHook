@@ -13,7 +13,11 @@ public abstract record ExecAnswer
 {
     /// One valid effect object. Never Effect.Background — fire-and-forget
     /// does not cross the wire (a child replies-then-lingers instead).
-    public sealed record Ok(Effect Effect) : ExecAnswer;
+    /// `DispatchId` is the echo when the answer carried one (null when
+    /// omitted): the codec only EXTRACTS it — whether it is required
+    /// (resident: MUST echo, ADR-0010 d3) or optional-must-match (oneshot)
+    /// is the adapter's business, mode being invisible at this layer.
+    public sealed record Ok(Effect Effect, string? DispatchId = null) : ExecAnswer;
 
     /// Nothing but whitespace (or a lone BOM). Exit-0 ⇒ Noop, decided upstream.
     public sealed record Empty : ExecAnswer;
@@ -31,6 +35,9 @@ public abstract record ExecAnswer
 ///   stdout (child → us):  one JSON object from the CLOSED answer grammar
 ///     {"effect":"inject","text":…} | {"effect":"decide","verdict":"allow|deny|ask","reason":…}
 ///     {"effect":"replace","text":…} | {"effect":"noop"}
+///     — each optionally + "dispatchId":"…" (the echo; resident answers MUST
+///     carry it, oneshot may — enforcement is the adapter's, per mode)
+///   resident readiness (child → us, first line): {"ready":1}
 ///
 /// The envelope is the fourth user-facing stable contract (ADR-0010 N1):
 /// field ORDER and escaping are pinned by golden tests, `v` is bumped on any
@@ -45,14 +52,16 @@ public static class ExecWire
 {
     public const int Version = 1;
 
+    // Every answer kind may carry the optional dispatchId echo (resident's
+    // lock-step attribution — ADR-0010 d3; oneshot children may echo too).
     private static readonly IReadOnlySet<string> InjectFields =
-        new HashSet<string> { "effect", "text" };
+        new HashSet<string> { "effect", "text", "dispatchId" };
     private static readonly IReadOnlySet<string> DecideFields =
-        new HashSet<string> { "effect", "verdict", "reason" };
+        new HashSet<string> { "effect", "verdict", "reason", "dispatchId" };
     private static readonly IReadOnlySet<string> ReplaceFields =
-        new HashSet<string> { "effect", "text" };
+        new HashSet<string> { "effect", "text", "dispatchId" };
     private static readonly IReadOnlySet<string> NoopFields =
-        new HashSet<string> { "effect" };
+        new HashSet<string> { "effect", "dispatchId" };
 
     /// Encode the envelope the child receives on stdin: one line, compact,
     /// deterministic field order (v, dispatchId, event{type, sessionId, cwd,
@@ -149,9 +158,49 @@ public static class ExecWire
                 _ => null,
             };
 
+            string? echo = null;
+            if (root.TryGetProperty("dispatchId", out var did))
+            {
+                if (did.ValueKind != JsonValueKind.String)
+                    errs.Add($"'dispatchId' must be a string when present (got {did.ValueKind})");
+                else
+                    echo = did.GetString();
+            }
+
             return errs.Count > 0
                 ? new ExecAnswer.Malformed(errs)
-                : new ExecAnswer.Ok(parsed!);
+                : new ExecAnswer.Ok(parsed!, echo);
+        }
+    }
+
+    /// Strict-parse a resident child's READINESS line (ADR-0010 d3): exactly
+    /// `{"ready":1}` — an object with the single field `ready`, number value
+    /// exactly 1 (the envelope version the child speaks; this engine requires
+    /// 1). Same tolerance envelope as ParseAnswer (one leading BOM,
+    /// surrounding whitespace via the JSON parser, the reader owns \r\n) —
+    /// and the same never-guess strictness inside: anything else on the
+    /// first non-empty line is a protocol failure, including a valid ANSWER
+    /// (answering before ready is out of protocol).
+    public static bool TryParseReady(string line)
+    {
+        var text = line.Length > 0 && line[0] == '\uFEFF' ? line[1..] : line;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(text); }
+        catch (JsonException) { return false; }
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            var count = 0;
+            foreach (var prop in root.EnumerateObject())
+            {
+                count++;
+                if (prop.Name != "ready") return false;
+                if (prop.Value.ValueKind != JsonValueKind.Number) return false;
+                if (!prop.Value.TryGetInt32(out var v) || v != Version) return false;
+            }
+            return count == 1;
         }
     }
 

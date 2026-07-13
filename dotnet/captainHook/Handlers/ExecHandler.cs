@@ -88,7 +88,8 @@ public sealed class ExecHandler(
 
     /// Whether spawns get their own process group (setsid found on PATH) —
     /// decided once per process; the degraded case is flagged per-spawn.
-    private static readonly bool Pgrouped = ProcessGroup.SetsidPath is not null;
+    /// Internal: shared with ResidentExecHandler (one spawn discipline).
+    internal static readonly bool Pgrouped = ProcessGroup.SetsidPath is not null;
 
     /// SIGTERM's window to work before SIGKILL. Small enough to fit inside
     /// the daemon drain's child phase; large enough for a signal-handling
@@ -120,17 +121,25 @@ public sealed class ExecHandler(
 
     /// Await `task` for at most `grace`; a timeout yields default — the
     /// caller proceeds with what it has (partial stderr, no answer line).
-    private static async Task<T?> BoundedAsync<T>(Task<T> task, TimeSpan grace)
+    /// Internal: ResidentExecHandler shares these exact semantics.
+    internal static async Task<T?> BoundedAsync<T>(Task<T> task, TimeSpan grace)
     {
         try { return await task.WaitAsync(grace); }
         catch (TimeoutException) { return default; }
     }
 
-    private static async Task BoundedAsync(Task task, TimeSpan grace)
+    internal static async Task BoundedAsync(Task task, TimeSpan grace)
     {
         try { await task.WaitAsync(grace); }
         catch (TimeoutException) { }
     }
+
+    /// Observe an abandoned task's eventual fault so it can never surface as
+    /// an unobserved-task exception (the ask layer's ContinueWith idiom) — a
+    /// read left behind by a WaitAsync timeout can still fault long after,
+    /// against a since-disposed Process.
+    internal static void Observe(Task t) =>
+        t.ContinueWith(x => _ = x.Exception, TaskContinuationOptions.OnlyOnFaulted);
 
     public async Task<Effect> HandleAsync(HookEvent e, HandlerContext ctx)
     {
@@ -139,24 +148,7 @@ public sealed class ExecHandler(
                 throw new ObjectDisposedException(null, $"exec handler '{name}': torn down");
 
         var sw = Stopwatch.StartNew();
-        // The setsid prefix is the kill discipline's spawn half: it execs the
-        // payload IN PLACE (the fork child is never a group leader), so
-        // Process.Id is the payload's pid AND its pgid — kill(-pid) reaches
-        // every grandchild. See ProcessGroup. One trade: a missing command
-        // no longer throws Win32Exception at Start (setsid itself starts
-        // fine) — it surfaces as exit 127 with setsid's stderr naming the
-        // command, through the exited-nonzero path.
-        var psi = new ProcessStartInfo
-        {
-            FileName = Pgrouped ? ProcessGroup.SetsidPath! : command,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        if (Pgrouped) psi.ArgumentList.Add(command);
-        foreach (var a in args ?? []) psi.ArgumentList.Add(a);
-        ApplyEnvAllowlist(psi);
+        var psi = BuildPsi(command, args, env, passEnv);
         var (resolvedCwd, cwdFallback) = ResolveCwd(e.Cwd);
         if (resolvedCwd is not null) psi.WorkingDirectory = resolvedCwd;
 
@@ -188,8 +180,12 @@ public sealed class ExecHandler(
         // block reading stdout, or child never reads the stdin we block
         // writing) is structurally impossible.
         var stderrBuf = new StringBuilder();
+        // The echo comparison target is the LITERAL id written into this
+        // envelope — captured here, never re-derived — so null-vs-"" drift
+        // between the context and the wire is structurally impossible.
+        var sentId = ctx.DispatchId ?? "";
         var stderrTask = DrainStderrAsync(proc, stderrBuf);
-        var stdinTask = WriteEnvelopeAsync(proc, e, ctx);
+        var stdinTask = WriteEnvelopeAsync(proc, e, sentId);
         var answerTask = FirstNonEmptyLineAsync(proc.StandardOutput);
         var exitTask = proc.WaitForExitAsync(CancellationToken.None);
 
@@ -257,7 +253,22 @@ public sealed class ExecHandler(
         var answer = ExecWire.ParseAnswer(line);
         switch (answer)
         {
-            case ExecAnswer.Ok(var effect):
+            // Oneshot echo rule: OPTIONAL, must match when present. There is
+            // no second conversation to mis-attribute, so absence is fine —
+            // but a child that echoes a DIFFERENT id than the envelope it
+            // just read is confused, and confusion is a protocol error.
+            case ExecAnswer.Ok(_, var echo) when echo is not null && echo != sentId:
+                Log.Error("exec", "exec.protocolError", F(e, ctx, sw.Elapsed.TotalMilliseconds,
+                    msg: $"dispatchId echo mismatch: sent '{sentId}', answered '{echo}'",
+                    data: new Dictionary<string, object> { ["handler"] = name }));
+                KillQuietly(proc, e, ctx, "dispatchId echo mismatch");
+                // Same stderr-join parity as the Malformed arm: a confused
+                // child likely says WHY on stderr — carry it, never torn.
+                await BoundedAsync(stderrTask, PipeGrace);
+                throw new InvalidOperationException(
+                    $"exec handler '{name}': answer echoed dispatchId '{echo}' for envelope '{sentId}'{StderrTail(stderrBuf)}");
+
+            case ExecAnswer.Ok(var effect, _):
                 Log.Info("exec", "exec.answered", F(e, ctx, sw.Elapsed.TotalMilliseconds,
                     data: new Dictionary<string, object>
                     {
@@ -387,11 +398,11 @@ public sealed class ExecHandler(
         }));
     }
 
-    private static async Task WriteEnvelopeAsync(Process proc, HookEvent e, HandlerContext ctx)
+    private static async Task WriteEnvelopeAsync(Process proc, HookEvent e, string sentId)
     {
         try
         {
-            await proc.StandardInput.WriteAsync(ExecWire.Envelope(e, ctx.DispatchId ?? ""));
+            await proc.StandardInput.WriteAsync(ExecWire.Envelope(e, sentId));
             await proc.StandardInput.WriteAsync('\n');
             await proc.StandardInput.FlushAsync();
             proc.StandardInput.Close();   // oneshot: one request, then EOF
@@ -404,7 +415,9 @@ public sealed class ExecHandler(
         }
     }
 
-    private static async Task<string?> FirstNonEmptyLineAsync(StreamReader stdout)
+    /// Internal: the resident lock-step reader uses the same skip-blank
+    /// semantics per line read (ReadLineAsync owns \n and \r\n framing).
+    internal static async Task<string?> FirstNonEmptyLineAsync(StreamReader stdout)
     {
         while (await stdout.ReadLineAsync() is { } l)
             if (!string.IsNullOrWhiteSpace(l))
@@ -477,7 +490,35 @@ public sealed class ExecHandler(
         });
     }
 
-    private void ApplyEnvAllowlist(ProcessStartInfo psi)
+    /// Shared spawn shape for BOTH exec modes (one spawn discipline): the
+    /// setsid prefix is the kill discipline's spawn half — it execs the
+    /// payload IN PLACE (the fork child is never a group leader), so
+    /// Process.Id is the payload's pid AND its pgid, and kill(-pid) reaches
+    /// every grandchild (ProcessGroup). One trade: a missing command no
+    /// longer throws Win32Exception at Start (setsid itself starts fine) —
+    /// it surfaces as exit 127 with setsid's stderr naming the command. All
+    /// three pipes redirected; env stripped to the allowlist.
+    internal static ProcessStartInfo BuildPsi(string command, IReadOnlyList<string>? args,
+                                              IReadOnlyDictionary<string, string>? env,
+                                              IReadOnlyList<string>? passEnv)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = Pgrouped ? ProcessGroup.SetsidPath! : command,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        if (Pgrouped) psi.ArgumentList.Add(command);
+        foreach (var a in args ?? []) psi.ArgumentList.Add(a);
+        ApplyEnvAllowlist(psi, env, passEnv);
+        return psi;
+    }
+
+    private static void ApplyEnvAllowlist(ProcessStartInfo psi,
+                                          IReadOnlyDictionary<string, string>? env,
+                                          IReadOnlyList<string>? passEnv)
     {
         // ProcessStartInfo.Environment starts PRE-POPULATED with the parent
         // env — Clear() is the whole security property (a missing Clear ships

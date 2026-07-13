@@ -12,6 +12,21 @@ namespace CaptainHook.Core;
 /// fresh handler.
 internal sealed record HandlerSpec(string Name, FailMode OnFailure, Func<IHandler> Factory, TimeSpan? Budget = null);
 
+/// Eager side-work a handler starts the moment it is ADMITTED to the teardown
+/// seam — never in its constructor (ADR-0010 resident slice). Two orphan
+/// holes close by that ordering: a post-drain supervised restart constructs
+/// an instance the seam will never track (Start is simply not called), and a
+/// restart's fresh child can sequence BEHIND the evicted predecessor's
+/// TERM→grace→KILL via `predecessor` (exclusive resources — sockets, locks —
+/// release before the successor spawns). Implementations MUST NOT throw
+/// (the first factory run happens inside Supervisor.Spawn, where a throw is
+/// fatal to Dispatcher construction) and MUST be idempotent (an
+/// instance-registered singleton gets Start again after every restart).
+public interface IEagerStart
+{
+    void Start(Task? predecessor);
+}
+
 public sealed class Registry
 {
     // Registration order is preserved end-to-end: Merge's inject-concatenation
@@ -185,9 +200,14 @@ public sealed class Dispatcher
                 // Child spec in action: a restart re-runs THIS, so factory-
                 // registered handlers come back with fresh state — and the
                 // REPLACED instance is disposed (teardown seam): its child
-                // must not outlive its generation.
+                // must not outlive its generation. Eager side-work starts
+                // only AFTER admission: a torn-down dispatcher never lets a
+                // straggling restart spawn (the design-panel orphan find),
+                // and a successor's spawn sequences behind its evicted
+                // predecessor's kill (exclusive resources release first).
                 var h = spec.Factory();
-                TrackSwap(id, h);
+                var (admitted, predecessor) = TrackSwap(id, h);
+                if (admitted && h is IEagerStart eager) eager.Start(predecessor);
                 return req => h.HandleAsync(req.Item1, req.Item2);
             });
 
@@ -225,7 +245,11 @@ public sealed class Dispatcher
     /// worker's slot (one singleton on several events) survives too, until
     /// its last slot lets go. Post-drain restarts get their fresh instance
     /// disposed on the spot: after teardown, NOTHING may hold a live child.
-    private void TrackSwap(string id, IHandler next)
+    /// Returns the ADMISSION verdict (false after teardown — the caller must
+    /// not start eager side-work) and the evicted predecessor's disposal
+    /// task, so an IEagerStart successor can sequence its spawn behind the
+    /// predecessor's kill.
+    private (bool Admitted, Task? Predecessor) TrackSwap(string id, IHandler next)
     {
         IHandler? evicted = null;
         var late = false;
@@ -243,8 +267,12 @@ public sealed class Dispatcher
                     evicted = old;
             }
         }
-        if (late) FireDispose(next, id, "post-drain restart");
-        if (evicted is not null) FireDispose(evicted, id, "restart");
+        if (late)
+        {
+            FireDispose(next, id, "post-drain restart");
+            return (false, null);
+        }
+        return (true, evicted is not null ? FireDispose(evicted, id, "restart") : null);
     }
 
     private bool SharedElsewhereNoLock(string exceptId, IHandler inst) =>
@@ -254,16 +282,18 @@ public sealed class Dispatcher
     /// supervisor's fault mailbox, which processes one fault at a time and
     /// must never wait out a kill-grace window. The in-flight task is
     /// REGISTERED so the drain can await it — fire-and-forget, not
-    /// fire-and-lost.
-    private void FireDispose(IHandler h, string id, string reason)
+    /// fire-and-lost — and RETURNED so a successor's eager start can
+    /// sequence behind it.
+    private Task FireDispose(IHandler h, string id, string reason)
     {
         var t = DisposeInstanceAsync(h, id, reason);
-        if (t.IsCompleted) return;
+        if (t.IsCompleted) return t;
         lock (_teardownLock) _pendingDisposals.Add(t);
         t.ContinueWith(done =>
         {
             lock (_teardownLock) _pendingDisposals.Remove(done);
         }, TaskScheduler.Default);
+        return t;
     }
 
     private static async Task DisposeInstanceAsync(IHandler h, string id, string reason)

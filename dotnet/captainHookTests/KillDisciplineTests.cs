@@ -337,9 +337,9 @@ public class KillDisciplineTests
         HookRun.RegisterExecHandlers(registry, new ExecHandlersResolution.Loaded(
             [
                 new ExecEntry("patient", "/bin/true", [], ["Stop"], ExecMode.Oneshot, FailMode.Open,
-                    TimeSpan.FromSeconds(60), null, null, null, null),
+                    TimeSpan.FromSeconds(60), null, new Dictionary<string, string>(), [], null),
                 new ExecEntry("quick", "/bin/true", [], ["Stop"], ExecMode.Oneshot, FailMode.Open,
-                    TimeSpan.FromSeconds(5), null, null, null, null),
+                    TimeSpan.FromSeconds(5), null, new Dictionary<string, string>(), [], null),
             ], []),
             drainBudgetHint: TimeSpan.FromSeconds(10));
 

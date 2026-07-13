@@ -838,6 +838,41 @@ run live*. The framework underneath is what exists today.
   SIGKILL escalation, dead-leader group teardown, drain-awaits-kill,
   restart/escalation/singleton/shared disposal, lingerer teardown, the N6
   daemon E2E asserting the cut still ANSWERS). Suite 547 green twice.)
+  `resident-child-runtime` (2026-07-13, phase 5's second chunk, the ADR's
+  one ULTRACODE slice — the daemon holds children warm. Wire: `ExecWire`
+  gains `{"ready":1}` strict readiness (`TryParseReady`) + the optional
+  `dispatchId` echo on every answer (mandatory for resident, extracted into
+  `ExecAnswer.Ok`). `ResidentExecHandler`: eager spawn AFTER teardown-seam
+  admission (new `IEagerStart` — `TrackSwap` returns admitted?+predecessor
+  so a post-drain restart never spawns and a successor sequences behind its
+  predecessor's kill), the three-way readiness race (ready line vs
+  readinessTimeoutMs vs early exit) transitioning `ChildState`
+  Spawning→Ready/Failed exactly once (transition-wins-then-kills), lock-step
+  JSONL with the mandatory echo as stale-answer backstop (kill-on-timeout is
+  the primary defense — every timeout path replaces the child),
+  fail-mode-while-warming (uncounted, loud — the dispatch token never races
+  the readiness timer), counted-throw-on-Failed → supervised respawn.
+  `ChildRecords` writes `~/.captainHook/children/child-<pid>.json` (pid +
+  /proc starttime identity, atomic write, once-per-process sweep) — NOT the
+  XDG tmpfs, so a SIGKILLed daemon's orphan stays traceable for phase-8
+  doctor. Registration: `residentAllowed` gates resident to the daemon;
+  collapsed runs skip fail-open loudly and register a DENY stub for
+  fail-closed (a declared gate never silently vanishes — the N2 inverse);
+  `handlers.readinessBeyondBudget`/`residentFanout` warns; slowShape stays
+  silent for resident-on-before-tools (the recommended shape). Two
+  adversarial rounds: a pre-build design panel (10 confirmed / 5 refuted —
+  echo made mandatory, fail-mode-while-Spawning, Start-after-admission,
+  records-in-home, deny-stub) then a 5-lens impl-verify (9 serious all
+  confirmed + fixed: expired-in-queue Backlogged guard returning fail-effect,
+  tokened envelope write, cancellable predecessor + pre-spawn disposed check,
+  gate-resolve on teardown, live-child EPIPE → protocol error). 24 resident
+  tests (readiness strict table, eager-spawn-before-dispatch, warm reuse, all
+  three race arms, missing/mismatched/double-answer echo, wedge → uncounted
+  respawn, FakeClock escalation with all children dead, records sweep,
+  IEagerStart sequencing, the no-respawn-after-teardown cut, daemon E2E: two
+  warm hooks one child + drain kills + record gone). Suite 580 green twice.
+  **Phase 5 complete — user processes run warm, and no child outlives its
+  daemon.**)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

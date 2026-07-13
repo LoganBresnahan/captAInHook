@@ -106,6 +106,17 @@ its lessons are imported wholesale (§ Pattern lineage).
      serve the one dispatch, terminate at drain). A collapsed run must never
      orphan a resident child. Cross-dispatch child state is therefore a
      daemon-only property — same contract as handler state under restart.
+     *(2026-07-13 resident-slice interim, until phase 6's degrade lands:
+     collapsed runs SKIP fail-open resident entries loudly and register a
+     DENY stub for fail-closed ones — a declared gate must never silently
+     vanish just because no daemon is up. The stub answers
+     `deny: unavailable outside the daemon`; real oneshot-semantics degrade
+     replaces both in the collapsed-mode-degrade slice.)*
+   - **Envelope evolution within `v:1`** (N1's must-ignore rule, panel
+     find): children MUST ignore unknown envelope fields — additive fields
+     may appear without a version bump; only semantic/shape changes bump
+     `v`. The ready line's value is the envelope version the child speaks
+     (this engine requires 1).
 
 4. **Registration is a file: `~/.captainHook/handlers.json`** — the fourth
    user-facing contract (after harness overrides, the hook protocol, and
@@ -503,6 +514,22 @@ exits); flakiness here blocks every later /deploy.
 
 ## Ground truth
 
-Backfilled when the implementation lands (ADR-0008 precedent): files,
-symbols, trail events, and tests get their table here; mechanics get
-`doc/flow/exec-handlers.md`.
+Mechanics: [`doc/flow/exec-payloads.md`](../flow/exec-payloads.md) (ASCII
+flow + why-prose). Files/symbols/events/tests as of phase 5 (oneshot +
+kill-discipline + resident):
+
+| what | where |
+|---|---|
+| envelope/answer codec, `TryParseReady`, dispatchId-echo extraction | `dotnet/captainHook/Core/ExecWire.cs` |
+| oneshot adapter (answer/exit race, reply-then-linger, echo-if-present-must-match) | `dotnet/captainHook/Handlers/ExecHandler.cs` |
+| resident runtime (`ChildState` machine, three-way readiness race, lock-step + mandatory echo, `IEagerStart`, fail-mode-while-warming, `ResidentUnavailableStub`) | `dotnet/captainHook/Handlers/ResidentExecHandler.cs` |
+| kill mechanics (setsid probe, group TERM→grace→KILL, group-aware liveness) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
+| child pid/identity records + once-per-process sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
+| teardown seam (`IEagerStart`, `TrackSwap` admission, `DisposeHandlersAsync`, `SubscribeEscalated`) | `dotnet/captainHook/Core/Dispatcher.cs`, `dotnet/captainHookActors/Supervision.fs` |
+| registration file (tri-state, strict parse, budget/readiness bounds) | `dotnet/captainHook/Core/ExecHandlersFile.cs` |
+| registration wiring (warns, resident gating + deny stub, drain-child phase, harness/drain hints) | `dotnet/captainHook/Core/HookRun.cs`, `Core/DaemonHost.cs` |
+| trail events (src `exec`) | `exec.spawn`, `exec.ready`, `exec.notReady`, `exec.answered`, `exec.exit`, `exec.stderr`, `exec.kill`, `exec.protocolError`, `exec.recordError` |
+| trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout` |
+| trail events (src `dispatcher`/`daemon`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout` |
+| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. the daemon E2E, FakeClock escalation, records sweep) |
+| platform facts | `doc/platform.md` § Process groups (setsid, group signals, pgid persistence) |

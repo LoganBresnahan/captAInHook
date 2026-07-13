@@ -21,7 +21,7 @@ public static class HookRun
     /// idiom); Program.cs passes ExecHandlersFile.ResolvePath() so all three
     /// production entry points read the same file.
     public static Registry BuildDefaultRegistry(string? handlersPath = null, TimeSpan? harnessTimeoutHint = null,
-                                                TimeSpan? drainBudgetHint = null)
+                                                TimeSpan? drainBudgetHint = null, bool residentAllowed = false)
     {
         var registry = new Registry()
             .On("SessionStart", new EchoHandler())
@@ -38,7 +38,7 @@ public static class HookRun
         // first, then handlers.json top to bottom.
         if (handlersPath is not null)
             RegisterExecHandlers(registry, ExecHandlersFile.Resolve(handlersPath), harnessTimeoutHint,
-                                 drainBudgetHint);
+                                 drainBudgetHint, residentAllowed);
 
         return registry;
     }
@@ -63,10 +63,17 @@ public static class HookRun
     /// ask window (budget + grace) outlasts it can be CUT at cutover or
     /// idle-exit (child killed, effect lost), so registration says so
     /// (`handlers.budgetBeyondDrain`). Collapsed mode passes null: no
-    /// daemon, no drain to be cut by.
+    /// daemon, no drain to be cut by. `residentAllowed` gates resident
+    /// entries to the DAEMON (cross-dispatch child state is a daemon-only
+    /// property — ADR-0010 d3/N5): in collapsed runs a fail-open resident
+    /// entry skips loudly, and a fail-CLOSED one registers a deny stub —
+    /// skipping a declared gate because no daemon is up would be the silent
+    /// grant. The phase-6 collapsed-mode-degrade slice replaces both with
+    /// real oneshot-semantics degrade.
     public static void RegisterExecHandlers(Registry registry, ExecHandlersResolution resolution,
                                             TimeSpan? harnessTimeoutHint = null,
-                                            TimeSpan? drainBudgetHint = null)
+                                            TimeSpan? drainBudgetHint = null,
+                                            bool residentAllowed = false)
     {
         switch (resolution)
         {
@@ -95,7 +102,7 @@ public static class HookRun
                     if (entry.ReadinessTimeout is not null && entry.Mode == ExecMode.Oneshot)
                         Log.Warn("handlers", "handlers.fieldIgnored", new LogFields
                         {
-                            Msg = "not yet enforced (lands with the resident slice): readinessTimeoutMs",
+                            Msg = "readinessTimeoutMs applies only to mode 'resident' — ignored on this oneshot entry",
                             Data = new Dictionary<string, object> { ["entry"] = entry.Name },
                         });
 
@@ -116,11 +123,70 @@ public static class HookRun
 
                     if (entry.Mode == ExecMode.Resident)
                     {
-                        Log.Warn("handlers", "handlers.entrySkipped", new LogFields
+                        if (!residentAllowed)
                         {
-                            Msg = "mode 'resident' is not yet runnable — parses as valid, lands with the resident-child-runtime slice",
-                            Data = new Dictionary<string, object> { ["entry"] = entry.Name },
-                        });
+                            if (entry.OnFailure == FailMode.Closed)
+                            {
+                                // A declared deny-gate must not silently vanish
+                                // just because no daemon is running (the N2
+                                // inverse): deny, loudly, until phase 6's real
+                                // degrade.
+                                foreach (var evt in entry.Events)
+                                {
+                                    var e2 = entry;
+                                    registry.On(evt, e2.Name, () => new ResidentUnavailableStub(e2.Name),
+                                                FailMode.Closed, e2.Budget);
+                                }
+                                Log.Warn("handlers", "handlers.entrySkipped", new LogFields
+                                {
+                                    Msg = "resident runs under the daemon; fail-closed ⇒ DENY stub registered for this collapsed run (phase-6 degrade lands later)",
+                                    Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                                });
+                            }
+                            else
+                            {
+                                Log.Warn("handlers", "handlers.entrySkipped", new LogFields
+                                {
+                                    Msg = "resident runs under the daemon; skipped in this collapsed run (fail-open ⇒ absence is Noop; phase-6 degrade lands later)",
+                                    Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                                });
+                            }
+                            continue;
+                        }
+
+                        // Compare against the EFFECTIVE readiness (the 10s
+                        // default counts too — a defaulted-readiness /
+                        // tight-budget entry warms past its budget just the
+                        // same) and only on the branch that actually
+                        // REGISTERS a resident child, never for a
+                        // collapsed-skip or stub.
+                        var effReadiness = entry.ReadinessTimeout ?? ResidentExecHandler.DefaultReadinessTimeout;
+                        var effBudget = entry.Budget ?? TimeSpan.FromSeconds(2);
+                        if (effReadiness > effBudget)
+                            Log.Warn("handlers", "handlers.readinessBeyondBudget", new LogFields
+                            {
+                                Msg = $"readiness window {effReadiness.TotalMilliseconds:F0}ms exceeds the entry's budget " +
+                                      $"({effBudget.TotalMilliseconds:F0}ms): dispatches arriving during warm-up take the " +
+                                      "fail mode until the child readies (loud, uncounted)",
+                                Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                            });
+
+                        if (entry.Events.Count > 1)
+                            Log.Info("handlers", "handlers.residentFanout", new LogFields
+                            {
+                                Msg = $"resident entry spans {entry.Events.Count} events ⇒ {entry.Events.Count} independent children (one per event, state not shared — externalize shared state)",
+                                Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                            });
+                        foreach (var evt in entry.Events)
+                        {
+                            var e2 = entry;
+                            var evt2 = evt;
+                            registry.On(evt, e2.Name,
+                                () => new ResidentExecHandler(e2.Name, e2.Command, e2.Args, e2.OnFailure,
+                                                              e2.Env, e2.PassEnv, e2.Cwd,
+                                                              e2.ReadinessTimeout, evt2),
+                                e2.OnFailure, e2.Budget);
+                        }
                         continue;
                     }
 
