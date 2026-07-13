@@ -20,8 +20,15 @@ public static class HookRun
     /// null ⇒ zero exec handlers (the test-safe default, the policyPath
     /// idiom); Program.cs passes ExecHandlersFile.ResolvePath() so all three
     /// production entry points read the same file.
+    /// `collapsedEvent` is the phase-6 degrade seam: the daemon passes null
+    /// (warm every resident child at start, for every event); a COLLAPSED run
+    /// passes the one event it is about to dispatch, so only that event's
+    /// exec handlers register — a resident child for an unrelated event never
+    /// spuriously spawns for a single-shot hook (ADR-0010 d3: "spawn, serve
+    /// THE one dispatch, terminate at drain"). The teardown-at-drain half is
+    /// `CollapsedAsync`'s `DisposeHandlersAsync` call.
     public static Registry BuildDefaultRegistry(string? handlersPath = null, TimeSpan? harnessTimeoutHint = null,
-                                                TimeSpan? drainBudgetHint = null, bool residentAllowed = false)
+                                                TimeSpan? drainBudgetHint = null, string? collapsedEvent = null)
     {
         var registry = new Registry()
             .On("SessionStart", new EchoHandler())
@@ -38,7 +45,7 @@ public static class HookRun
         // first, then handlers.json top to bottom.
         if (handlersPath is not null)
             RegisterExecHandlers(registry, ExecHandlersFile.Resolve(handlersPath), harnessTimeoutHint,
-                                 drainBudgetHint, residentAllowed);
+                                 drainBudgetHint, collapsedEvent);
 
         return registry;
     }
@@ -62,18 +69,20 @@ public static class HookRun
     /// boundary, same doctrine: the daemon's drain deadline — a budget whose
     /// ask window (budget + grace) outlasts it can be CUT at cutover or
     /// idle-exit (child killed, effect lost), so registration says so
-    /// (`handlers.budgetBeyondDrain`). Collapsed mode passes null: no
-    /// daemon, no drain to be cut by. `residentAllowed` gates resident
-    /// entries to the DAEMON (cross-dispatch child state is a daemon-only
-    /// property — ADR-0010 d3/N5): in collapsed runs a fail-open resident
-    /// entry skips loudly, and a fail-CLOSED one registers a deny stub —
-    /// skipping a declared gate because no daemon is up would be the silent
-    /// grant. The phase-6 collapsed-mode-degrade slice replaces both with
-    /// real oneshot-semantics degrade.
+    /// (`handlers.budgetBeyondDrain`). Collapsed mode passes a null drain
+    /// hint (no daemon, no drain to be cut by).
+    /// (phase 6) `collapsedEvent`: the daemon passes null; a COLLAPSED run
+    /// passes the one event it is about to dispatch. Non-null both FILTERS
+    /// registration to that event (so an unrelated event's resident child
+    /// never spawns for a single-shot hook) and marks the degrade — a
+    /// resident entry runs the SAME ResidentExecHandler, its lifecycle merely
+    /// spawn->serve-one->die there (bounded by CollapsedAsync's
+    /// DisposeHandlersAsync), so a fail-closed gate genuinely RUNS (real
+    /// verdict or fail-closed deny) instead of the old interim stub.
     public static void RegisterExecHandlers(Registry registry, ExecHandlersResolution resolution,
                                             TimeSpan? harnessTimeoutHint = null,
                                             TimeSpan? drainBudgetHint = null,
-                                            bool residentAllowed = false)
+                                            string? collapsedEvent = null)
     {
         switch (resolution)
         {
@@ -94,6 +103,15 @@ public static class HookRun
 
                 foreach (var entry in entries)
                 {
+                    // Collapsed-degrade filter: register only the exec
+                    // handlers that can fire THIS dispatch — an entry whose
+                    // events don't include the collapsed event registers
+                    // nothing (and, for a resident entry, spawns nothing).
+                    var events = collapsedEvent is null
+                        ? entry.Events
+                        : entry.Events.Where(ev => string.Equals(ev, collapsedEvent, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (events.Count == 0) continue;
+
                     // Loudness symmetry: parse-valid fields the CURRENT
                     // slices cannot honor yet are loud (adversarial-verify
                     // find). env/passEnv/cwd are enforced as of the
@@ -123,43 +141,10 @@ public static class HookRun
 
                     if (entry.Mode == ExecMode.Resident)
                     {
-                        if (!residentAllowed)
-                        {
-                            if (entry.OnFailure == FailMode.Closed)
-                            {
-                                // A declared deny-gate must not silently vanish
-                                // just because no daemon is running (the N2
-                                // inverse): deny, loudly, until phase 6's real
-                                // degrade.
-                                foreach (var evt in entry.Events)
-                                {
-                                    var e2 = entry;
-                                    registry.On(evt, e2.Name, () => new ResidentUnavailableStub(e2.Name),
-                                                FailMode.Closed, e2.Budget);
-                                }
-                                Log.Warn("handlers", "handlers.entrySkipped", new LogFields
-                                {
-                                    Msg = "resident runs under the daemon; fail-closed ⇒ DENY stub registered for this collapsed run (phase-6 degrade lands later)",
-                                    Data = new Dictionary<string, object> { ["entry"] = entry.Name },
-                                });
-                            }
-                            else
-                            {
-                                Log.Warn("handlers", "handlers.entrySkipped", new LogFields
-                                {
-                                    Msg = "resident runs under the daemon; skipped in this collapsed run (fail-open ⇒ absence is Noop; phase-6 degrade lands later)",
-                                    Data = new Dictionary<string, object> { ["entry"] = entry.Name },
-                                });
-                            }
-                            continue;
-                        }
-
                         // Compare against the EFFECTIVE readiness (the 10s
                         // default counts too — a defaulted-readiness /
                         // tight-budget entry warms past its budget just the
-                        // same) and only on the branch that actually
-                        // REGISTERS a resident child, never for a
-                        // collapsed-skip or stub.
+                        // same).
                         var effReadiness = entry.ReadinessTimeout ?? ResidentExecHandler.DefaultReadinessTimeout;
                         var effBudget = entry.Budget ?? TimeSpan.FromSeconds(2);
                         if (effReadiness > effBudget)
@@ -171,13 +156,27 @@ public static class HookRun
                                 Data = new Dictionary<string, object> { ["entry"] = entry.Name },
                             });
 
-                        if (entry.Events.Count > 1)
+                        // Fan-out is a DAEMON truth (N children warm at once);
+                        // in a collapsed run only the dispatched event's child
+                        // spawns, so the warn would mislead.
+                        if (collapsedEvent is null && entry.Events.Count > 1)
                             Log.Info("handlers", "handlers.residentFanout", new LogFields
                             {
                                 Msg = $"resident entry spans {entry.Events.Count} events ⇒ {entry.Events.Count} independent children (one per event, state not shared — externalize shared state)",
                                 Data = new Dictionary<string, object> { ["entry"] = entry.Name },
                             });
-                        foreach (var evt in entry.Events)
+                        // The degrade (ADR-0010 d3): in collapsed mode the
+                        // resident child runs spawn→serve-one→die, bounded by
+                        // CollapsedAsync's DisposeHandlersAsync — visible so
+                        // the daemon-down path is never a silent surprise.
+                        if (collapsedEvent is not null)
+                            Log.Info("handlers", "handlers.residentDegraded", new LogFields
+                            {
+                                HookEvent = collapsedEvent,
+                                Msg = $"no daemon: resident '{entry.Name}' runs oneshot-lifecycle for this collapsed dispatch (spawn, serve, terminate)",
+                                Data = new Dictionary<string, object> { ["entry"] = entry.Name },
+                            });
+                        foreach (var evt in events)
                         {
                             var e2 = entry;
                             var evt2 = evt;
@@ -190,7 +189,7 @@ public static class HookRun
                         continue;
                     }
 
-                    foreach (var evt in entry.Events)
+                    foreach (var evt in events)
                     {
                         if (evt == "PreToolUse")
                             Log.Warn("handlers", "handlers.slowShape", new LogFields
@@ -264,25 +263,68 @@ public static class HookRun
             return 0;
         }
 
-        var dispatcher = new Dispatcher(BuildDefaultRegistry(handlersPath, spec.HookTimeoutHint), budget: TimeSpan.FromSeconds(2));
-        probe?.DispatcherBuilt();
-        var result = await dispatcher.DispatchAsync(evt, dispatchId, gate.Excluded);
-        probe?.Dispatched();
+        // The Dispatcher ctor EAGER-SPAWNS resident children (degrade —
+        // ADR-0010 d3). It lives INSIDE the try so any throw from
+        // BuildDefaultRegistry/DispatchAsync/emit is reaped by the finally.
+        // The ctor itself is non-throwing AFTER any spawn by contract
+        // (StartCoreAsync swallows every spawn failure into a Failed
+        // transition, worker ids are de-duped, budgets are pre-checked at
+        // registration), so a ctor that threw would have spawned nothing to
+        // orphan — `dispatcher` stays null and the finally is correctly a
+        // no-op.
+        Dispatcher? dispatcher = null;
+        try
+        {
+            // Degrade-at-construction (phase 6): the collapsed run passes its
+            // ONE event so BuildDefaultRegistry registers only that event's
+            // exec handlers — a resident child for an unrelated event never
+            // spawns for this single-shot hook — and a resident entry runs the
+            // real ResidentExecHandler, spawn→serve-one→die.
+            dispatcher = new Dispatcher(
+                BuildDefaultRegistry(handlersPath, spec.HookTimeoutHint, collapsedEvent: evt.Type),
+                budget: TimeSpan.FromSeconds(2));
+            probe?.DispatcherBuilt();
+            var result = await dispatcher.DispatchAsync(evt, dispatchId, gate.Excluded);
+            probe?.Dispatched();
 
-        // Single-shot: drain background work before exit (the queue itself is
-        // long-lived for the daemon's sake; a per-invocation process must not
-        // exit with effects still queued). Drain BEFORE rendering the trace so
-        // side lines still appear in it, exactly as before the queue moved.
-        await dispatcher.CompleteBackgroundAsync();
+            // Single-shot: drain background work before exit (the queue itself
+            // is long-lived for the daemon's sake; a per-invocation process
+            // must not exit with effects still queued). Drain BEFORE rendering
+            // the trace so side lines still appear in it, exactly as before the
+            // queue moved.
+            await dispatcher.CompleteBackgroundAsync();
 
-        // Effect -> stdout (gate first: a harness only ever receives effect kinds
-        // its spec declared), human trace -> stderr.
-        var final = Harness.ApplyCapabilityGate(spec, evt, result.Merged, dispatchId);
-        stdout.Write(ResponseAdapters.Get(spec.ResponseAdapter).Serialize(evt, final));
-        await stderr.WriteLineAsync(result.Trace.Render());
+            // Effect -> stdout (gate first: a harness only ever receives effect
+            // kinds its spec declared), human trace -> stderr.
+            var final = Harness.ApplyCapabilityGate(spec, evt, result.Merged, dispatchId);
+            stdout.Write(ResponseAdapters.Get(spec.ResponseAdapter).Serialize(evt, final));
+            await stderr.WriteLineAsync(result.Trace.Render());
 
-        probe?.Emit(dispatchId);   // -> JSONL/stderr, never stdout; after the effect is written
-        return 0;
+            probe?.Emit(dispatchId);   // -> JSONL/stderr, never stdout; after the effect is written
+            return 0;
+        }
+        finally
+        {
+            // Teardown-at-drain, ordered AFTER the stdout answer (the promise
+            // is kept first): kill any exec child this run spawned — the whole
+            // point of the degrade is that a collapsed run NEVER orphans a
+            // resident child (N3 fires exactly when the daemon is down). In a
+            // `finally` so a mid-dispatch throw still reaps. Bounded so a
+            // stuck child can't hang the hook — 8s dominates a single child's
+            // dispose worst case (a wedged in-flight spawn's ~5s startTask
+            // join + the 2s kill grace); children dispose in parallel, so
+            // multiple entries don't stack. Null-guarded per the ctor
+            // contract above (null ⇒ nothing spawned ⇒ nothing to reap).
+            try { if (dispatcher is not null) await dispatcher.DisposeHandlersAsync().WaitAsync(TimeSpan.FromSeconds(8)); }
+            catch (TimeoutException)
+            {
+                Log.Warn("handlers", "handlers.collapsedTeardownTimeout", new LogFields
+                {
+                    DispatchId = dispatchId,
+                    Msg = "collapsed handler teardown outran its bound; exiting anyway — run doctor for orphans",
+                });
+            }
+        }
     }
 
     /// The stdout of a policy-denied dispatch: a valid Noop through the SAME

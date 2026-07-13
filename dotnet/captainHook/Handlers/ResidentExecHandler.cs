@@ -591,20 +591,3 @@ public sealed class ResidentExecHandler(
             Data = data,
         };
 }
-
-/// The collapsed-mode INTERIM for a fail-closed resident entry (ADR-0010 N2's
-/// inverse): skipping a declared deny-gate because no daemon is running would
-/// be the silent grant — so until the phase-6 degrade lands, collapsed
-/// dispatches to a fail-closed resident entry are DENIED, loudly and
-/// deterministically. Fail-open entries skip instead (their absence is Noop
-/// by definition).
-internal sealed class ResidentUnavailableStub(string name) : IHandler
-{
-    public string Name => name;
-    public FailMode OnFailure => FailMode.Closed;
-
-    public Task<Effect> HandleAsync(HookEvent e, HandlerContext ctx) =>
-        Task.FromResult<Effect>(new Effect.Decide(Verdict.Deny,
-            $"resident handler '{name}' is unavailable outside the daemon (fail-closed); " +
-            "the daemon warms on the next hook"));
-}

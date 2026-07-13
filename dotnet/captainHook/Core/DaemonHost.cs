@@ -87,7 +87,7 @@ public static class DaemonHost
         var drainBudget = drainDeadline ?? TimeSpan.FromSeconds(10);
         var dispatcher = new Dispatcher(
             registry ?? HookRun.BuildDefaultRegistry(handlersPath, harnesses.Current.Get("claude-code").HookTimeoutHint,
-                                                     drainBudget, residentAllowed: true),
+                                                     drainBudget),
             budget: TimeSpan.FromSeconds(2));
 
         // Listening ⟺ ready: the first connect a shim ever makes against this

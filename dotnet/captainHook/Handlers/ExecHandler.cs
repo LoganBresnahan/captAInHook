@@ -49,24 +49,21 @@ namespace CaptainHook.Handlers;
 /// EOF + exit 0) releases it when the pipes close — a payload that
 /// deliberately daemonizes (redirects its fds, exits 0) has left the
 /// dispatch and its survivors are its own business, while one still holding
-/// the answer channel is attached and dies at teardown. Reply-then-linger is a
-/// DAEMON-mode pattern: in collapsed mode the engine exits after the
-/// effect, abandoning the reaper (no exec.exit line) and closing the pipe
-/// read-ends — a lingering child that writes afterwards gets SIGPIPE. Its
-/// own risk; documented, not defended.
+/// the answer channel is attached and dies at teardown. A payload that
+/// deliberately daemonizes (`sleep 30 & exit 0` — untracked synchronously at
+/// dispatch via the EOF+exit0 path) legitimately leaves its grandchild
+/// running in EITHER mode; that is its own business, not an orphan.
 ///
 /// TEARDOWN (kill-discipline slice): the handler owns its children's
 /// lifetime end-to-end — every spawn is tracked live, and DisposeAsync
 /// (invoked by the Dispatcher's teardown seam on supervised replacement,
-/// escalation, and daemon drain) kills whatever is still running
-/// TERM→grace→KILL and refuses new spawns. A child must never outlive its
-/// handler generation, and no child survives the daemon. In COLLAPSED mode
-/// the guarantee is TERM-only: the kill's SIGTERM is sent synchronously on
-/// the dispatch path, but the engine exits right after the effect, so the
-/// detached grace→SIGKILL escalation may never land — a budget-killed child
-/// that ignores TERM can outlive a collapsed run (same abandonment family
-/// as the reaper; the daemon path has no such hole — the drain awaits the
-/// kill).
+/// escalation, daemon drain, AND the collapsed run's own drain — phase 6)
+/// kills whatever is still running TERM→grace→KILL and refuses new spawns. A
+/// child must never outlive its handler generation, and no TRACKED child
+/// survives its run: `CollapsedAsync` awaits `DisposeHandlersAsync` in a
+/// finally after the answer, so a collapsed run's kill escalation lands
+/// under the same bound the daemon drain gives it (the old TERM-only
+/// collapsed hole is closed for tracked children).
 ///
 /// The child environment is STRIPPED from day one (decision 5): never
 /// inherited — a fixed allowlist only. Config-driven env{}/passEnv[] arrive

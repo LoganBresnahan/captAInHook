@@ -79,9 +79,20 @@ is wiped exactly when the forensic record matters (SIGKILLed daemon) —
 deleted only at confirmed GROUP death; a per-process sweep clears stale
 records (doctor-orphans, phase 8, is then pure read-side).
 
-Collapsed runs (no daemon): fail-open resident entries skip loudly;
-fail-closed ones register a DENY stub — a declared gate never silently
-vanishes. Phase 6 replaces both with real oneshot-semantics degrade.
+Collapsed runs (no daemon): a resident entry DEGRADES to oneshot-lifecycle
+(ADR-0010 d3, phase 6) — the collapsed run passes its one event so only that
+event's handlers register (an unrelated event's resident child never spawns
+for a single-shot hook), the real `ResidentExecHandler` runs
+spawn→serve-one→die, and `CollapsedAsync` awaits `DisposeHandlersAsync` in a
+`finally` AFTER the stdout answer so the child is always reaped (N3's
+no-orphan is structural). A fail-closed gate genuinely runs — real verdict,
+or fail-closed deny on any spawn/ready/protocol failure — never a silent
+grant. `handlers.residentDegraded` marks it in the trail.
+
+Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
+`retriever.sh` (resident, PreToolUse, injects a matched note) and
+`memory.sh` (oneshot, Stop, appends a durable log) — dependency-free POSIX
+`sh`, driven end-to-end through the daemon by `DemoPayloadTests`.
 
 ## Ground truth
 

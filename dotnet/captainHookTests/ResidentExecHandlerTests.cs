@@ -637,50 +637,52 @@ public class ResidentExecHandlerTests : IDisposable
             new Dictionary<string, string>(), [], null);
 
     [Fact]
-    public void CollapsedRun_FailOpenResident_SkipsLoudly()
+    public void DaemonRegistration_MultiEventEntry_FanoutIsLoud()
     {
         using var captured = new CapturedLog();
         var registry = new Registry();
         HookRun.RegisterExecHandlers(registry, new ExecHandlersResolution.Loaded(
-            [Resident("warm-memo", ["UserPromptSubmit"])], []));   // residentAllowed defaults false
-
-        var skip = Assert.Single(captured.Events.ToArray(), e => e.Evt == "handlers.entrySkipped");
-        Assert.Contains("resident runs under the daemon", skip.Fields.Msg);
-        Assert.Empty(new Dispatcher(registry, TimeSpan.FromSeconds(1)).Snapshot());
-    }
-
-    [Fact]
-    public async Task CollapsedRun_FailClosedResident_DeniesInsteadOfSilentlyGranting()
-    {
-        // The N2 inverse, pinned: a declared deny-gate must not vanish just
-        // because no daemon is running — collapsed dispatches DENY, loudly.
-        using var captured = new CapturedLog();
-        var registry = new Registry();
-        HookRun.RegisterExecHandlers(registry, new ExecHandlersResolution.Loaded(
-            [Resident("tool-gate", ["PreToolUse"], FailMode.Closed)], []));
-
-        var dispatcher = new Dispatcher(registry, TimeSpan.FromSeconds(2));
-        var r = await dispatcher.DispatchAsync(Ev("PreToolUse"), "stub0001");
-        var deny = Assert.IsType<Effect.Decide>(r.Merged);
-        Assert.Equal(Verdict.Deny, deny.Verdict);
-        Assert.Contains("unavailable outside the daemon", deny.Reason);
-        Assert.Contains(captured.Events, e =>
-            e.Evt == "handlers.entrySkipped" && e.Fields.Msg!.Contains("DENY stub"));
-    }
-
-    [Fact]
-    public void ResidentAllowed_MultiEventEntry_FanoutIsLoud()
-    {
-        using var captured = new CapturedLog();
-        var registry = new Registry();
-        HookRun.RegisterExecHandlers(registry, new ExecHandlersResolution.Loaded(
-            [Resident("multi", ["UserPromptSubmit", "Stop"])], []), residentAllowed: true);
+            [Resident("multi", ["UserPromptSubmit", "Stop"])], []));   // no collapsedEvent = daemon
 
         var fan = Assert.Single(captured.Events.ToArray(), e => e.Evt == "handlers.residentFanout");
         Assert.Contains("2 independent children", fan.Fields.Msg);
         // Both events registered — but do NOT construct a Dispatcher here:
         // that would eagerly spawn /bin/true children for nothing.
         Assert.Equal(2, registry.Specs.Count);
+    }
+
+    [Fact]
+    public void CollapsedRegistration_FiltersToDispatchedEvent_LogsDegrade_NoFanout()
+    {
+        // The degrade seam (phase 6): a collapsed run passes its ONE event;
+        // a multi-event resident entry registers only THAT event's handler
+        // (no spurious spawn for the others), logs residentDegraded, and the
+        // daemon-only fanout warn stays silent.
+        using var captured = new CapturedLog();
+        var registry = new Registry();
+        HookRun.RegisterExecHandlers(registry, new ExecHandlersResolution.Loaded(
+            [Resident("multi", ["UserPromptSubmit", "Stop"])], []),
+            collapsedEvent: "UserPromptSubmit");
+
+        Assert.Equal(1, registry.Specs.Count);   // only the dispatched event
+        var degrade = Assert.Single(captured.Events.ToArray(), e => e.Evt == "handlers.residentDegraded");
+        Assert.Equal("multi", degrade.Fields.Data!["entry"]);
+        Assert.DoesNotContain(captured.Events, e => e.Evt == "handlers.residentFanout");
+    }
+
+    [Fact]
+    public void CollapsedRegistration_UnrelatedEvent_RegistersNothing()
+    {
+        // A resident gate on PreToolUse must NOT register (or spawn) for a
+        // collapsed UserPromptSubmit hook.
+        using var captured = new CapturedLog();
+        var registry = new Registry();
+        HookRun.RegisterExecHandlers(registry, new ExecHandlersResolution.Loaded(
+            [Resident("tool-gate", ["PreToolUse"], FailMode.Closed)], []),
+            collapsedEvent: "UserPromptSubmit");
+
+        Assert.Empty(registry.Specs);
+        Assert.DoesNotContain(captured.Events, e => e.Evt == "handlers.residentDegraded");
     }
 
     [Fact]
@@ -694,7 +696,7 @@ public class ResidentExecHandlerTests : IDisposable
                     budget: TimeSpan.FromSeconds(2), readiness: TimeSpan.FromSeconds(30)),
                 Resident("fast-warm", ["Stop"],
                     budget: TimeSpan.FromSeconds(5), readiness: TimeSpan.FromSeconds(1)),
-            ], []), residentAllowed: true);
+            ], []));
 
         var warn = Assert.Single(captured.Events.ToArray(), e => e.Evt == "handlers.readinessBeyondBudget");
         Assert.Equal("slow-warm", warn.Fields.Data!["entry"]);
@@ -709,8 +711,85 @@ public class ResidentExecHandlerTests : IDisposable
         using var captured = new CapturedLog();
         var registry = new Registry();
         HookRun.RegisterExecHandlers(registry, new ExecHandlersResolution.Loaded(
-            [Resident("gate", ["PreToolUse"])], []), residentAllowed: true);
+            [Resident("gate", ["PreToolUse"])], []));
 
         Assert.DoesNotContain(captured.Events, e => e.Evt == "handlers.slowShape");
+    }
+
+    // ---- collapsed-mode degrade E2E (the no-orphan proof) ----------------------
+
+    private async Task<(int Exit, string Stdout, IReadOnlyList<CaptainHook.Actors.LogEvent> Trail)> CollapsedAsync(
+        CapturedLog captured, string handlersJson, string eventName = "user-prompt-submit")
+    {
+        var handlersPath = Path.Combine(_tmp.Path, "handlers.json");
+        File.WriteAllText(handlersPath, handlersJson);
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var exit = await HookRun.CollapsedAsync(
+            new CaptainHook.Wire.Invocation(CaptainHook.Wire.Mode.Collapsed, eventName, "claude-code"),
+            new StringReader("""{"prompt":"hi"}"""), stdout, stderr,
+            harnessDir: NoHarnessDir(), handlersPath: handlersPath);
+        return (exit, stdout.ToString(), captured.Events.ToArray());
+    }
+
+    private static string HandlersJson(string name, string script, string[] events, string mode = "resident",
+                                       string failMode = "open") =>
+        JsonSerializer.Serialize(new
+        {
+            version = 1,
+            handlers = new object[]
+            {
+                new { name, command = "/bin/sh", args = new[] { "-c", script, "sh" }, events, mode, failMode },
+            },
+        });
+
+    [Fact]
+    public async Task CollapsedE2E_ResidentDegrades_ServesOneDispatch_ChildDiesNoOrphan()
+    {
+        // The degrade end-to-end: no daemon, a resident echo server runs
+        // spawn→serve-one→die. The hook is answered AND the child is dead
+        // when CollapsedAsync returns — the whole N3-no-orphan promise.
+        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip
+        using var captured = new CapturedLog();
+        var (exit, stdout, trail) = await CollapsedAsync(captured,
+            HandlersJson("memo", EchoServer, ["UserPromptSubmit"]));
+
+        Assert.Equal(0, exit);
+        JsonDocument.Parse(stdout);   // exactly one JSON object — invariant 1
+        Assert.Contains(trail, e => e.Evt == "handlers.residentDegraded");
+        Assert.Contains(trail, e => e.Evt == "exec.answered" && Equals(e.Fields.Data!["mode"], "resident"));
+
+        var pid = (int)trail.First(e => e.Evt == "exec.spawn").Fields.Data!["pid"];
+        Assert.False(Alive(pid), "the degraded resident child must be dead when the collapsed hook returns");
+    }
+
+    [Fact]
+    public async Task CollapsedE2E_FailClosedResidentGate_RunsForReal_NoOrphan()
+    {
+        // The old interim was a DENY stub; the real degrade RUNS the gate. A
+        // fail-closed resident PreToolUse child that readies and allows must
+        // produce that verdict (not a blanket stub-deny) — and still die
+        // cleanly.
+        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip
+        using var captured = new CapturedLog();
+        var gate =
+            """
+            echo '{"ready":1}'
+            while read l; do
+              id="${l#*\"dispatchId\":\"}"; id="${id%%\"*}"
+              printf '{"effect":"decide","verdict":"allow","dispatchId":"%s"}\n' "$id"
+            done
+            """;
+        var (exit, stdout, trail) = await CollapsedAsync(captured,
+            HandlersJson("tool-gate", gate, ["PreToolUse"], failMode: "closed"),
+            eventName: "pre-tool-use");
+
+        Assert.Equal(0, exit);
+        Assert.Contains(trail, e => e.Evt == "handlers.residentDegraded");
+        // The real gate ran and ALLOWED — proving the degrade executes the
+        // user's logic rather than blanket-denying.
+        Assert.Contains(trail, e => e.Evt == "exec.answered");
+        var pid = (int)trail.First(e => e.Evt == "exec.spawn").Fields.Data!["pid"];
+        Assert.False(Alive(pid), "fail-closed resident gate child dead after the collapsed hook");
     }
 }

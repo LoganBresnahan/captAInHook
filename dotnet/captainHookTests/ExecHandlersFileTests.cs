@@ -398,18 +398,19 @@ public class ExecRegistrationTests
     }
 
     [Fact]
-    public async Task ResidentEntry_ParsesValid_SkippedLoudly_NotRegistered()
+    public void ResidentEntry_ParsesValid_Registers_NotSkipped()
     {
+        // As of the resident-child-runtime slice a valid resident entry
+        // REGISTERS (daemon mode: no collapsedEvent) — the old skip-loudly
+        // interim is gone. Registration-only assertion (no Dispatcher, so no
+        // eager spawn of `true`).
         using var captured = new CapturedLog();
         var registry = new Registry();
         HookRun.RegisterExecHandlers(registry, Loaded(
             Entry("warm-one", "true", ["UserPromptSubmit"], mode: ExecMode.Resident)));
-        var dispatcher = new Dispatcher(registry, TimeSpan.FromSeconds(2));
 
-        var r = await dispatcher.DispatchAsync(Ev());
-        Assert.IsType<Effect.Noop>(r.Merged);   // nothing registered
-        var skip = Assert.Single(captured.Events.ToArray(), e => e.Evt == "handlers.entrySkipped");
-        Assert.Contains("resident", skip.Fields.Msg);
+        Assert.Equal(1, registry.Specs.Count);
+        Assert.DoesNotContain(captured.Events, e => e.Evt == "handlers.entrySkipped");
     }
 
     [Fact]

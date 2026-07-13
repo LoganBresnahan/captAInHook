@@ -873,6 +873,32 @@ run live*. The framework underneath is what exists today.
   warm hooks one child + drain kills + record gone). Suite 580 green twice.
   **Phase 5 complete — user processes run warm, and no child outlives its
   daemon.**)
+  `collapsed-mode-degrade` + `demo-payload-scripts` (2026-07-13, the phase-6
+  batch — prove the seam, protect the fallback. DEGRADE: a resident entry
+  with no daemon runs the SAME ResidentExecHandler in oneshot-lifecycle
+  (spawn→serve-one→die), replacing the interim skip/deny-stub. Composed at
+  one seam: BuildDefaultRegistry takes a `collapsedEvent` — a collapsed run
+  passes its one dispatched event so only that event's exec handlers
+  register (an unrelated event's resident child never spawns for a
+  single-shot hook; daemon passes null = warm all), and CollapsedAsync
+  awaits DisposeHandlersAsync in a `finally` AFTER the stdout answer so N3's
+  no-orphan is STRUCTURAL, not best-effort. A fail-closed gate now genuinely
+  runs (real verdict or fail-closed deny on any spawn/ready/protocol
+  failure) — strictly stronger than the deleted deny stub, never a silent
+  grant. `handlers.residentDegraded` marks the daemon-down path.
+  DEMOS: examples/payloads/ — retriever.sh (resident, PreToolUse, greps
+  notes and injects) + memory.sh (oneshot, Stop, appends a durable log) +
+  handlers.json + README, dependency-free POSIX sh outside the build graph.
+  Two adversarial skeptics confirmed the degrade SOUND (every fail-closed
+  collapsed outcome → deny, verified live; ordering + no-orphan hold);
+  5 LOWs fixed (stale docs ×3, teardown bound 6s→8s, construct-inside-try).
+  Tests: registration filter/degrade-log, two collapsed no-orphan E2Es
+  (fail-open serves + fail-closed runs-for-real), the demo E2E driving the
+  REAL committed scripts through the daemon (retriever injects a seeded
+  note, memory persists its log, child dies at drain). Suite 583 green
+  twice. **Phase 6 complete — the seam is proven with scripts, the fallback
+  degrades without orphaning.** Remaining for item 9: phase 7
+  (handlers-hot-reload), phase 8 (doctor-orphans, handlers-observability).)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

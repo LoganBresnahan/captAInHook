@@ -106,12 +106,18 @@ its lessons are imported wholesale (§ Pattern lineage).
      serve the one dispatch, terminate at drain). A collapsed run must never
      orphan a resident child. Cross-dispatch child state is therefore a
      daemon-only property — same contract as handler state under restart.
-     *(2026-07-13 resident-slice interim, until phase 6's degrade lands:
-     collapsed runs SKIP fail-open resident entries loudly and register a
-     DENY stub for fail-closed ones — a declared gate must never silently
-     vanish just because no daemon is up. The stub answers
-     `deny: unavailable outside the daemon`; real oneshot-semantics degrade
-     replaces both in the collapsed-mode-degrade slice.)*
+     *(2026-07-13 collapsed-mode-degrade, phase 6: the degrade as built. A
+     collapsed run passes its ONE event to registration so only that event's
+     exec handlers register — an unrelated event's resident child never
+     spawns for a single-shot hook — and a resident entry runs the SAME
+     `ResidentExecHandler`, its lifecycle just spawn→serve-one→die, bounded
+     by `CollapsedAsync`'s `DisposeHandlersAsync` in a finally AFTER the
+     stdout answer. A fail-closed gate therefore genuinely RUNS (real verdict
+     or, on any spawn/ready/protocol failure, fail-closed deny) — strictly
+     stronger than the superseded interim's blanket deny stub, and never a
+     silent grant (verified: every fail-closed collapsed outcome → deny).
+     `handlers.residentDegraded` makes the daemon-down path visible; N3's
+     no-orphan is structural, not best-effort.)*
    - **Envelope evolution within `v:1`** (N1's must-ignore rule, panel
      find): children MUST ignore unknown envelope fields — additive fields
      may appear without a version bump; only semantic/shape changes bump
@@ -529,7 +535,8 @@ kill-discipline + resident):
 | registration file (tri-state, strict parse, budget/readiness bounds) | `dotnet/captainHook/Core/ExecHandlersFile.cs` |
 | registration wiring (warns, resident gating + deny stub, drain-child phase, harness/drain hints) | `dotnet/captainHook/Core/HookRun.cs`, `Core/DaemonHost.cs` |
 | trail events (src `exec`) | `exec.spawn`, `exec.ready`, `exec.notReady`, `exec.answered`, `exec.exit`, `exec.stderr`, `exec.kill`, `exec.protocolError`, `exec.recordError` |
-| trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout` |
+| trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout`, `handlers.residentDegraded`, `handlers.collapsedTeardownTimeout` |
+| collapsed degrade + demo payloads | `Core/HookRun.cs` (`collapsedEvent` filter + teardown-at-drain), `examples/payloads/` (retriever resident + memory oneshot + handlers.json) |
 | trail events (src `dispatcher`/`daemon`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout` |
-| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. the daemon E2E, FakeClock escalation, records sweep) |
+| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon) |
 | platform facts | `doc/platform.md` § Process groups (setsid, group signals, pgid persistence) |

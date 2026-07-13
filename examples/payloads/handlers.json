@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "handlers": [
+    {
+      "name": "retriever",
+      "command": "/home/oof/captAInHook/examples/payloads/retriever.sh",
+      "events": ["PreToolUse"],
+      "mode": "resident",
+      "failMode": "open",
+      "budgetMs": 2000,
+      "readinessTimeoutMs": 5000
+    },
+    {
+      "name": "memory",
+      "command": "/home/oof/captAInHook/examples/payloads/memory.sh",
+      "events": ["Stop"],
+      "mode": "oneshot",
+      "failMode": "open",
+      "budgetMs": 3000
+    }
+  ]
+}
