@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using CaptainHook.Actors;
+using CaptainHook.Handlers;
 using CaptainHook.Wire;
 
 namespace CaptainHook.Core;
@@ -131,6 +132,90 @@ public static class Doctor
                 Data = new Dictionary<string, object> { ["version"] = v.Version, ["action"] = v.Action },
             });
         return verdicts;
+    }
+
+    /// Report ORPHANED resident children (ADR-0010 phase 8, doctor-orphans):
+    /// the SAME double-guarded verdict template as the daemon reap, aimed at a
+    /// second entity class — `~/.captainHook/children/child-<pid>.json`. An
+    /// orphan is a child that escaped every kill path: its record's pid is
+    /// still ALIVE with a MATCHING /proc starttime (the pid-reuse guard — a
+    /// recycled pid running something else has a different starttime), yet its
+    /// owning daemon is GONE (the canonical door a resident dies through is its
+    /// daemon's SIGTERM/SIGKILL; a daemon that was itself SIGKILLed before it
+    /// could drain leaves its children behind). REPORT-ONLY: doctor NEVER
+    /// signals the child — a misclassification is a wrong trail line, never a
+    /// killed live process (why this slice needs no adversarial verify). Stale
+    /// records (dead pid / starttime drift / unparseable) are cleaned in
+    /// passing — the same hygiene ChildRecords.SweepOnce does at daemon start,
+    /// available on demand here. `childrenDir` and `isDaemonAlive` are test
+    /// seams (the suite must never read the live children tree, and must be able
+    /// to force the owner dead).
+    public static IReadOnlyList<DoctorVerdict> SweepOrphans(
+        string? childrenDir = null, Func<int, bool>? isDaemonAlive = null)
+    {
+        var dir = childrenDir ?? ChildRecords.Dir;
+        var ownerAlive = isDaemonAlive ?? IsCaptainHookDaemon;
+        var verdicts = new List<DoctorVerdict>();
+        if (!Directory.Exists(dir)) return verdicts;
+
+        foreach (var f in Directory.EnumerateFiles(dir, "child-*.json").OrderBy(x => x, StringComparer.Ordinal))
+        {
+            ChildRecords.Record? rec = null;
+            try { rec = JsonSerializer.Deserialize<ChildRecords.Record>(File.ReadAllText(f)); }
+            catch { /* corrupt: cleaned below, never reported (no evidence value) */ }
+            if (rec is null)
+            {
+                TryDelete(f);
+                continue;
+            }
+
+            // Child gone, or pid reused (starttime drift): a stale record, not
+            // an orphan — sweep it, don't report it.
+            if (!Directory.Exists($"/proc/{rec.Pid}")
+                || (rec.StartTime != 0 && ChildRecords.ProcStartTime(rec.Pid) != rec.StartTime))
+            {
+                TryDelete(f);
+                continue;
+            }
+
+            // Alive + identity-proven. Owned by a LIVE captainHook daemon? Then
+            // healthy — that daemon will kill it at drain; not an orphan.
+            if (ownerAlive(rec.DaemonPid)) continue;
+
+            // Alive child, dead/foreign owning daemon ⇒ ORPHAN. Report only.
+            verdicts.Add(new DoctorVerdict(
+                $"child-{rec.Pid}", "orphan",
+                $"resident '{rec.Entry}' (event {rec.Event}, pid {rec.Pid}) outlived its daemon " +
+                $"(pid {rec.DaemonPid}, gone) — still running; kill the process group or run the payload's own cleanup"));
+        }
+
+        foreach (var v in verdicts)
+            Log.Warn("doctor", "doctor.orphan", new LogFields
+            {
+                Msg = v.Detail,
+                Data = new Dictionary<string, object> { ["child"] = v.Version, ["action"] = v.Action },
+            });
+        return verdicts;
+    }
+
+    /// Is `pid` a LIVE captainHook daemon (not a reused pid)? The child-owner
+    /// guard: alive AND its cmdline names captainHook with --daemon. A dead pid,
+    /// or one recycled onto an unrelated process, both mean the owning daemon is
+    /// gone — so its live child is an orphan.
+    private static bool IsCaptainHookDaemon(int pid)
+    {
+        if (!IsAlive(pid)) return false;
+        try
+        {
+            var argv = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0');
+            return argv.Any(a => a.Contains("captainHook", StringComparison.Ordinal)) && argv.Contains("--daemon");
+        }
+        catch { return false; }   // can't read cmdline: cannot prove a live owner
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { /* hygiene is best-effort, like the sweep */ }
     }
 
     /// Remove a version's socket + pidfile by BECOMING its daemon for an

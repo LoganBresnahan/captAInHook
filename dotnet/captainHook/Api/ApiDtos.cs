@@ -38,9 +38,29 @@ public sealed record HarnessDto(
 
 public sealed record HarnessRequestDto(string EventNameField, string SessionIdField, string CwdField);
 
-/// GET /handlers — every registered handler with its fail mode and live
-/// supervision state (generation, dead), across the C#/F# boundary.
-public sealed record HandlersDto(IReadOnlyList<HandlerDto> Handlers);
+/// GET /handlers — every registered handler with its fail mode, live
+/// supervision state (generation, dead), and resident CHILD state; plus the
+/// handlers.json file tri-state (`Source`: "absent" | "malformed" | "loaded")
+/// and its EXPECTED entries — config-declared vs live-registered (ADR-0010 d8).
+/// A warn-and-skip entry appears in `Expected` with `Registered:false`, NEVER
+/// as a live `Handlers` row (the N2 caution: a skipped fail-closed gate must
+/// never read as live).
+public sealed record HandlersDto(
+    IReadOnlyList<HandlerDto> Handlers,
+    string Source, string? Error, string? Path,
+    IReadOnlyList<ExpectedHandlerDto> Expected);
 
+/// A live registered handler. `ChildState` ("spawning"|"ready"|"failed") and
+/// `ChildPid` are set only for a resident exec handler — null for oneshot and
+/// coded handlers, which own no persistent child.
 public sealed record HandlerDto(
-    string Event, string Name, string FailMode, int Generation, bool Dead);
+    string Event, string Name, string FailMode, int Generation, bool Dead,
+    string? ChildState, int? ChildPid);
+
+/// A handlers.json entry as the file DECLARES it, joined to whether it actually
+/// registered. Valid entries: `Registered:true`, full fields. A skipped entry:
+/// `Registered:false` + `SkipReason` (its violations), and Mode/FailMode null
+/// (they may be exactly what failed to parse).
+public sealed record ExpectedHandlerDto(
+    string Name, IReadOnlyList<string> Events, string? Mode, string? FailMode,
+    bool Registered, string? SkipReason);

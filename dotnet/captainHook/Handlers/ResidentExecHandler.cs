@@ -67,7 +67,7 @@ public sealed class ResidentExecHandler(
     IReadOnlyList<string>? passEnv = null,
     string? cwd = null,
     TimeSpan? readinessTimeout = null,
-    string eventType = "") : IHandler, IEagerStart, IAsyncDisposable
+    string eventType = "") : IHandler, IEagerStart, IAsyncDisposable, IResidentObservable
 {
     public string Name => name;
     public FailMode OnFailure => onFailure;
@@ -100,6 +100,12 @@ public sealed class ResidentExecHandler(
     /// Phase-8 read model surface: live state + pid, plain data.
     public ChildState State { get { lock (_lock) return _state; } }
     public int? ChildPid { get { lock (_lock) return _pid == 0 ? null : _pid; } }
+
+    /// IResidentObservable (Core seam): the wire-shaped projection the
+    /// /handlers API reads via Dispatcher.Snapshot. Explicit so the string
+    /// member never clashes with the `ChildState` enum type name; `ChildPid`
+    /// is already the public property above.
+    string IResidentObservable.ChildState => State.ToString().ToLowerInvariant();
 
     // ---- eager start (IEagerStart — called by the Dispatcher AFTER admission)
 

@@ -21,10 +21,11 @@ public class ApiReadEndpointsTests
     private static readonly Effect Noop = new Effect.Noop();
 
     // A read model over real Core types. uptime is clock-startTick = 5000ms.
-    private static ApiReadModel Model(Dispatcher dispatcher, string? harnessDir, string? policyPath, ServeStats stats) =>
+    private static ApiReadModel Model(Dispatcher dispatcher, string? harnessDir, string? policyPath, ServeStats stats,
+                                      string? handlersPath = null) =>
         new("testver", stats, dispatcher,
             new ReloadingHarnessRegistry(harnessDir), new ReloadingPolicy(policyPath), policyPath,
-            clock: () => 6000, startTick: 1000);
+            clock: () => 6000, startTick: 1000, handlersPath: handlersPath);
 
     private static Dispatcher TwoHandlers() =>
         new(new Registry()
@@ -73,6 +74,64 @@ public class ApiReadEndpointsTests
 
         var gate = handlers.Single(x => x.GetProperty("name").GetString() == "gatekeeper");
         Assert.Equal("closed", gate.GetProperty("failMode").GetString());   // FailMode.Closed crossed the boundary
+
+        // Coded handlers own no resident child (ADR-0010 d8): child state is null.
+        Assert.Equal(JsonValueKind.Null, greeter.GetProperty("childState").ValueKind);
+        Assert.Equal(JsonValueKind.Null, greeter.GetProperty("childPid").ValueKind);
+        // No handlers file configured ⇒ absent, zero expected entries.
+        Assert.Equal("absent", h.GetProperty("source").GetString());
+        Assert.Empty(h.GetProperty("expected").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Handlers_ExpectedVsRegistered_JoinsFileEntriesToLiveWorkers()
+    {
+        // The expected-vs-registered view (ADR-0010 d8): a valid oneshot entry
+        // registers (Registered:true) and a malformed sibling is skipped
+        // (Registered:false + reason) — and the skipped entry is NEVER a live
+        // handler row (the N2 caution: a skipped fail-closed gate must not read
+        // as live).
+        var dir = Path.Combine("/tmp", "chk-hobs-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "handlers.json");
+        try
+        {
+            File.WriteAllText(path, JsonSerializer.Serialize(new
+            {
+                version = 1,
+                handlers = new object[]
+                {
+                    new { name = "good", command = "/bin/true", events = new[] { "UserPromptSubmit" }, mode = "oneshot" },
+                    new { name = "bad", events = new[] { "UserPromptSubmit" } },   // no command ⇒ skipped
+                },
+            }));
+            var dispatcher = new Dispatcher(HookRun.BuildDefaultRegistry(path), TimeSpan.FromSeconds(2));
+            try
+            {
+                using var api = ApiHost.Start(FreeTcpPort(),
+                    readModel: Model(dispatcher, NoHarnessDir(), null, new ServeStats(), handlersPath: path));
+                var h = await GetJson(api, "/api/v1/handlers");
+
+                Assert.Equal("loaded", h.GetProperty("source").GetString());
+                var expected = h.GetProperty("expected").EnumerateArray().ToList();
+
+                var good = expected.Single(x => x.GetProperty("name").GetString() == "good");
+                Assert.True(good.GetProperty("registered").GetBoolean());
+                Assert.Equal("oneshot", good.GetProperty("mode").GetString());
+                Assert.Equal(JsonValueKind.Null, good.GetProperty("skipReason").ValueKind);
+
+                var bad = expected.Single(x => x.GetProperty("name").GetString()!.Contains("bad"));
+                Assert.False(bad.GetProperty("registered").GetBoolean());
+                Assert.NotEqual(JsonValueKind.Null, bad.GetProperty("skipReason").ValueKind);
+
+                var live = h.GetProperty("handlers").EnumerateArray()
+                    .Select(x => x.GetProperty("name").GetString()).ToList();
+                Assert.Contains("good", live);
+                Assert.DoesNotContain("bad", live);   // skipped ⇒ never a live row
+            }
+            finally { await dispatcher.DisposeHandlersAsync(); }
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
 
     [Fact]

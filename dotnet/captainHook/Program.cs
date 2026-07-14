@@ -60,9 +60,15 @@ switch (inv.Mode)
     {
         // Human command, not hook mode: the report goes to stdout on purpose.
         var verdicts = await Doctor.RunAsync();
-        if (verdicts.Count == 0) Console.WriteLine("doctor: nothing to reap — rendezvous dir is clean");
+        // doctor-orphans (ADR-0010 phase 8): a second entity class — resident
+        // children that outlived their daemon. Report-only; never signals them.
+        var orphans = Doctor.SweepOrphans();
+        if (verdicts.Count == 0 && orphans.Count == 0)
+            Console.WriteLine("doctor: nothing to reap — rendezvous dir clean, no orphaned children");
         foreach (var v in verdicts)
             Console.WriteLine($"doctor: captaind-{v.Version}: {v.Action} — {v.Detail}");
+        foreach (var o in orphans)
+            Console.WriteLine($"doctor: {o.Version}: {o.Action} — {o.Detail}");
         return 0;
     }
 

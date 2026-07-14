@@ -375,6 +375,24 @@ public class HandlersHotReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task Snapshot_SurfacesResidentChildState_ReadyAndPid()
+    {
+        // handlers-observability (ADR-0010 d8): the /handlers read model reads
+        // resident child state via Dispatcher.Snapshot → IResidentObservable.
+        if (ProcessGroup.SetsidPath is null) return;
+        var dispatcher = new Dispatcher(BuildRegistry(ResidentEntry("echo", EchoServer, ["UserPromptSubmit"])),
+                                        TimeSpan.FromSeconds(5));
+        try
+        {
+            var pid = await FirstPongAsync(dispatcher);   // warm to Ready
+            var w = Assert.Single(dispatcher.Snapshot(), h => h.Name == "echo");
+            Assert.Equal("ready", w.ChildState);
+            Assert.Equal(pid, w.ChildPid);
+        }
+        finally { await dispatcher.DisposeHandlersAsync(); }
+    }
+
+    [Fact]
     public void ExecFingerprint_IsInjective_NoSeparatorCollisions()
     {
         // The length-prefixed framing must alias NOTHING a naive separator

@@ -36,6 +36,20 @@ public interface IEagerStart
     void Start(Task? predecessor);
 }
 
+/// A resident exec handler's READ-MODEL surface (ADR-0010 phase 8,
+/// handlers-observability): its live child state + pid as PLAIN DATA, so
+/// Dispatcher.Snapshot can project it into the /handlers API without the Core
+/// layer depending on Handlers types (the same one-way seam idea as
+/// IEagerStart). Only resident handlers implement it; a oneshot/coded handler
+/// has no persistent child, so Snapshot reports null.
+public interface IResidentObservable
+{
+    /// "spawning" | "ready" | "failed" — the pharos LspState shape, lowercased
+    /// for the wire.
+    string ChildState { get; }
+    int? ChildPid { get; }
+}
+
 public sealed class Registry
 {
     // Registration order is preserved end-to-end: Merge's inject-concatenation
@@ -114,7 +128,8 @@ public sealed record ReconcileSummary(int Added, int Removed, int Changed, int K
 /// the read API's view (ADR-0007 get-handlers). Generation is the supervised
 /// worker's restart count; Dead is true once it has escalated past its window.
 public sealed record HandlerStatus(
-    string EventType, string Name, FailMode OnFailure, int Generation, bool Dead);
+    string EventType, string Name, FailMode OnFailure, int Generation, bool Dead,
+    string? ChildState = null, int? ChildPid = null);
 
 public sealed class Dispatcher
 {
@@ -125,8 +140,8 @@ public sealed class Dispatcher
     /// dispatcher default, with its grace) ride along in C#, while the handler
     /// itself lives inside a supervised F# Worker actor and is only ever
     /// reached via ask.
-    private sealed record Runner(string Name, FailMode OnFailure, TimeSpan Budget, TimeSpan Grace, bool BudgetOverridden,
-                                 Worker<(HookEvent, HandlerContext), Effect> Worker);
+    private sealed record Runner(string Id, string Name, FailMode OnFailure, TimeSpan Budget, TimeSpan Grace,
+                                 bool BudgetOverridden, Worker<(HookEvent, HandlerContext), Effect> Worker);
 
     /// A reloadable exec worker's diff state (ADR-0010 phase 7): its event, its
     /// config Fingerprint (the reconcile compares this to decide keep-vs-
@@ -316,7 +331,7 @@ public sealed class Dispatcher
             return req => h.HandleAsync(req.Item1, req.Item2);
         });
         var effective = spec.Budget ?? _budget;
-        return new Runner(spec.Name, spec.OnFailure, effective,
+        return new Runner(id, spec.Name, spec.OnFailure, effective,
             _graceOverride ?? GraceFor(effective), spec.Budget is not null, worker);
     }
 
@@ -640,10 +655,30 @@ public sealed class Dispatcher
     /// dispatch path uses — no parallel registry to drift. Registration order is
     /// preserved within each event (the order Merge depends on); the rich F# DU
     /// stays inside the actor lib — only the int/bool accessors cross.
-    public IReadOnlyList<HandlerStatus> Snapshot() =>
-        _runners.SelectMany(kv => kv.Value.Select(r =>
-            new HandlerStatus(kv.Key, r.Name, r.OnFailure, r.Worker.Generation, r.Worker.IsDead)))
-            .ToList();
+    public IReadOnlyList<HandlerStatus> Snapshot()
+    {
+        var runners = _runners;
+        // Correlate each worker to its LIVE handler instance (the teardown seam,
+        // keyed by worker id) to read a resident's child state + pid — plain
+        // data via IResidentObservable, so the C#→F# arrow stays intact and the
+        // F# Worker never learns what a ChildState is. Snapshot _liveInstances
+        // under the lock (this runs off the hot path, for the /handlers API): a
+        // brief copy, never a mutation.
+        Dictionary<string, IHandler> instances;
+        lock (_teardownLock) instances = new Dictionary<string, IHandler>(_liveInstances);
+        return runners.SelectMany(kv => kv.Value.Select(r =>
+        {
+            string? childState = null;
+            int? childPid = null;
+            if (instances.TryGetValue(r.Id, out var inst) && inst is IResidentObservable ro)
+            {
+                childState = ro.ChildState;
+                childPid = ro.ChildPid;
+            }
+            return new HandlerStatus(kv.Key, r.Name, r.OnFailure,
+                r.Worker.Generation, r.Worker.IsDead, childState, childPid);
+        })).ToList();
+    }
 
     /// Single-shot mode: no more dispatches will come — complete the side
     /// queue and wait for the consumer to finish everything already enqueued.

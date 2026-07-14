@@ -215,6 +215,18 @@
               },
               "dead": {
                 "type": "boolean"
+              },
+              "childState": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "childPid": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -222,13 +234,80 @@
               "name",
               "failMode",
               "generation",
-              "dead"
+              "dead",
+              "childState",
+              "childPid"
+            ]
+          }
+        },
+        "source": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "failMode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "registered": {
+                "type": "boolean"
+              },
+              "skipReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "events",
+              "mode",
+              "failMode",
+              "registered",
+              "skipReason"
             ]
           }
         }
       },
       "required": [
-        "handlers"
+        "handlers",
+        "source",
+        "error",
+        "path",
+        "expected"
       ]
     },
     "ApiDiscovery": {

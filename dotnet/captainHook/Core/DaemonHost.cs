@@ -141,7 +141,7 @@ public static class DaemonHost
         // The read model projects the SAME resolvers/registry/dispatcher the
         // dispatch path runs, so the API's read view cannot drift (ADR-0007 d3).
         var readModel = new ApiReadModel(
-            paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick);
+            paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick, handlersPath);
 
         // The write surface (ADR-0007 d4) edits the SAME policyPath the read model
         // reports and `policy` (ReloadingPolicy) stat-gates — so a PUT lands on the

@@ -638,7 +638,7 @@ run live*. The framework underneath is what exists today.
   reasons (SSH-side admin, terminal-native users) — not as the agent's
   feedback instrument: the feedback pyramid is API assertions (bulk) →
   Playwright over the web UI (visual) → TUI capture only to test the TUI.
-- [ ] **9. Exec handlers — user processes as payloads** *(2026-07-12 reframe;
+- [x] **9. Exec handlers — user processes as payloads** *(2026-07-12 reframe;
   was "Real handlers" — retriever/memory as framework code)*. The payload
   surface is the user's own process in any language: one coded `ExecHandler`
   adapts a configured command into the existing dispatch — normalized event
@@ -958,6 +958,38 @@ run live*. The framework underneath is what exists today.
   complete — edit handlers.json, the next hook obeys, and unchanged warm
   children never flinch.** Remaining for item 9: phase 8 (doctor-orphans,
   handlers-observability).)
+  `doctor-orphans` + `handlers-observability` (2026-07-13, phase 8 — the
+  read-side closers, both report/projection-only, no adversarial verify per
+  the plan. DOCTOR-ORPHANS: `Doctor.SweepOrphans` applies the daemon reap's
+  SAME double-guard to a second entity class, `~/.captainHook/children/` —
+  child pid ALIVE + `/proc` starttime MATCHES + owning daemon gone (dead pid,
+  or a live pid that is not a captainHook `--daemon`) ⇒ ORPHAN, reported via
+  `doctor.orphan` and the `doctor` verb's stdout. REPORT-ONLY: doctor never
+  signals the child (a misclassification is a wrong trail line, not a killed
+  process — why the slice needs no verify); stale records (dead pid /
+  starttime drift / corrupt) are swept in passing. The pid-reuse guard makes
+  the orphan verdict safe — a recycled child pid has a different starttime, a
+  recycled daemon pid fails the cmdline check. OBSERVABILITY: child state
+  reaches the API through a new one-way Core seam `IResidentObservable` (child
+  state lowercased + pid, plain data) that `ResidentExecHandler` implements
+  and `Dispatcher.Snapshot` correlates from `_liveInstances` — the F# Worker
+  never learns what a `ChildState` is, the arrow holds; `HandlerDto` gains
+  `childState`/`childPid` (null for oneshot/coded). Expected-vs-registered:
+  `HandlersDto` gains the handlers.json tri-state (`source`
+  absent|malformed|loaded + `error`) and an `expected[]` — every declared
+  entry JOINED by name to the live Snapshot, a valid entry `registered:true`,
+  a warn-and-skip entry `registered:false` + violations and NEVER a live row
+  (the N2 caution, structural). The GUI `SupervisionPanel` grows a child
+  column + a handlers.json section (tri-state mirroring `PolicyPanel`);
+  DTO→schema→TS regen + committed `ui/` rebuild rode the `dto-schema-codegen`
+  chain, e2e-asserted. Tests: `DoctorOrphansTests` (7 — alive-orphan reported
+  + record kept as evidence, healthy-owned ignored, non-daemon-owner via the
+  default guard, dead/pid-reuse/corrupt swept), `ApiReadEndpointsTests`
+  (child-state null on coded, expected-vs-registered join, skipped-not-live),
+  a resident child-state `Snapshot` test, the `SupervisionPanel` Playwright
+  e2e. Suite 607 green twice. **Phase 8 complete — item 9 DONE: the exec-
+  handler seam is built, proven, orphan-safe, live-reconfigurable, and
+  observable end to end.**)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

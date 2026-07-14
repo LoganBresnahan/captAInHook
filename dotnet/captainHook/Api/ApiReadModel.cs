@@ -21,13 +21,14 @@ public sealed class ApiReadModel
     private readonly ReloadingHarnessRegistry _harnesses;
     private readonly ReloadingPolicy _policy;
     private readonly string? _policyPath;
+    private readonly string? _handlersPath;
     private readonly Func<long> _clock;
     private readonly long _startTick;
 
     public ApiReadModel(
         string version, ServeStats stats, Dispatcher dispatcher,
         ReloadingHarnessRegistry harnesses, ReloadingPolicy policy, string? policyPath,
-        Func<long> clock, long startTick)
+        Func<long> clock, long startTick, string? handlersPath = null)
     {
         _version = version;
         _stats = stats;
@@ -35,6 +36,7 @@ public sealed class ApiReadModel
         _harnesses = harnesses;
         _policy = policy;
         _policyPath = policyPath;
+        _handlersPath = handlersPath;
         _clock = clock;
         _startTick = startTick;
     }
@@ -50,15 +52,50 @@ public sealed class ApiReadModel
         BackgroundPending: _dispatcher.BackgroundPending,
         OpenStreams: openStreams);
 
-    public HandlersDto Handlers() => new(
-        _dispatcher.Snapshot()
+    public HandlersDto Handlers()
+    {
+        // Live registrations (coded + exec), each with its resident child state
+        // (null for oneshot/coded) — the SAME workers the dispatch path runs.
+        var registered = _dispatcher.Snapshot()
             .Select(h => new HandlerDto(
                 Event: h.EventType,
                 Name: h.Name,
                 FailMode: h.OnFailure == CaptainHook.Core.FailMode.Closed ? "closed" : "open",
                 Generation: h.Generation,
-                Dead: h.Dead))
-            .ToList());
+                Dead: h.Dead,
+                ChildState: h.ChildState,
+                ChildPid: h.ChildPid))
+            .ToList();
+
+        // Expected-vs-registered (ADR-0010 d8): resolve the SAME handlers.json
+        // the daemon registers from (null path in tests => absent), then JOIN
+        // each declared entry against the live set by name. A valid entry that
+        // (for any reason) has no live worker reads Registered:false — honest,
+        // never assumed true; a warn-and-skip entry reads Registered:false with
+        // its violations and NEVER appears as a live row (the N2 caution).
+        var liveNames = new HashSet<string>(registered.Select(h => h.Name), StringComparer.Ordinal);
+        var resolution = _handlersPath is null
+            ? new ExecHandlersResolution.Absent()
+            : ExecHandlersFile.Resolve(_handlersPath);
+        var (source, error, expected) = resolution switch
+        {
+            ExecHandlersResolution.Loaded(var entries, var skipped) => (
+                "loaded", (string?)null,
+                entries.Select(e => new ExpectedHandlerDto(
+                        e.Name, e.Events,
+                        e.Mode.ToString().ToLowerInvariant(),
+                        e.OnFailure == CaptainHook.Core.FailMode.Closed ? "closed" : "open",
+                        Registered: liveNames.Contains(e.Name), SkipReason: null))
+                    .Concat(skipped.Select(s => new ExpectedHandlerDto(
+                        s.Label, [], null, null, Registered: false, SkipReason: string.Join("; ", s.Violations))))
+                    .ToList()),
+            ExecHandlersResolution.Malformed(var m) =>
+                ("malformed", (string?)m, new List<ExpectedHandlerDto>()),
+            _ => ("absent", (string?)null, new List<ExpectedHandlerDto>()),
+        };
+
+        return new HandlersDto(registered, source, error, _handlersPath, expected);
+    }
 
     public HarnessesDto Harnesses()
     {

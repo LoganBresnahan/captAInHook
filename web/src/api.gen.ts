@@ -53,6 +53,19 @@ export interface HandlersDto {
     failMode: string;
     generation: number;
     dead: boolean;
+    childState: string | null;
+    childPid: number | null;
+  }[];
+  source: string;
+  error: string | null;
+  path: string | null;
+  expected: {
+    name: string;
+    events: string[];
+    mode: string | null;
+    failMode: string | null;
+    registered: boolean;
+    skipReason: string | null;
   }[];
 }
 

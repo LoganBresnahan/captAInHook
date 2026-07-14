@@ -22,6 +22,9 @@ test.describe("read panels", () => {
     expect(await rows.count()).toBeGreaterThan(0);
     // A fresh daemon has no escalated handlers.
     await expect(page.locator('[data-island="supervision"] [data-dead="true"]')).toHaveCount(0);
+    // The expected-vs-registered section renders its handlers.json tri-state
+    // (ADR-0010 d8); no file is provisioned in this fixture ⇒ absent.
+    await expect(page.locator('[data-island="supervision"] [data-file-state="absent"]')).toBeVisible();
   });
 
   test("harnesses lists the built-in claude-code with capability chips", async ({ page }) => {
