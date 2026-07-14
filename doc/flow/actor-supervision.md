@@ -14,7 +14,7 @@ window, escalation when restarting stops making sense.
         │ start():
         │   child = factory()                fresh state + new mailbox
         │   child.Error.Add ─────────────┐   the crash-notification wire
-        │   handle.Swap(child)           │
+        │   handle.Swap(child, epoch)    │   epoch = supervisor-global token
         ▼                                │
    ActorRef (stable handle)              │
         │                                │
@@ -29,11 +29,11 @@ window, escalation when restarting stops making sense.
             body throws → agent dies silently
                                          │ .Error fires
                                          ▼
-        agent.Post(ChildExit(id, gen, err))     agent.Post(ChildWedged(id, gen, corr))
+        agent.Post(ChildExit(id, epoch, err))   agent.Post(ChildWedged(id, epoch, corr))
                                          │  faults are MESSAGES in the   │ from the ask layer:
                                          ▼  supervisor's own mailbox     ▼ received, never answered
  ┌─ Supervisor loop (handles one fault at a time) ────────────────────────┐
- │ stale generation or dead child? ──► actor.staleExit (debug), ignore    │
+ │ stale epoch or dead child? ──► actor.staleExit (debug), ignore         │
  │ err is OperationCanceledException (budget token honored)?              │
  │   ──► restart, NOT COUNTED (actor.restart kind=cancelled counted=false)│
  │       — timeout is not fault (ADR-0004 d5)                             │
@@ -109,10 +109,18 @@ it dequeues the message; wedges reach the supervisor through its narrow
 reporting channel (`ReportWedge`), because the supervisor owns *all* counting.
 Wedges count precisely because each abandonment leaks a stuck task — .NET
 cannot kill user code mid-flight — so a chronic wedger must escalate rather
-than leak forever. Every fault signal carries the **generation** of the
-instance it belongs to (bumped on each `Swap`): a leaked, abandoned instance
-dying minutes later is recognized as stale (`actor.staleExit`) instead of
-restarting its healthy replacement.
+than leak forever. Every fault signal carries the **epoch** of the instance
+it belongs to — a supervisor-global monotonic token stamped on each `Swap`
+(`ActorRef.Epoch`, distinct from `Generation`, the per-handle restart *count*
+the read model shows): a leaked, abandoned instance dying minutes later is
+recognized as stale (`actor.staleExit`) instead of restarting its healthy
+replacement. It is the epoch, not the generation, because a hot-reload CHANGE
+retires a worker via `Remove` + re-`Spawn` at the SAME id (ADR-0010 phase 7),
+minting a fresh handle whose *generation* resets to 1 and would **alias** the
+retired handle's generation 1 — charging the retired child's death to the
+replacement (a spurious restart, escalating to permanent-DEAD under
+repetition; the phase-7 adversarial-verify HIGH). A monotonic epoch never
+aliases across a reused id.
 
 One observable race, seen live and deliberate: a dispatch fired in the moment
 between a wedge report and the respawn posts into the doomed mailbox and
@@ -192,7 +200,7 @@ disposed on the spot.
 
 | what | where |
 |---|---|
-| `ActorRef` (Post/Ask/Swap/Generation/IsDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`, `SubscribeEscalated`) | `dotnet/captainHookActors/Supervision.fs` |
+| `ActorRef` (Post/Ask/Swap/Generation/IsDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`, `SubscribeEscalated`, `Remove` — runtime child retirement for the ADR-0010 hot-reload reconcile) | `dotnet/captainHookActors/Supervision.fs` |
 | the teardown seam: `TrackSwap`, the escalation subscription, `DisposeHandlersAsync`, events `handler.teardown` / `handler.teardownError` | `dotnet/captainHook/Core/Dispatcher.cs` |
 | kill mechanics: setsid spawn prefix, `TermThenKillAsync` (TERM→grace→KILL, group-wide) | `dotnet/captainHook/Handlers/ProcessGroup.cs`, `ExecHandler.cs` |
 | `WorkMsg` DU (with receipt flag), `AskStatus`, `AskOutcome`, `Worker<'Req,'Reply>` (Supervised/AskAsync/AskClassifiedAsync, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |

@@ -90,6 +90,18 @@ public static class DaemonHost
                                                      drainBudget),
             budget: TimeSpan.FromSeconds(2));
 
+        // Hot reload (ADR-0010 phase 7): ONLY when we built the registry from a
+        // handlers.json path — a test-injected registry opts out (reconciling
+        // from the file would clobber it). The harness hint is captured ONCE
+        // here, exactly like the initial build above; re-reading it per
+        // handlers-reload would entangle two reload domains for a purely
+        // informational budget-vs-timeout warn. Null ⇒ the serve loop's
+        // MaybeReload is a no-op and handlers.json is read exactly once.
+        var reloadable = registry is null && handlersPath is not null
+            ? new ReloadingHandlers(handlersPath, dispatcher,
+                                    harnesses.Current.Get("claude-code").HookTimeoutHint, drainBudget)
+            : null;
+
         // Listening ⟺ ready: the first connect a shim ever makes against this
         // daemon already finds warm workers.
         using var listener = rv.BindWhenWarm();
@@ -248,7 +260,7 @@ public static class DaemonHost
             Volatile.Write(ref lastActive[0], clk());
             _ = Task.Run(async () =>
             {
-                try { await ServeConnectionAsync(conn, harnesses, dispatcher, policy); }
+                try { await ServeConnectionAsync(conn, harnesses, dispatcher, policy, reloadable); }
                 finally
                 {
                     Volatile.Write(ref lastActive[0], clk());
@@ -411,7 +423,8 @@ public static class DaemonHost
     /// close. Failures are the CONNECTION's problem, never the daemon's — log
     /// and carry on serving.
     private static async Task ServeConnectionAsync(
-        Socket conn, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy)
+        Socket conn, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy,
+        ReloadingHandlers? reloadable)
     {
         using var _ = conn;
         await using var stream = new NetworkStream(conn, ownsSocket: false);
@@ -435,7 +448,7 @@ public static class DaemonHost
                 return;
             }
 
-            var res = await DispatchOneAsync(req, harnesses, dispatcher, policy);
+            var res = await DispatchOneAsync(req, harnesses, dispatcher, policy, reloadable);
             await Frame.WriteAsync(stream, res.Encode());
         }
         catch (Exception ex)
@@ -447,11 +460,19 @@ public static class DaemonHost
     }
 
     /// The daemon-side dispatch pipeline — the collapsed pipeline with
-    /// construction hoisted: resolve spec (reloading registry), parse, dispatch
-    /// on the SHARED dispatcher under the shim's dispatchId, gate, serialize.
+    /// construction hoisted: reconcile handlers.json if it moved, resolve spec
+    /// (reloading registry), parse, dispatch on the SHARED dispatcher under the
+    /// shim's dispatchId, gate, serialize.
     private static async Task<HookResponse> DispatchOneAsync(
-        HookRequest req, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy)
+        HookRequest req, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy,
+        ReloadingHandlers? reloadable)
     {
+        // Hot reload FIRST (ADR-0010 phase 7): an edit to handlers.json is
+        // effective on THIS hook — the reconcile adds/removes/replaces exec
+        // workers on the shared dispatcher before the fan-out below reads them.
+        // A stat-gated no-op when nothing moved; null in test-registry mode.
+        reloadable?.MaybeReload();
+
         HarnessSpec spec;
         try
         {

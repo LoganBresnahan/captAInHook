@@ -10,7 +10,16 @@ namespace CaptainHook.Core;
 /// default. This is the OTP child-spec idea ported to the registry: "restart"
 /// means "run the factory again", so a restarted worker gets a genuinely
 /// fresh handler.
-internal sealed record HandlerSpec(string Name, FailMode OnFailure, Func<IHandler> Factory, TimeSpan? Budget = null);
+///
+/// `ReloadFingerprint` (ADR-0010 phase 7) marks a spec as RELOADABLE and
+/// carries its config identity: null ⇒ a coded/static handler frozen at
+/// construction (never touched by a handlers.json reload); non-null ⇒ an exec
+/// handler whose worker the reconcile diffs. Two reloads whose entry produced
+/// the same fingerprint are "unchanged" — the warm resident child is left
+/// running (no churn); a differing fingerprint replaces it. The event+name is
+/// the worker's IDENTITY (its id); the fingerprint is its config VERSION.
+internal sealed record HandlerSpec(string Name, FailMode OnFailure, Func<IHandler> Factory,
+                                   TimeSpan? Budget = null, string? ReloadFingerprint = null);
 
 /// Eager side-work a handler starts the moment it is ADMITTED to the teardown
 /// seam — never in its constructor (ADR-0010 resident slice). Two orphan
@@ -59,12 +68,15 @@ public sealed class Registry
 
     /// Spec registration: the factory runs once at Dispatcher construction and
     /// once per supervised restart, so a restart yields a genuinely fresh
-    /// handler (fresh state, not just a fresh mailbox).
+    /// handler (fresh state, not just a fresh mailbox). `reloadFingerprint`
+    /// (ADR-0010 phase 7) marks the spec reloadable and encodes its config
+    /// identity — the exec-registration path passes it; coded handlers leave
+    /// it null and are never reconciled.
     public Registry On(string eventType, string name, Func<IHandler> factory, FailMode onFailure = FailMode.Open,
-                       TimeSpan? budget = null)
+                       TimeSpan? budget = null, string? reloadFingerprint = null)
     {
         _specs.Add((eventType, new HandlerSpec(name, onFailure, factory,
-            budget is { } b ? CheckBudget(b, $"{eventType}/{name}") : null)));
+            budget is { } b ? CheckBudget(b, $"{eventType}/{name}") : null, reloadFingerprint)));
         return this;
     }
 
@@ -92,6 +104,12 @@ public sealed class Registry
 
 public sealed record DispatchResult(Effect Merged, Trace Trace);
 
+/// What a hot-reload reconcile did (ADR-0010 phase 7): counts of exec workers
+/// added, removed, changed (config differed ⇒ child replaced) and kept
+/// (unchanged ⇒ warm child untouched). Carried on the `handlers.reload` trail
+/// line so an edit's effect is visible without diffing the file.
+public sealed record ReconcileSummary(int Added, int Removed, int Changed, int Kept);
+
 /// One handler's registration plus its live supervision state, as plain data —
 /// the read API's view (ADR-0007 get-handlers). Generation is the supervised
 /// worker's restart count; Dead is true once it has escalated past its window.
@@ -110,14 +128,46 @@ public sealed class Dispatcher
     private sealed record Runner(string Name, FailMode OnFailure, TimeSpan Budget, TimeSpan Grace, bool BudgetOverridden,
                                  Worker<(HookEvent, HandlerContext), Effect> Worker);
 
+    /// A reloadable exec worker's diff state (ADR-0010 phase 7): its event, its
+    /// config Fingerprint (the reconcile compares this to decide keep-vs-
+    /// replace), and the live Runner. Keyed in _execWorkers by worker id.
+    private sealed record ExecWorker(string EventType, string Fingerprint, Runner Runner);
+
     private readonly TimeSpan _budget;
+    // Held for the hot-reload reconcile: the same supervisor spawns/removes
+    // exec workers at runtime, and an explicit ctor grace (the classification-
+    // test seam) pins EVERY handler's grace while null lets each scale to its
+    // own budget (GraceFor).
+    private readonly Supervisor _sup;
+    private readonly TimeSpan? _graceOverride;
+
+    // THE DISPATCH FAN-OUT SNAPSHOT (event -> runners). A volatile, treated-as-
+    // immutable snapshot swapped WHOLE on a hot reload (ADR-0010 phase 7): the
+    // hot dispatch path reads it lock-free — a ReloadingPolicy-style benign
+    // race, a dispatch mid-reconcile sees either the old or the new snapshot,
+    // both valid — while Reconcile rebuilds a fresh dictionary under
+    // _reconcileLock and publishes it with one atomic reference write.
     // Case-INSENSITIVE event lookup: a casing difference must never split the
     // event space — "userPromptSubmit" in a handlers.json entry registers a
     // worker that MUST fire when the canonical "UserPromptSubmit" dispatches
     // (the ADR-0006 silent-grant lesson's registration-side twin, caught live
     // by this slice's adversarial verify). DispatchPolicy matches events
     // case-insensitively for exactly the same reason.
-    private readonly Dictionary<string, List<Runner>> _runners = new(StringComparer.OrdinalIgnoreCase);
+    private volatile Dictionary<string, List<Runner>> _runners;
+
+    // The hot-reload split (ADR-0010 phase 7). Coded (non-reloadable) runners
+    // are frozen at construction, per event in registration order — the part
+    // of _runners a handlers.json reload NEVER touches; Reconcile recomposes
+    // _runners = these ++ the fresh exec runners. (Coded handlers are
+    // reconstructed-and-discarded by every reload's BuildDefaultRegistry — its
+    // fresh coded specs are ignored here — so they must stay cheap and
+    // non-disposable; user logic is exec, not coded, ADR-0010 d1.) The exec
+    // workers are keyed by worker id and carry the diff state: id = (event,
+    // name) identity, Fingerprint = config version. Mutated only under
+    // _reconcileLock (and once, single-threaded, at construction).
+    private readonly Dictionary<string, List<Runner>> _codedRunners;
+    private readonly Dictionary<string, ExecWorker> _execWorkers = new(StringComparer.Ordinal);
+    private readonly object _reconcileLock = new();
 
     // THE TEARDOWN SEAM (ADR-0010 d6, kill-discipline slice). IHandler has no
     // teardown member and the F# lib must never see IHandler — so disposal
@@ -172,64 +222,108 @@ public sealed class Dispatcher
         // honoring handler's cancellation reply into a counted wedge). An
         // explicit ctor grace (the classification-test seam) still wins for
         // every handler.
-        var graceOverride = grace;
+        _graceOverride = grace;
         _sideConsumer = Task.Run(ConsumeSideAsync);
-        var sup = supervisor ?? new Supervisor("dispatcher", maxRestarts: 3, TimeSpan.FromSeconds(5));
+        _sup = supervisor ?? new Supervisor("dispatcher", maxRestarts: 3, TimeSpan.FromSeconds(5));
 
-        // ONE worker per (eventType, spec) registration. The worker is generic
-        // — the F# side never sees HookEvent/Effect (dependency arrow: C# host
-        // -> F# lib); the (event, ctx) tuple flows through it opaquely and only
-        // the delegate below ever looks inside.
-        var idCounts = new Dictionary<string, int>();
-        var usedIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (eventType, spec) in registry.Specs)
+        // ONE worker per (eventType, spec) registration, from the registry
+        // snapshot. The worker is generic — the F# side never sees
+        // HookEvent/Effect (dependency arrow: C# host -> F# lib); the (event,
+        // ctx) tuple flows through it opaquely and only the delegate inside
+        // SpawnWorker ever looks inside. Coded handlers land in _codedRunners
+        // (frozen); exec handlers (ReloadFingerprint set) additionally register
+        // in _execWorkers so a later reload can diff them. _runners is the
+        // composed fan-out snapshot both paths dispatch through.
+        var composed = new Dictionary<string, List<Runner>>(StringComparer.OrdinalIgnoreCase);
+        var coded = new Dictionary<string, List<Runner>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, eventType, spec) in AssignIds(registry.Specs))
         {
-            var baseId = $"{eventType}/{spec.Name}";
-            var n = idCounts.TryGetValue(baseId, out var c) ? c + 1 : 1;
-            var id = n == 1 ? baseId : $"{baseId}#{n}";   // disambiguate name collisions
-            // Re-probe until genuinely unused: a handler literally NAMED
-            // "h#2" beside two "h" registrations would otherwise collide —
-            // and a duplicate worker id corrupts both supervision (one
-            // child's faults restart the other) and the teardown seam (the
-            // second TrackSwap disposes the first's live instance).
-            while (!usedIds.Add(id)) id = $"{baseId}#{++n}";
-            idCounts[baseId] = n;
-
-            var worker = Worker<(HookEvent, HandlerContext), Effect>.Supervised(sup, id, () =>
-            {
-                // Child spec in action: a restart re-runs THIS, so factory-
-                // registered handlers come back with fresh state — and the
-                // REPLACED instance is disposed (teardown seam): its child
-                // must not outlive its generation. Eager side-work starts
-                // only AFTER admission: a torn-down dispatcher never lets a
-                // straggling restart spawn (the design-panel orphan find),
-                // and a successor's spawn sequences behind its evicted
-                // predecessor's kill (exclusive resources release first).
-                var h = spec.Factory();
-                var (admitted, predecessor) = TrackSwap(id, h);
-                if (admitted && h is IEagerStart eager) eager.Start(predecessor);
-                return req => h.HandleAsync(req.Item1, req.Item2);
-            });
-
-            var effective = spec.Budget ?? _budget;
-            if (!_runners.TryGetValue(eventType, out var list))
-                _runners[eventType] = list = new List<Runner>();
-            list.Add(new Runner(spec.Name, spec.OnFailure, effective,
-                graceOverride ?? GraceFor(effective), spec.Budget is not null, worker));
+            var runner = SpawnWorker(id, spec);
+            AddRunner(composed, eventType, runner);
+            if (spec.ReloadFingerprint is null)
+                AddRunner(coded, eventType, runner);
+            else
+                _execWorkers[id] = new ExecWorker(eventType, spec.ReloadFingerprint, runner);
         }
+        _codedRunners = coded;
+        _runners = composed;
 
         // Escalation half of the teardown seam. SubscribeEscalated, never
         // OnEscalated: that slot belongs to the host (last-writer-wins), and
         // silently clobbering it — or being clobbered — is exactly the bug
         // class this seam exists to close.
-        sup.SubscribeEscalated((id, _) =>
+        _sup.SubscribeEscalated((id, _) =>
         {
-            IHandler? last = null;
+            // Register the disposal UNDER the same lock that removes the
+            // instance (FireDisposeLocked) — never across two lock sections, or
+            // the drain's snapshot could catch the instance gone from
+            // _liveInstances but not yet in _pendingDisposals and await neither
+            // (the drain-await gap two phase-7 skeptics confirmed).
             lock (_teardownLock)
                 if (_liveInstances.Remove(id, out var h) && !SharedElsewhereNoLock(id, h))
-                    last = h;
-            if (last is not null) FireDispose(last, id, "escalated");
+                    FireDisposeLocked(h, id, "escalated");
         });
+    }
+
+    /// Assign each spec its stable worker id, mirroring registration order and
+    /// the name-collision disambiguation. DETERMINISTIC: the same specs in the
+    /// same order yield the same ids, so across a hot reload an unchanged exec
+    /// entry keeps its id — and therefore its warm child. Coded handlers come
+    /// first (BuildDefaultRegistry order) and never change, so they contribute
+    /// a constant id-space seed; exec names are file-unique (the parser rejects
+    /// duplicates), so an exec worker's id is a pure function of its (event,
+    /// name) plus that constant seed. The ctor and Reconcile both run this over
+    /// their registry, so the ids line up and the diff is meaningful.
+    private static IEnumerable<(string Id, string EventType, HandlerSpec Spec)> AssignIds(
+        IReadOnlyList<(string EventType, HandlerSpec Spec)> specs)
+    {
+        var idCounts = new Dictionary<string, int>();
+        var usedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (eventType, spec) in specs)
+        {
+            var baseId = $"{eventType}/{spec.Name}";
+            var n = idCounts.TryGetValue(baseId, out var c) ? c + 1 : 1;
+            var id = n == 1 ? baseId : $"{baseId}#{n}";   // disambiguate name collisions
+            // Re-probe until genuinely unused: a handler literally NAMED "h#2"
+            // beside two "h" registrations would otherwise collide — and a
+            // duplicate worker id corrupts both supervision (one child's faults
+            // restart the other) and the teardown seam (the second TrackSwap
+            // disposes the first's live instance).
+            while (!usedIds.Add(id)) id = $"{baseId}#{++n}";
+            idCounts[baseId] = n;
+            yield return (id, eventType, spec);
+        }
+    }
+
+    /// Spawn one supervised worker for a spec — the per-registration body
+    /// shared by construction and the hot-reload reconcile. The factory is the
+    /// OTP child-spec: a restart re-runs it (fresh state, fresh child), the
+    /// REPLACED instance is disposed (teardown seam: its child must not outlive
+    /// its generation), eager side-work starts only AFTER admission (a
+    /// torn-down dispatcher never lets a straggling restart spawn — the
+    /// design-panel orphan find), and a successor's spawn sequences behind its
+    /// evicted predecessor's kill (exclusive resources release first). A
+    /// hot-reload CHANGE rides this SAME TrackSwap path — Supervisor.Remove
+    /// frees the id, then a fresh SpawnWorker at that id evicts the old
+    /// instance and threads its TERM→grace→KILL as the new child's predecessor.
+    private Runner SpawnWorker(string id, HandlerSpec spec)
+    {
+        var worker = Worker<(HookEvent, HandlerContext), Effect>.Supervised(_sup, id, () =>
+        {
+            var h = spec.Factory();
+            var (admitted, predecessor) = TrackSwap(id, h);
+            if (admitted && h is IEagerStart eager) eager.Start(predecessor);
+            return req => h.HandleAsync(req.Item1, req.Item2);
+        });
+        var effective = spec.Budget ?? _budget;
+        return new Runner(spec.Name, spec.OnFailure, effective,
+            _graceOverride ?? GraceFor(effective), spec.Budget is not null, worker);
+    }
+
+    private static void AddRunner(Dictionary<string, List<Runner>> d, string eventType, Runner r)
+    {
+        if (!d.TryGetValue(eventType, out var list)) d[eventType] = list = new List<Runner>();
+        list.Add(r);
     }
 
     /// Internal (not private) for the registration-time budget-vs-drain warn
@@ -251,44 +345,46 @@ public sealed class Dispatcher
     /// predecessor's kill.
     private (bool Admitted, Task? Predecessor) TrackSwap(string id, IHandler next)
     {
-        IHandler? evicted = null;
-        var late = false;
+        // The eviction and its disposal-registration stay in ONE lock section
+        // (FireDisposeLocked): the drain's single-lock snapshot must never see
+        // the evicted instance gone from _liveInstances yet absent from
+        // _pendingDisposals, or it would await neither and drop its kill.
         lock (_teardownLock)
         {
             if (_tornDown)
             {
-                late = true;
+                FireDisposeLocked(next, id, "post-drain restart");
+                return (false, null);
             }
-            else
-            {
-                _liveInstances.TryGetValue(id, out var old);
-                _liveInstances[id] = next;
-                if (old is not null && !ReferenceEquals(old, next) && !SharedElsewhereNoLock(id, old))
-                    evicted = old;
-            }
+            _liveInstances.TryGetValue(id, out var old);
+            _liveInstances[id] = next;
+            Task? predecessor = null;
+            if (old is not null && !ReferenceEquals(old, next) && !SharedElsewhereNoLock(id, old))
+                predecessor = FireDisposeLocked(old, id, "restart");
+            return (true, predecessor);
         }
-        if (late)
-        {
-            FireDispose(next, id, "post-drain restart");
-            return (false, null);
-        }
-        return (true, evicted is not null ? FireDispose(evicted, id, "restart") : null);
     }
 
     private bool SharedElsewhereNoLock(string exceptId, IHandler inst) =>
         _liveInstances.Any(kv => kv.Key != exceptId && ReferenceEquals(kv.Value, inst));
 
-    /// Fire-and-forget disposal: the restart and escalation paths run on the
-    /// supervisor's fault mailbox, which processes one fault at a time and
-    /// must never wait out a kill-grace window. The in-flight task is
-    /// REGISTERED so the drain can await it — fire-and-forget, not
-    /// fire-and-lost — and RETURNED so a successor's eager start can
-    /// sequence behind it.
-    private Task FireDispose(IHandler h, string id, string reason)
+    /// Fire-and-forget disposal, registered so the drain can await it —
+    /// fire-and-forget, not fire-and-lost — and RETURNED so a successor's eager
+    /// start can sequence behind it. MUST be called while holding _teardownLock:
+    /// the pending-registration is thereby ATOMIC with the caller's
+    /// _liveInstances removal, closing the drain-await gap (two phase-7 skeptics)
+    /// where a snapshot between "removed" and "registered" would await neither
+    /// and drop the kill. Only the kill's fast SYNCHRONOUS prefix runs under the
+    /// lock — DisposeInstanceAsync returns at its first await (a resident's
+    /// DisposeAsync cancels its lifetime then awaits the group kill), and that
+    /// prefix touches the handler's OWN lock, never _teardownLock, so no
+    /// reentrancy. The restart/escalation callers still don't BLOCK on the grace
+    /// window: they get the Task back and move on.
+    private Task FireDisposeLocked(IHandler h, string id, string reason)
     {
         var t = DisposeInstanceAsync(h, id, reason);
         if (t.IsCompleted) return t;
-        lock (_teardownLock) _pendingDisposals.Add(t);
+        _pendingDisposals.Add(t);
         t.ContinueWith(done =>
         {
             lock (_teardownLock) _pendingDisposals.Remove(done);
@@ -349,10 +445,118 @@ public sealed class Dispatcher
     /// of silently STARTING work the exiting daemon will abandon mid-run.
     public void CloseBackgroundIntake() => _side.Writer.TryComplete();
 
+    /// THE HOT-RELOAD RECONCILE (ADR-0010 phase 7). Diff the reloadable (exec)
+    /// workers against a freshly-built registry and converge to it WITHOUT
+    /// churning unchanged warm children:
+    ///   * unchanged (same id, same fingerprint) ⇒ KEEP — the resident child
+    ///     keeps running, untouched (the whole point of "warm");
+    ///   * removed (id gone from fresh) ⇒ Supervisor.Remove + evict-and-kill
+    ///     the instance (drain-then-die, TERM→grace→KILL — NOT a GC drop);
+    ///   * changed (same id, new fingerprint) ⇒ Supervisor.Remove frees the id,
+    ///     then a fresh SpawnWorker at that id rides TrackSwap to evict the old
+    ///     instance and sequence the new child behind its predecessor's kill;
+    ///   * added (new id) ⇒ SpawnWorker, no predecessor.
+    /// A malformed/absent handlers.json yields a fresh registry with ZERO exec
+    /// handlers, so every current resident becomes a removal — malformed reload
+    /// kills ALL residents, no keep-last-good (ADR-0010 d4). Coded handlers are
+    /// never touched (they carry no fingerprint). The kills are fire-and-forget
+    /// through the same teardown seam the drain awaits (_pendingDisposals), so
+    /// this returns fast — the triggering hook proceeds on the new snapshot and
+    /// a just-added resident is Spawning until its readiness handshake (the
+    /// documented fail-mode-while-warming). Serialized by _reconcileLock;
+    /// _runners is published with one atomic write for the lock-free readers.
+    public ReconcileSummary Reconcile(Registry fresh)
+    {
+        lock (_reconcileLock)
+        {
+            var freshExec = AssignIds(fresh.Specs)
+                .Where(x => x.Spec.ReloadFingerprint is not null)
+                .ToList();   // ordered; ids unique by construction
+            var freshIds = new HashSet<string>(freshExec.Select(x => x.Id), StringComparer.Ordinal);
+
+            int added = 0, removed = 0, changed = 0, kept = 0;
+
+            // Removals: current exec ids absent from the fresh set. Stop the
+            // worker (Supervisor.Remove: no restart on a late exit, asks fail
+            // fast) and evict+kill its instance.
+            foreach (var id in _execWorkers.Keys.Where(k => !freshIds.Contains(k)).ToList())
+            {
+                _sup.Remove(id);
+                EvictInstance(id, "reload: entry removed");
+                _execWorkers.Remove(id);
+                removed++;
+            }
+
+            // Adds + changes, walked in fresh order (Compose below reuses it).
+            // A KEEP is a no-op — the warm child is never touched.
+            foreach (var (id, eventType, spec) in freshExec)
+            {
+                if (_execWorkers.TryGetValue(id, out var cur))
+                {
+                    if (cur.Fingerprint == spec.ReloadFingerprint) { kept++; continue; }
+                    // CHANGED: free the id so the re-spawn's Supervisor.Spawn
+                    // won't hit the duplicate-id refusal; the old instance stays
+                    // in _liveInstances so the new worker's TrackSwap evicts it
+                    // and threads its kill as the fresh child's predecessor
+                    // (the restart path, reused — no bespoke eviction here).
+                    _sup.Remove(id);
+                    _execWorkers[id] = new ExecWorker(eventType, spec.ReloadFingerprint!, SpawnWorker(id, spec));
+                    changed++;
+                }
+                else
+                {
+                    _execWorkers[id] = new ExecWorker(eventType, spec.ReloadFingerprint!, SpawnWorker(id, spec));
+                    added++;
+                }
+            }
+
+            _runners = Compose(freshExec);
+            return new ReconcileSummary(added, removed, changed, kept);
+        }
+    }
+
+    /// Retire an exec instance outside the restart path (a reload REMOVAL only):
+    /// drop it from the live-instance map and fire-and-forget its disposal — the
+    /// resident's DisposeAsync kills the group TERM→grace→KILL, registered in
+    /// _pendingDisposals so the drain still awaits it (never a GC drop). A
+    /// CHANGE does NOT come here: its re-spawn's TrackSwap owns the eviction so
+    /// the kill can thread as the successor's predecessor. No-op after teardown
+    /// (DisposeHandlersAsync already cleared _liveInstances) and for a singleton
+    /// still referenced by another slot.
+    private void EvictInstance(string id, string reason)
+    {
+        // Removal + disposal-registration in ONE lock section (FireDisposeLocked)
+        // so the drain can never miss this kill mid-registration.
+        lock (_teardownLock)
+            if (_liveInstances.Remove(id, out var h) && !SharedElsewhereNoLock(id, h))
+                FireDisposeLocked(h, id, reason);
+    }
+
+    /// Recompose the dispatch snapshot: coded runners first (frozen, in their
+    /// construction order), then the exec runners in FRESH file order — so
+    /// Merge's inject concatenation follows the file. Reads _execWorkers, so
+    /// callers hold _reconcileLock; the returned dictionary is published to
+    /// _runners with one atomic reference write.
+    private Dictionary<string, List<Runner>> Compose(
+        IReadOnlyList<(string Id, string EventType, HandlerSpec Spec)> freshExecOrder)
+    {
+        var composed = new Dictionary<string, List<Runner>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (eventType, list) in _codedRunners)
+            composed[eventType] = new List<Runner>(list);
+        foreach (var (id, eventType, _) in freshExecOrder)
+            if (_execWorkers.TryGetValue(id, out var w))
+                AddRunner(composed, eventType, w.Runner);
+        return composed;
+    }
+
     public async Task<DispatchResult> DispatchAsync(HookEvent e, string? dispatchId = null,
                                                     IReadOnlySet<string>? excludedHandlers = null)
     {
-        var registered = _runners.TryGetValue(e.Type, out var list)
+        // One volatile read of the fan-out snapshot: a hot reload may swap it
+        // concurrently (ADR-0010 phase 7), so this dispatch pins one coherent
+        // generation of it — old or new, both valid.
+        var runners = _runners;
+        var registered = runners.TryGetValue(e.Type, out var list)
             ? (IReadOnlyList<Runner>)list : Array.Empty<Runner>();
         // Handler-level exclusion (ADR-0006 decision 2 / N3): drop named
         // handlers from THIS dispatch's view — "as if unregistered for this

@@ -13,20 +13,34 @@ type ActorRef<'Msg> internal (id: string) =
     // Written by the supervisor on (re)start, read by callers. Swap happens
     // before the ref is ever handed out, and again on each restart.
     let mutable current: MailboxProcessor<'Msg> = Unchecked.defaultof<_>
-    // Instance generation, bumped by every Swap. Late signals from an
-    // ABANDONED instance (a wedged worker's stuck task finally dying) carry
-    // the generation they belonged to, so the supervisor can recognize them
-    // as stale instead of restarting the healthy replacement (ADR-0004 d5).
+    // Instance generation, bumped by every Swap: the per-handle RESTART COUNT,
+    // read by the host's supervision read model (ADR-0007 get-handlers).
     let generation = ref 0
+    // The instance's EPOCH: a supervisor-global, monotonic spawn token, set on
+    // every Swap. Fault signals (ChildExit/ChildWedged) carry the EPOCH, not
+    // the generation — because the generation RESETS to 1 on a fresh handle,
+    // and a hot-reload CHANGE retires a worker via Remove + re-Spawn at the
+    // SAME id (ADR-0010 phase 7), minting a fresh handle whose generation 1
+    // would ALIAS the retired handle's generation 1. That aliasing charged the
+    // retired child's death to the fresh replacement — churning it and, under
+    // repetition, escalating a healthy worker to permanent-DEAD (the phase-7
+    // adversarial-verify HIGH). A monotonic epoch never aliases across
+    // Remove+Spawn, so the stale signal is recognized and dropped. (Late
+    // signals from an ABANDONED instance — a wedged worker's stuck task finally
+    // dying — carry the epoch they belonged to, the same stale-detection ADR-
+    // 0004 d5 used the generation for, now alias-proof.)
+    let epoch = ref 0
     // Set once by the supervisor on escalation; read by ask paths to fail
     // fast instead of burning the full ask timeout on a corpse (carry-in b).
     let dead = ref false
 
     member _.Id = id
-    member internal _.Swap(agent: MailboxProcessor<'Msg>) =
+    member internal _.Swap(agent: MailboxProcessor<'Msg>, ep: int) =
         current <- agent
+        Volatile.Write(&epoch.contents, ep)
         Volatile.Write(&generation.contents, generation.Value + 1)
     member _.Generation = Volatile.Read(&generation.contents)
+    member _.Epoch = Volatile.Read(&epoch.contents)
     member _.IsDead = Volatile.Read(&dead.contents)
     member internal _.MarkDead() = Volatile.Write(&dead.contents, true)
 
@@ -47,13 +61,13 @@ type ActorRef<'Msg> internal (id: string) =
 /// carries the generation of the instance it is about, so late signals from
 /// abandoned instances are recognized as stale.
 type private SupMsg =
-    | ChildExit of id: string * gen: int * error: exn
-    | ChildWedged of id: string * gen: int * correlationId: string
+    | ChildExit of id: string * epoch: int * error: exn
+    | ChildWedged of id: string * epoch: int * correlationId: string
 
 /// What the supervisor needs to act on a child by id, registered at Spawn.
 /// Closures, not types: the supervisor stays 'Msg-agnostic.
 type private ChildEntry =
-    { CurrentGen: unit -> int
+    { CurrentEpoch: unit -> int
       IsDead: unit -> bool
       Restart: unit -> unit
       MarkDead: unit -> unit }
@@ -95,6 +109,13 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
     // any real work).
     let escalationSubs = ResizeArray<Action<string, exn>>()
     let children = ConcurrentDictionary<string, ChildEntry>()
+    // Supervisor-global monotonic spawn token (ActorRef.Epoch above): every
+    // start() — initial spawn, restart, or a hot-reload re-Spawn at a reused id
+    // — takes a fresh epoch, so fault signals can never alias across a
+    // Remove+Spawn (the phase-7 generation-aliasing HIGH). Incremented under
+    // Interlocked: restarts run on the mailbox loop, Spawn/reconcile on caller
+    // threads.
+    let epochSeq = ref 0
 
     let agent =
         MailboxProcessor.Start(fun inbox ->
@@ -154,9 +175,9 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
             let rec loop (history: Map<string, int64 list>) =
                 async {
                     match! inbox.Receive() with
-                    | ChildExit (id, gen, err) ->
+                    | ChildExit (id, epoch, err) ->
                         match children.TryGetValue id with
-                        | true, entry when entry.CurrentGen() = gen && not (entry.IsDead()) ->
+                        | true, entry when entry.CurrentEpoch() = epoch && not (entry.IsDead()) ->
                             match err with
                             | :? OperationCanceledException ->
                                 // The handler honored its budget token: this exit
@@ -181,9 +202,9 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
                                 sprintf "sup:%s" name, "actor.staleExit",
                                 LogFields(ActorId = id, Msg = err.Message))
                             return! loop history
-                    | ChildWedged (id, gen, correlationId) ->
+                    | ChildWedged (id, epoch, correlationId) ->
                         match children.TryGetValue id with
-                        | true, entry when entry.CurrentGen() = gen && not (entry.IsDead()) ->
+                        | true, entry when entry.CurrentEpoch() = epoch && not (entry.IsDead()) ->
                             Log.Warn(
                                 sprintf "sup:%s" name, "actor.wedge",
                                 LogFields(
@@ -222,8 +243,8 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
     /// an ask that was received but never answered within budget + grace — for
     /// this generation of the child. The supervisor owns the counting; a stale
     /// generation is ignored.
-    member _.ReportWedge(id: string, gen: int, correlationId: string) =
-        agent.Post(ChildWedged(id, gen, correlationId))
+    member _.ReportWedge(id: string, epoch: int, correlationId: string) =
+        agent.Post(ChildWedged(id, epoch, correlationId))
 
     /// Spawn a supervised child. `factory` runs once now and once per restart.
     /// Duplicate ids are REFUSED loudly: a silent `children[id] <- entry`
@@ -236,20 +257,51 @@ type Supervisor(name: string, maxRestarts: int, window: TimeSpan, clock: Func<in
         Log.Info(sprintf "sup:%s" name, "actor.spawn", LogFields(ActorId = id))
         let handle = ActorRef<'Msg>(id)
         let rec start () =
-            let child = factory.Invoke()
-            // The generation this instance WILL have once swapped in. Spawn and
-            // restart both run sequentially (restarts inside the supervisor
-            // loop), so no concurrent Swap can interleave.
-            let gen = handle.Generation + 1
-            // A MailboxProcessor whose body throws dies SILENTLY unless someone
-            // subscribes .Error — the supervisor is that someone. Crash ->
-            // message, tagged with the instance's generation.
-            child.Error.Add(fun ex -> agent.Post(ChildExit(id, gen, ex)))
-            handle.Swap child
+            // Retirement re-check (phase-7 adversarial verify, Finding A): a
+            // hot-reload REMOVE can MarkDead this handle AFTER the fault loop
+            // passed its guard but BEFORE this restart runs (the guard→count→
+            // Log→restartSafely window). Re-checking here collapses that window
+            // so a retired worker is not resurrected into a live child that
+            // outlives its deleted entry (a straggler cleaned only at drain).
+            if handle.IsDead then ()
+            else
+                let child = factory.Invoke()
+                // A fresh EPOCH per start() — globally monotonic, so a reused
+                // id (Remove+Spawn) never aliases a retired instance's fault
+                // signal. Spawn and restart both run sequentially (restarts
+                // inside the supervisor loop), so no concurrent Swap interleaves.
+                let epoch = System.Threading.Interlocked.Increment(&epochSeq.contents)
+                // A MailboxProcessor whose body throws dies SILENTLY unless
+                // someone subscribes .Error — the supervisor is that someone.
+                // Crash -> message, tagged with the instance's epoch.
+                child.Error.Add(fun ex -> agent.Post(ChildExit(id, epoch, ex)))
+                handle.Swap(child, epoch)
         children[id] <-
-            { CurrentGen = fun () -> handle.Generation
+            { CurrentEpoch = fun () -> handle.Epoch
               IsDead = fun () -> handle.IsDead
               Restart = start
               MarkDead = fun () -> handle.MarkDead() }
         start ()
         handle
+
+    /// Remove a supervised child at runtime — the inverse of Spawn, for the
+    /// handlers.json hot-reload reconcile (ADR-0010 phase 7). The host has
+    /// already (or is about to) tear down the handler instance and kill its
+    /// child; this drops the child-spec so a late ChildExit finds no live
+    /// entry and never restarts a worker the host has retired, and marks the
+    /// handle DEAD FIRST so an in-flight ask fails fast AND a concurrent fault
+    /// already in the loop sees IsDead and treats the exit as stale (mark
+    /// before remove: the fault loop's guard is `not (IsDead())`, so setting
+    /// it first shrinks the restart-vs-remove window that would otherwise
+    /// resurrect a retired child). Idempotent — an unknown/already-removed id
+    /// is a no-op. The orphaned MailboxProcessor holds no OS resources; its
+    /// parked Receive is a self-referential cycle the GC reclaims once the host
+    /// drops its Worker reference. (Escalation, by contrast, keeps its entry
+    /// forever via MarkDead alone — Remove is the cleaner retirement.)
+    member _.Remove(id: string) =
+        match children.TryGetValue id with
+        | true, entry ->
+            entry.MarkDead()
+            children.TryRemove id |> ignore
+            Log.Info(sprintf "sup:%s" name, "actor.remove", LogFields(ActorId = id))
+        | _ -> ()

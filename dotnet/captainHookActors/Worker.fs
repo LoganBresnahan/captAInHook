@@ -127,7 +127,7 @@ type Worker<'Req, 'Reply> private (sup: Supervisor, id: string, handle: ActorRef
                 return AskOutcome<'Reply>(AskStatus.Dead, Unchecked.defaultof<'Reply>, null)
             else
                 let receipt = ref false
-                let gen = handle.Generation
+                let epoch = handle.Epoch
                 let windowMs = budgetMs + graceMs
                 // The mailbox-level timeout sits far beyond our own window:
                 // THIS layer owns the deadline; the inner one is only a
@@ -145,7 +145,7 @@ type Worker<'Req, 'Reply> private (sup: Supervisor, id: string, handle: ActorRef
                         (fun (t: Task<Choice<'Reply, exn>>) -> t.Exception |> ignore),
                         TaskContinuationOptions.OnlyOnFaulted) |> ignore
                     if Volatile.Read(&receipt.contents) then
-                        sup.ReportWedge(id, gen, correlationId)
+                        sup.ReportWedge(id, epoch, correlationId)
                         return AskOutcome<'Reply>(AskStatus.Wedged, Unchecked.defaultof<'Reply>, null)
                     else
                         return AskOutcome<'Reply>(AskStatus.Backlogged, Unchecked.defaultof<'Reply>, null)

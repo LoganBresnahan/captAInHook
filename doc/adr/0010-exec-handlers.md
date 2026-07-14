@@ -143,6 +143,40 @@ its lessons are imported wholesale (§ Pattern lineage).
      changed/removed resident entry drains its old child and (re)spawns under
      a bumped generation; a malformed reload poisons-AND-advances to
      zero-exec-handlers, loudly.
+     *(2026-07-13 handlers-hot-reload, phase 7: the runtime refresh seam as
+     built. The stat-gate is `ReloadingHandlers` (a literal `ReloadingPolicy`
+     mirror — same `(mtime,size)` stamp, same benign race, same wall-clock-
+     equality-not-interval discipline), called at the top of
+     `DaemonHost.DispatchOneAsync`; the collapsed path is single-shot and
+     never reloads. Where it DIVERGES from the policy is the payload: instead
+     of swapping an immutable resolution it drives `Dispatcher.Reconcile(fresh)`
+     — the invented seam the Dispatcher had NO precedent for (it only ever
+     spawned workers in its ctor). Reconcile DIFFS the reloadable (exec)
+     workers against a freshly-built registry, keyed by a stable worker id
+     ((event,name), deterministic via `AssignIds` — coded handlers are a
+     constant id-space seed, exec names are file-unique) carrying a config
+     FINGERPRINT (`HookRun.ExecFingerprint`, an injective length-prefixed
+     encoding of command/args/mode/failMode/budget/readiness/env/passEnv/cwd —
+     event+name are the id, not the version). Four verdicts: unchanged
+     fingerprint ⇒ KEEP (the warm child is never touched — no churn, the whole
+     point of resident); id gone ⇒ REMOVE (`Supervisor.Remove` + evict-and-kill
+     TERM→grace→KILL, drain-then-die, not a GC drop); id present + fingerprint
+     changed ⇒ CHANGE (`Supervisor.Remove` frees the id, then a re-`SpawnWorker`
+     at that id rides the EXISTING `TrackSwap` restart path — it evicts the old
+     instance and threads its kill as the fresh child's predecessor); new id ⇒
+     ADD. Editing an entry's events list only churns the added/removed events'
+     children (the fingerprint excludes the event). `Supervisor.Remove` is the
+     one new F# member — the inverse of Spawn (MarkDead then drop the child-spec
+     so a late exit never restarts a retired worker; the mailbox is a GC-able
+     cycle). Coded handlers are FROZEN at construction (no fingerprint, never
+     reconciled), so they must stay cheap/non-disposable. `_runners` becomes a
+     volatile snapshot swapped whole (lock-free dispatch reads, one atomic
+     publish under `_reconcileLock`). A malformed reload yields zero exec ⇒
+     every current resident is a REMOVE — malformed kills ALL residents, no
+     keep-last-good, and `handlers.malformed` is loud (BuildDefaultRegistry
+     re-validates end-to-end on every reload); the reconcile's own summary
+     rides `handlers.reload` (added/removed/changed/kept). Deliberately reuses
+     phase 5's kill/drain machinery, proven stable first.)*
    - `dispatch.json` (ADR-0006) governs exec handlers **by name, for free** —
      per-event/per-handler policy needs no new mechanism.
 
@@ -295,9 +329,13 @@ child-process specifics; children that speak MCP.
   if a real user is burned, add a per-file `strict: true` knob that refuses
   the whole file on any invalid entry.
 - **N3 · Resident children are a new leak class.** The daemon now owns OS
-  processes that must die at drain, at idle-exit, at worker restart, and at
-  collapsed-mode exit — the kill discipline (decision 6) and its tests are
-  load-bearing, and `doctor` learns to report orphans.
+  processes that must die at drain, at idle-exit, at worker restart, at
+  collapsed-mode exit, and (phase 7) at a hot-reload REMOVE/CHANGE — the kill
+  discipline (decision 6) and its tests are load-bearing, and `doctor` learns
+  to report orphans. The reload reuses the exact restart/drain kill paths (a
+  CHANGE rides `TrackSwap`, a REMOVE the fire-and-forget disposal the drain
+  awaits), so the leak surface does not grow with the new seam — the reconcile
+  adds no bespoke kill path, only new triggers for the proven ones.
 - **N4 · The latency doctrine is advisory.** A user CAN put a Rails oneshot
   on PreToolUse and suffer; decision 7 makes it loud, not impossible.
 - **N5 · Collapsed-mode degrade changes resident semantics.** Cross-dispatch
@@ -521,22 +559,23 @@ exits); flakiness here blocks every later /deploy.
 ## Ground truth
 
 Mechanics: [`doc/flow/exec-payloads.md`](../flow/exec-payloads.md) (ASCII
-flow + why-prose). Files/symbols/events/tests as of phase 5 (oneshot +
-kill-discipline + resident):
+flow + why-prose). Files/symbols/events/tests as of phase 7 (oneshot +
+kill-discipline + resident + collapsed-degrade + hot-reload):
 
 | what | where |
 |---|---|
 | envelope/answer codec, `TryParseReady`, dispatchId-echo extraction | `dotnet/captainHook/Core/ExecWire.cs` |
 | oneshot adapter (answer/exit race, reply-then-linger, echo-if-present-must-match) | `dotnet/captainHook/Handlers/ExecHandler.cs` |
-| resident runtime (`ChildState` machine, three-way readiness race, lock-step + mandatory echo, `IEagerStart`, fail-mode-while-warming, `ResidentUnavailableStub`) | `dotnet/captainHook/Handlers/ResidentExecHandler.cs` |
+| resident runtime (`ChildState` machine, three-way readiness race, lock-step + mandatory echo, `IEagerStart`, fail-mode-while-warming) | `dotnet/captainHook/Handlers/ResidentExecHandler.cs` |
 | kill mechanics (setsid probe, group TERM→grace→KILL, group-aware liveness) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
 | child pid/identity records + once-per-process sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
 | teardown seam (`IEagerStart`, `TrackSwap` admission, `DisposeHandlersAsync`, `SubscribeEscalated`) | `dotnet/captainHook/Core/Dispatcher.cs`, `dotnet/captainHookActors/Supervision.fs` |
+| hot-reload seam (`Reconcile` diff, `AssignIds` id stability, `ExecFingerprint` injective config identity, volatile `_runners` swap, `ReloadingHandlers` stat-gate) + `Supervisor.Remove` | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | registration file (tri-state, strict parse, budget/readiness bounds) | `dotnet/captainHook/Core/ExecHandlersFile.cs` |
-| registration wiring (warns, resident gating + deny stub, drain-child phase, harness/drain hints) | `dotnet/captainHook/Core/HookRun.cs`, `Core/DaemonHost.cs` |
+| registration wiring (warns, resident degrade-not-stub, drain-child phase, harness/drain hints, per-dispatch reconcile) | `dotnet/captainHook/Core/HookRun.cs`, `Core/DaemonHost.cs` |
 | trail events (src `exec`) | `exec.spawn`, `exec.ready`, `exec.notReady`, `exec.answered`, `exec.exit`, `exec.stderr`, `exec.kill`, `exec.protocolError`, `exec.recordError` |
-| trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout`, `handlers.residentDegraded`, `handlers.collapsedTeardownTimeout` |
+| trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout`, `handlers.residentDegraded`, `handlers.collapsedTeardownTimeout`, `handlers.reload` |
 | collapsed degrade + demo payloads | `Core/HookRun.cs` (`collapsedEvent` filter + teardown-at-drain), `examples/payloads/` (retriever resident + memory oneshot + handlers.json) |
-| trail events (src `dispatcher`/`daemon`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout` |
-| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon) |
+| trail events (src `dispatcher`/`daemon`/`sup`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout`, `actor.remove` |
+| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, the add-then-remove daemon E2E) |
 | platform facts | `doc/platform.md` § Process groups (setsid, group signals, pgid persistence) |

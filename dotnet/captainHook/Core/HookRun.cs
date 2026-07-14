@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CaptainHook.Actors;
 using CaptainHook.Handlers;
@@ -112,6 +113,15 @@ public static class HookRun
                         : entry.Events.Where(ev => string.Equals(ev, collapsedEvent, StringComparison.OrdinalIgnoreCase)).ToList();
                     if (events.Count == 0) continue;
 
+                    // The reload fingerprint (ADR-0010 phase 7): every worker
+                    // this entry registers carries it, so a later reload's
+                    // Dispatcher.Reconcile can tell an unchanged entry (keep the
+                    // warm child) from an edited one (replace it). Config-only
+                    // by design — event + name are the worker's id, not its
+                    // version — so editing an entry's events list churns only
+                    // the added/removed events' children.
+                    var fingerprint = ExecFingerprint(entry);
+
                     // Loudness symmetry: parse-valid fields the CURRENT
                     // slices cannot honor yet are loud (adversarial-verify
                     // find). env/passEnv/cwd are enforced as of the
@@ -184,7 +194,7 @@ public static class HookRun
                                 () => new ResidentExecHandler(e2.Name, e2.Command, e2.Args, e2.OnFailure,
                                                               e2.Env, e2.PassEnv, e2.Cwd,
                                                               e2.ReadinessTimeout, evt2),
-                                e2.OnFailure, e2.Budget);
+                                e2.OnFailure, e2.Budget, reloadFingerprint: fingerprint);
                         }
                         continue;
                     }
@@ -202,11 +212,51 @@ public static class HookRun
                         registry.On(evt, e.Name,
                             () => new ExecHandler(e.Name, e.Command, e.Args, e.OnFailure,
                                                   e.Env, e.PassEnv, e.Cwd),
-                            e.OnFailure, e.Budget);
+                            e.OnFailure, e.Budget, reloadFingerprint: fingerprint);
                     }
                 }
                 return;
         }
+    }
+
+    /// A reload fingerprint for an exec entry (ADR-0010 phase 7): a stable
+    /// string over every field that changes the CHILD — command, args (ordered:
+    /// argv is semantic), mode, fail mode, budget, readiness, env (key-sorted),
+    /// passEnv (sorted: a set, order is not semantic), cwd. The event and name
+    /// are the worker's IDENTITY (its id), so they are deliberately ABSENT here:
+    /// editing an entry's events list adds/removes whole workers rather than
+    /// churning the survivors' warm children. Two reloads whose entry produces
+    /// the same fingerprint ⇒ Reconcile keeps the child.
+    ///
+    /// Framing is LENGTH-PREFIXED (LEN:VALUE) with a count before every list, so
+    /// the encoding is INJECTIVE — no two distinct configs collide whatever
+    /// bytes a command/arg/env-pair/cwd contains. A naive separator scheme is
+    /// NOT safe: args ["a","b"] and ["a\x1fb"] would share a "\x1f"-joined form,
+    /// and env {"A":"B=C"} (a value with "=", a NORMAL config) and {"A=B":"C"}
+    /// would share "A=B=C" — a silent stale-child bug the adversarial verify
+    /// targets. Length prefixes make the boundaries unambiguous. (internal for
+    /// the injectivity unit test.)
+    internal static string ExecFingerprint(ExecEntry e)
+    {
+        var sb = new StringBuilder("v1");
+        void Str(string s) => sb.Append('|').Append(s.Length).Append(':').Append(s);
+        void Num(long n) => sb.Append('|').Append(n);
+
+        Str(e.Command);
+        Num(e.Args.Count);
+        foreach (var a in e.Args) Str(a);
+        Num((int)e.Mode);
+        Num((int)e.OnFailure);
+        Num(e.Budget?.Ticks ?? -1);
+        Num(e.ReadinessTimeout?.Ticks ?? -1);
+        var envKeys = e.Env.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
+        Num(envKeys.Count);
+        foreach (var k in envKeys) { Str(k); Str(e.Env[k]); }
+        var pass = e.PassEnv.OrderBy(x => x, StringComparer.Ordinal).ToList();
+        Num(pass.Count);
+        foreach (var p in pass) Str(p);
+        Str(e.Cwd ?? "");
+        return sb.ToString();
     }
 
     /// Run one hook dispatch in-process: resolve harness, read stdin, dispatch
@@ -396,4 +446,88 @@ public sealed record PolicyGate(string? DeniedStdout, string? TraceLine, IReadOn
     public static PolicyGate Proceed(IReadOnlySet<string> excluded) => new(null, null, excluded);
     public static PolicyGate ShortCircuit(string stdout, string trace) => new(stdout, trace, None);
     public bool IsShortCircuit => DeniedStdout is not null;
+}
+
+/// The daemon's handlers.json view (ADR-0010 phase 7, the hot-reload half):
+/// resolve once at daemon start (the initial registry already reflects the
+/// file — the ctor just SEEDS the stamp so the first hook does not re-reconcile
+/// what start already built), then per dispatch take a cheap (mtime,size) stamp
+/// and RECONCILE the dispatcher's exec workers ONLY when the file moves.
+/// Mirrors ReloadingPolicy's stat-gate exactly — the benign race, the
+/// poison-and-advance discipline — but where ReloadingPolicy swaps an immutable
+/// resolution, this drives Dispatcher.Reconcile, which diffs the workers so
+/// unchanged entries keep their warm children (no churn) and a malformed edit
+/// kills every resident (no keep-last-good, ADR-0010 d4). The collapsed path is
+/// single-shot and just builds once, so only the long-lived daemon needs this.
+/// Stamp comparison is EQUALITY on the wall-clock mtime (change detection, like
+/// content identity), never interval math — the monotonic rule is untouched.
+public sealed class ReloadingHandlers
+{
+    private readonly string _path;
+    private readonly Dispatcher _dispatcher;
+    private readonly TimeSpan? _harnessTimeoutHint;
+    private readonly TimeSpan? _drainBudgetHint;
+    private readonly object _lock = new();
+    private volatile string _stamp;
+
+    public ReloadingHandlers(string handlersPath, Dispatcher dispatcher,
+                             TimeSpan? harnessTimeoutHint = null, TimeSpan? drainBudgetHint = null)
+    {
+        _path = handlersPath;
+        _dispatcher = dispatcher;
+        _harnessTimeoutHint = harnessTimeoutHint;
+        _drainBudgetHint = drainBudgetHint;
+        _stamp = Stamp(handlersPath);
+    }
+
+    /// Stat-gate + reconcile, called per dispatch before the fan-out. The fast
+    /// path (unchanged) is a single stat + string compare, lock-free. On a
+    /// change exactly one caller wins the reconcile under the lock (double-
+    /// checked against the freshest stamp); the others see the advanced stamp
+    /// and skip. Reconcile itself is fast — a dictionary diff + supervisor
+    /// add/remove, with child kills fire-and-forget through the teardown seam —
+    /// so the triggering hook is barely delayed, and a just-added resident is
+    /// still warming and takes fail-mode until its readiness handshake, exactly
+    /// as at daemon start.
+    public void MaybeReload()
+    {
+        var s = Stamp(_path);
+        if (s == _stamp) return;
+        lock (_lock)
+        {
+            s = Stamp(_path);
+            if (s == _stamp) return;   // another dispatch won the reconcile
+            // BuildDefaultRegistry re-validates the file end-to-end on EVERY
+            // reload: it logs handlers.malformed / handlers.entrySkipped and
+            // every registration warn (slowShape, budgetBeyond*,
+            // residentFanout, ...), and a malformed file yields ZERO exec
+            // handlers so the reconcile removes every resident. Daemon mode ⇒
+            // collapsedEvent null ⇒ warm all events.
+            var fresh = HookRun.BuildDefaultRegistry(_path, _harnessTimeoutHint, _drainBudgetHint);
+            var summary = _dispatcher.Reconcile(fresh);
+            _stamp = s;
+            Log.Info("handlers", "handlers.reload", new LogFields
+            {
+                Data = new Dictionary<string, object>
+                {
+                    ["path"] = _path,
+                    ["added"] = summary.Added,
+                    ["removed"] = summary.Removed,
+                    ["changed"] = summary.Changed,
+                    ["kept"] = summary.Kept,
+                },
+            });
+        }
+    }
+
+    /// Identical to ReloadingPolicy.Stamp: (mtime,size) with the <dir>/<absent>
+    /// sentinels so a directory appearing where the file belongs, or the file
+    /// vanishing, each FLIP the stamp (reconcile to zero exec handlers) rather
+    /// than aliasing a real state.
+    private static string Stamp(string path)
+    {
+        if (Directory.Exists(path)) return "<dir>";
+        var fi = new FileInfo(path);
+        return fi.Exists ? $"{fi.LastWriteTimeUtc.Ticks}|{fi.Length}" : "<absent>";
+    }
 }

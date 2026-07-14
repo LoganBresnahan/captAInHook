@@ -899,6 +899,65 @@ run live*. The framework underneath is what exists today.
   twice. **Phase 6 complete — the seam is proven with scripts, the fallback
   degrades without orphaning.** Remaining for item 9: phase 7
   (handlers-hot-reload), phase 8 (doctor-orphans, handlers-observability).)
+  `handlers-hot-reload` (2026-07-13, phase 7 — the runtime registry-refresh
+  seam the Dispatcher had NO precedent for: it only ever spawned workers in
+  its ctor. Stat-gate `ReloadingHandlers` (a literal ReloadingPolicy mirror)
+  at the top of DispatchOneAsync drives `Dispatcher.Reconcile(fresh)`, which
+  diffs the reloadable (exec) workers by a STABLE id (`AssignIds` —
+  (event,name), coded a constant id-seed, exec names file-unique) carrying an
+  INJECTIVE config fingerprint (`ExecFingerprint`, length-prefixed):
+  unchanged ⇒ KEEP (warm child untouched — no churn), gone ⇒ REMOVE
+  (Supervisor.Remove + evict-and-kill), changed ⇒ CHANGE (Remove frees the
+  id, re-Spawn rides the existing TrackSwap to evict the old instance and
+  thread its kill as the successor's predecessor), new ⇒ ADD. `_runners`
+  became a volatile swapped-whole snapshot (lock-free dispatch reads, one
+  atomic publish under _reconcileLock). Malformed reload ⇒ zero exec ⇒ every
+  resident REMOVE'd (no keep-last-good, handlers.malformed loud); the summary
+  rides handlers.reload. `Supervisor.Remove` is the one new F# member
+  (MarkDead + drop the child-spec so a late exit never restarts a retired
+  worker; actor.remove). Reuses phase 5's kill/drain machinery wholesale — no
+  bespoke kill path, so N3's leak surface does not grow with the seam.
+  THREE-SKEPTIC adversarial round (orphans / diff-correctness / concurrency)
+  — 1 HIGH + 3 MED confirmed and FIXED:
+  • HIGH (generation aliasing) — a CHANGE's Remove+Spawn minted a fresh
+    handle whose generation reset to 1, aliasing the retired worker's gen 1,
+    so the reload's kill of the old child (a mid-dispatch EOF crash) was
+    charged to the fresh REPLACEMENT: spurious restart → churn, and under
+    repetition → escalation to permanent-DEAD (deny-every-hook for a
+    fail-closed gate). FIX: fault signals (ChildExit/ChildWedged) now carry a
+    supervisor-global monotonic EPOCH (`ActorRef.Epoch`), never the per-handle
+    restart count — a reused id can't alias; Generation stays the read-model
+    restart count. Regression test: CHANGE mid-conversation, the replacement's
+    Generation stays 1.
+  • MED (drain-await gap, confirmed ×2) — all three eviction sites removed
+    from _liveInstances and registered into _pendingDisposals in SEPARATE lock
+    sections; the drain's single-lock snapshot could fall between and await
+    neither, dropping an in-flight TERM→grace→KILL (orphan on exit — the very
+    thing _pendingDisposals exists to prevent). FIX: `FireDisposeLocked`
+    registers the disposal UNDER the same lock as the removal (atomic); only
+    the kill's fast synchronous prefix runs there (the handler's own lock,
+    never _teardownLock — no reentrancy).
+  • MED (restart-vs-remove) — a fault-loop restart already committed to could
+    resurrect a REMOVE'd worker as a straggler (cleaned at drain). FIX:
+    start() re-checks handle.IsDead before spawning, collapsing the window.
+  • MED (fingerprint collision) — a naive \x1f/\0 separator scheme aliased
+    args ["a","b"] with ["a\x1fb"] (and env value-with-'='); FIXED pre-report
+    by length-prefix framing (injectivity unit-tested).
+  LOW residue, documented not defended: an exec name EQUAL to a coded name
+  ("echo"/"latency-probe") gets a #2 id (works, but dispatch.json exclusion
+  keys on the shared name) — a name CONTAINING '#' is now rejected at parse
+  (the sharp reorder crack); the coded id-seed is re-read from
+  CAPTAINHOOK_PROBE per reload but is constant within a daemon (a probe flip
+  needs a new daemon → new ctor, never a cross-reload diff); a budget or
+  readiness edit re-warms the resident child (safe over-churn — those fields
+  must stay in the fingerprint to take effect at all). Tests: 15 (fingerprint
+  injectivity, no-churn KEEP, add/remove/change, events-list
+  churn-only-affected, malformed-kills-all, post-drain refusal, coded-survive,
+  stat-gate ×2, Supervisor.Remove, the CHANGE-mid-dispatch misattribution
+  guard, the add-then-remove daemon E2E). Suite 598 green twice. **Phase 7
+  complete — edit handlers.json, the next hook obeys, and unchanged warm
+  children never flinch.** Remaining for item 9: phase 8 (doctor-orphans,
+  handlers-observability).)
 - [ ] **15. Handler capability policy (egress)** — layer 3 of the native
   policy story: what may a running handler *reach*. *(Narrowed by ADR-0010,
   2026-07-12: payloads are user processes, so there is no in-process

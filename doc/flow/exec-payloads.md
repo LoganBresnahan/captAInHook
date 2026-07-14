@@ -94,6 +94,44 @@ Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
 `memory.sh` (oneshot, Stop, appends a durable log) — dependency-free POSIX
 `sh`, driven end-to-end through the daemon by `DemoPayloadTests`.
 
+## Hot reload (phase 7) — edit the file, next hook obeys
+
+```
+ DispatchOneAsync ─► ReloadingHandlers.MaybeReload()  (per dispatch, before fan-out)
+                       │ stat (mtime,size) == last?  ─ yes ─► return (lock-free)
+                       ▼ no
+                     BuildDefaultRegistry(file)   (re-validate: malformed/skip/warn all re-logged)
+                       │
+                       ▼
+                     Dispatcher.Reconcile(fresh)  ── diff exec workers by id+fingerprint ──►
+                       id+fp unchanged  ⇒ KEEP    (warm child untouched — NO churn)
+                       id gone          ⇒ REMOVE  (Supervisor.Remove + evict→kill, drain-then-die)
+                       id, fp changed   ⇒ CHANGE  (Supervisor.Remove, re-Spawn same id;
+                                                    TrackSwap evicts old, threads its kill as predecessor)
+                       new id           ⇒ ADD     (Spawn, warms; no predecessor)
+                       └─ publish _runners (coded ++ exec, fresh order) with one volatile write
+```
+
+The Dispatcher only ever spawned workers in its ctor; phase 7 invents the
+RUNTIME refresh seam. Identity is a STABLE worker id — `(event, name)`,
+deterministic via `AssignIds` (coded handlers are a constant id-space seed,
+exec names file-unique) — so an unchanged entry keeps the same id across
+reloads and therefore its warm child. Version is a config FINGERPRINT
+(`HookRun.ExecFingerprint` — an INJECTIVE length-prefixed encoding of
+command/args/mode/failMode/budget/readiness/env/passEnv/cwd; event+name are the
+id, deliberately excluded, so editing an entry's events list churns only the
+added/removed events' children). The stat-gate is a literal `ReloadingPolicy`
+mirror (`ReloadingHandlers` — same `(mtime,size)` stamp, same benign race,
+change-detection-not-interval on the wall clock); the collapsed path is
+single-shot and never reloads. A malformed edit re-builds to ZERO exec handlers
+⇒ every resident is a REMOVE — malformed kills ALL residents, no keep-last-good,
+`handlers.malformed` loud; the reconcile summary rides `handlers.reload`
+(added/removed/changed/kept). The kills are the SAME restart/drain paths (a
+CHANGE rides `TrackSwap`, a REMOVE the fire-and-forget disposal the drain
+awaits) — the reload adds no bespoke kill path. `Supervisor.Remove` is the one
+new F# member: the inverse of Spawn (MarkDead, drop the child-spec so a late
+exit never restarts a retired worker), logged `actor.remove`.
+
 ## Ground truth
 
 | what | where |
@@ -104,7 +142,8 @@ Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
 | kill mechanics (setsid probe, group TERM→grace→KILL, group-aware liveness) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
 | child records + sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
 | admission seam (`IEagerStart`, `TrackSwap`, `DisposeHandlersAsync`) | `dotnet/captainHook/Core/Dispatcher.cs` |
-| registration (tri-state file, warns, resident gating, deny stub) | `dotnet/captainHook/Core/ExecHandlersFile.cs`, `Core/HookRun.cs` |
-| trail events | `exec.spawn/ready/notReady/answered/exit/stderr/kill/protocolError/recordError`, `handlers.malformed/entrySkipped/slowShape/fieldIgnored/budgetBeyondHarness/budgetBeyondDrain/readinessBeyondBudget/residentFanout`, `handler.teardown(-Error)`, `daemon.drainChildren/drainCut/drainChildrenTimeout` |
-| pinned by | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. the daemon E2E) |
+| hot-reload seam (`Reconcile`, `AssignIds`, `ExecFingerprint`, volatile `_runners`, `ReloadingHandlers`, `Supervisor.Remove`) | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
+| registration (tri-state file, warns, resident degrade, per-dispatch reconcile) | `dotnet/captainHook/Core/ExecHandlersFile.cs`, `Core/HookRun.cs` |
+| trail events | `exec.spawn/ready/notReady/answered/exit/stderr/kill/protocolError/recordError`, `handlers.malformed/entrySkipped/slowShape/fieldIgnored/budgetBeyondHarness/budgetBeyondDrain/readinessBeyondBudget/residentFanout/residentDegraded/collapsedTeardownTimeout/reload`, `handler.teardown(-Error)`, `daemon.drainChildren/drainCut/drainChildrenTimeout`, `actor.remove` |
+| pinned by | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. the daemon E2E), `HandlersHotReloadTests` (reconcile diff + stat-gate + `Supervisor.Remove`) |
 | decisions | `doc/adr/0010-exec-handlers.md` (d1–d9 + amendments); platform facts in `doc/platform.md` § Process groups |

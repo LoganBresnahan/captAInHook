@@ -172,6 +172,13 @@ public static class ExecHandlersFile
 
         var name = ReqString(entry, "name", v);
         if (name is not null) label = $"handlers[{idx}] '{name}'";
+        // '#' is the worker-id disambiguation char (Dispatcher.AssignIds): a
+        // name carrying it can collide with a disambiguated id and make the
+        // hot-reload diff order-dependent (a reorder would shift which warm
+        // child an id maps to — the phase-7 adversarial-verify id crack).
+        // Reject it — no legitimate handler name needs it.
+        if (name is not null && name.Contains('#'))
+            v.Add("'name' must not contain '#' (reserved for worker-id disambiguation)");
         var command = ReqString(entry, "command", v);
 
         // events: required, non-empty, strings — CANONICALIZED here, and
