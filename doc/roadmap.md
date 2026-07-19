@@ -1008,6 +1008,22 @@ run live*. The framework underneath is what exists today.
   phase of its own. *(Made concrete by ADR-0010: installing = a command line
   + `handlers.json` entry the GUI shows verbatim; this item's trigger also
   gates the sandboxing half of item 15.)*
+  Design recorded in **ADR-0011** (accepted 2026-07-19): the same-user
+  trust boundary ratified (installer = the machine's own user installing
+  things they can read; resilience not prevention for the daemon); consent
+  as the v1 threat model (verbatim-and-resolved confirm before any write);
+  one new write verb `PUT /api/v1/handlers` on the `PUT /policy` pattern,
+  refusing warn-and-skip entries at the write (hand edits stay
+  entry-lenient); enable/disable composed from shipped dispatch.json rules;
+  **no settings.json auto-edit** (wiring hint shown-not-written, auto-wiring
+  waits for observed friction); write-authz ratified as the existing bearer
+  token; sandboxing + provenance explicitly un-triggered until code the
+  user cannot read arrives (that surface fires a new ADR first).
+  Build order: ADR-0011 § Implementation plan (2026-07-19; 10 slices → 5
+  phases; critical path handlers-put-endpoint → handlers-etag-ifmatch →
+  gui-handlers-editor → gui-verbatim-confirm → docs-update; adversarial
+  verify on exactly three slices — the write endpoint, its test pins, and
+  the editor's 412 re-merge; no ultracode). Tick slices here as they land.
 - ~~**11. N-runtime harness**~~ — **dropped 2026-07-19** (owner decision):
   staying .NET-only for the core. ADR-0010 already made payloads N-language
   by construction — user processes in any language — which satisfies the

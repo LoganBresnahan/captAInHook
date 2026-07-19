@@ -145,9 +145,64 @@ payload seam confirmed correct.
 
 ## Implementation plan
 
-*To be decomposed via `/adr-plan` once Accepted; expected shape: 3–4 slices
-(handlers-write-endpoint → install-confirm-gui → wiring-hint + template fix →
-docs), adversarial verify on the write endpoint only.*
+*Decomposed via `/adr-plan` 2026-07-19: 10 slices → 5 phases. Critical path
+`handlers-put-endpoint → handlers-etag-ifmatch → gui-handlers-editor →
+gui-verbatim-confirm → docs-update`. Adversarial verify on exactly three
+slices; **no ultracode** — every slice is single-file/single-flow work.*
+
+**Phase 1 — server write seam + free-standing independents.**
+- `handlers-put-endpoint` *(medium/moderate, verify)* — `PUT /api/v1/handlers`
+  mirroring `ApiPolicyWriter` (sibling-temp same-dir rename, closed
+  outcome→HTTP mapping, BOM discipline); the one new seam is
+  `ExecHandlersFile`'s tri-state + `Skipped` shape vs `DispatchPolicy`'s
+  all-or-nothing. `handlersPath` is already threaded. Verify = one
+  end-to-end PUT-then-dispatch drive.
+- `install-template-fix` *(low/mechanical)* — claude-code.json
+  `install.entry.command` → `{captainShim} hook {event-kebab}` + a spec-pin
+  test (N4). No upstream deps; must land before/with its first renderer.
+- `gui-enable-disable` *(medium/moderate, low risk)* — composes shipped
+  layers only (d4): toggle = a **prepended** unconditional handler-level deny
+  rule in dispatch.json via the existing `PUT /policy`; must classify
+  scoped-vs-unconditional deny rules for the badge and read-modify-write
+  the rules array without clobbering hand-written entries; vitest on the
+  pure compose/toggle functions.
+
+**Phase 2 — harden the writer** *(one commit, or folded into phase 1's
+endpoint commit — never left half-specified between commits).*
+- `handlers-install-strictness` *(low/mechanical)* — non-empty `Skipped` ⇒
+  422 with violations, **in the writer** so registration-time leniency
+  (ADR-0010 d4) is untouched by construction.
+- `handlers-etag-ifmatch` *(low/mechanical)* — content-hash ETag on
+  `GET /handlers` (+ `raw`/`etag` on `HandlersDto`), If-Match on the PUT;
+  near-copy of the solved RFC 7232 pattern.
+
+**Phase 3 — pin the server + build the GUI editor (parallel tracks).**
+- `handlers-write-adversarial-tests` *(medium/moderate, verify — the ADR's
+  mandated pass)* — mirror `ApiPolicyWriteTests`; two vacuous-pass traps:
+  the atomicity test must genuinely interleave the stat-gated resolver with
+  writes, and the hot-reload test must assert NEXT-dispatch (not eventual)
+  visibility through a real daemon.
+- `gui-handlers-editor` *(medium/moderate, verify)* — whole-file
+  read-modify-write over GET+ETag / PUT+If-Match. The sharp edge: 412
+  handling must **invert** PolicyPanel's pin 3 — a composed editor must
+  stop-and-re-merge, never adopt-current-and-retry (the lost-update bug a
+  pattern-copying pass would ship; N1).
+
+**Phase 4 — GUI trust layer** *(both layer on the editor; batchable).*
+- `gui-verbatim-confirm` *(medium/moderate)* — the d2 modal: entry rendered
+  verbatim and resolved before the PUT. Open design point to settle FIRST
+  (so phase 3's tests can pin any new field): `ExecHandler` passes `Command`
+  raw to `ProcessStartInfo` and no DTO exposes command fields — either the
+  server grows a resolved-path field or the editor mandates absolute paths.
+- `gui-wiring-hint` *(medium/moderate)* — d5's shown-not-written hook
+  command for unwired events, rendered from the (now-fixed) install
+  template; template substitution stays data-selects-code. First consumer
+  of `install-template-fix`.
+
+**Phase 5 — capstone.**
+- `docs-update` *(low/mechanical)* — management-api + management-gui flow
+  docs, roadmap item 10's box checked in the same commit, Ground truth
+  back-filled. Terminal by construction.
 
 ## Ground truth
 
