@@ -631,9 +631,10 @@ run live*. The framework underneath is what exists today.
 
 ## Later
 
-- [ ] **7. Desktop shell** — wrap the same web assets in Photino (native
-  window, .NET runtime in-process) once the browser UI proves the workflows.
-  ADR to record Photino vs Tauri vs staying browser-only.
+- ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
+  browser-only. The localhost web GUI is first-class on WSL2 and answers the
+  need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
+  the planned ADR would have recorded — decided here instead.)
 - [ ] **8. TUI** — geex-style terminal UI against the same API, for product
   reasons (SSH-side admin, terminal-native users) — not as the agent's
   feedback instrument: the feedback pyramid is API assertions (bulk) →
@@ -1007,10 +1008,11 @@ run live*. The framework underneath is what exists today.
   phase of its own. *(Made concrete by ADR-0010: installing = a command line
   + `handlers.json` entry the GUI shows verbatim; this item's trigger also
   gates the sandboxing half of item 15.)*
-- [ ] **11. N-runtime harness** — port the core spec to Node and BEAM
-  (DESIGN.md's comparison thesis — still the point of the exercise).
-  *(Halved by ADR-0010: payloads are already N-language by construction;
-  what remains to port is the core spec itself — shim/daemon/dispatch.)*
+- ~~**11. N-runtime harness**~~ — **dropped 2026-07-19** (owner decision):
+  staying .NET-only for the core. ADR-0010 already made payloads N-language
+  by construction — user processes in any language — which satisfies the
+  polyglot story without porting the shim/daemon/dispatch core. DESIGN.md's
+  comparison thesis is retired as a build goal.
 
 ## Parking lot
 
@@ -1024,21 +1026,13 @@ run live*. The framework underneath is what exists today.
 - **Packaging** — single-file publish for the JIT engine (the shim's
   Native AOT half promoted to item 12).
 
-## GUI direction (current leaning — becomes an ADR when work starts)
+## GUI direction (updated 2026-07-19: browser-only decided)
 
-**One API, three faces, in this order:**
-
-1. **Browser UI first.** The runtime becomes a daemon anyway (item 4); serving
-   localhost HTML/JS reuses web skills we already have, needs zero packaging,
-   and is first-class from WSL2 (Windows browser → localhost), where desktop
-   GUI apps under WSLg are second-class.
-2. **Photino when a desktop feel is wanted.** Same web assets in a native
-   window with the .NET runtime *in-process* — UI to actors is a method call.
-   Tauri's host is Rust, which would force the .NET runtime into a sidecar
-   process behind an IPC boundary — at which point plain localhost-in-browser
-   already does the same job with less machinery. Tauri is right when the
-   core is Rust; ours is .NET.
-3. **TUI as the dev-loop instrument** (item 8), driving the same API.
+**One API; the browser UI is THE face** (item 6, shipped). The desktop-shell
+face (Photino) was dropped with item 7 — localhost-in-browser is first-class
+from WSL2 and already does the job with less machinery. The TUI (item 8)
+remains a possible second face against the same API, for product reasons
+only — the feedback pyramid stays API assertions → Playwright.
 
 The structured log stream (JSONL + correlation ids) is the GUI's live data
 feed — the observability layer was built GUI-ready before the GUI existed.
