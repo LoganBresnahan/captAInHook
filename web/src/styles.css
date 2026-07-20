@@ -133,3 +133,38 @@ td { padding: 4px 8px 4px 0; font-family: var(--mono); border-top: 1px solid var
 .trace-divider { text-align: center; color: var(--muted); font-style: italic; }
 .trace-divider.reset { color: var(--bad); }
 .trace-empty { color: var(--muted); }
+
+/* ---- handlers editor (ADR-0011: install/edit/toggle + verbatim confirm) ---- */
+[data-editor="handlers"] button {
+  font: inherit; cursor: pointer; background: var(--chip); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
+}
+[data-editor="handlers"] button:disabled { opacity: 0.6; cursor: default; }
+[data-editor="handlers"] tr[data-enabled-state="disabled"] td { opacity: 0.55; }
+.entry-form { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 10px; }
+.entry-form h4 { margin: 0 0 8px; }
+.entry-form label { display: block; margin: 6px 0; font-size: 13px; }
+.entry-form input, .entry-form textarea, .entry-form select {
+  font: inherit; font-family: var(--mono); font-size: 12px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px;
+  width: 100%; max-width: 480px; box-sizing: border-box; display: block; margin-top: 2px;
+}
+.entry-form fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 6px 0; }
+.entry-form .event-check { display: inline-block; margin-right: 12px; }
+.entry-form .event-check input { display: inline; width: auto; }
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 40;
+}
+.modal {
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px 18px; max-width: 640px; max-height: 80vh; overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.modal h4 { margin: 0 0 8px; }
+.verbatim { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 8px 0; font-size: 13px; }
+.verbatim dt { color: var(--muted); }
+.verbatim dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.modal pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow-x: auto; font-size: 12px; }

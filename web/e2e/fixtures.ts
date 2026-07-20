@@ -1,5 +1,5 @@
 import { test as base } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, openSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,10 +25,19 @@ export type Daemon = {
   trailPath: string;
   /** The isolated dispatch policy path; PUT /policy edits THIS, never the live one. */
   dispatchPath: string;
+  /** The isolated handlers.json path; the editor's PUT /handlers edits THIS,
+   * never the live one (ADR-0011 — the fixture gap was read-only harmless
+   * before the write verb existed, and load-bearing after). */
+  handlersPath: string;
   /** Read the current trail bytes (for assertions about what was written). */
   readTrail: () => string;
   /** Append one JSONL trail line the live trace will ingest. */
   appendTrail: (obj: unknown) => void;
+  /** Fire one real hook through the daemon (the engine's shim mode inside the
+   * SAME sandbox env), returning its stdout. What drives the per-dispatch
+   * stat-gate — an API handlers write reconciles on the NEXT hook, and this
+   * is how a spec makes "next hook" happen. */
+  fireHook: (event: string) => string;
 };
 
 function freePort(): Promise<number> {
@@ -49,10 +58,22 @@ export const test = base.extend<{ daemon: Daemon }>({
     const runtimeDir = join(sandbox, "runtime");
     const trailPath = join(sandbox, "trail.jsonl");
     const dispatchPath = join(sandbox, "dispatch.json");
+    const handlersPath = join(sandbox, "handlers.json");
     writeFileSync(trailPath, "");   // exists-but-empty: the tail starts clean
 
     const port = await freePort();
     const engine = process.platform === "win32" ? "captainHook.exe" : "captainHook";
+    // One env for the daemon AND for fireHook's shim-mode runs — the shim must
+    // rendezvous inside the SAME sandbox (socket via XDG_RUNTIME_DIR; identity
+    // matches because both run the same engineBin build).
+    const sandboxEnv = {
+      ...process.env,
+      XDG_RUNTIME_DIR: runtimeDir,
+      CAPTAINHOOK_LOG: trailPath,
+      CAPTAINHOOK_HARNESS_DIR: join(sandbox, "no-harness"),
+      CAPTAINHOOK_DISPATCH_FILE: dispatchPath,
+      CAPTAINHOOK_HANDLERS_FILE: handlersPath,
+    };
     // Capture the daemon's own stderr so a startup failure is diagnosable, not
     // a blind "api.json never appeared". Stderr is chatty in a dev run; the
     // trail file (CAPTAINHOOK_LOG) is the real record.
@@ -60,11 +81,7 @@ export const test = base.extend<{ daemon: Daemon }>({
     const logFd = openSync(daemonLog, "a");
     const proc: ChildProcess = spawn(join(engineBin, engine), ["--daemon"], {
       env: {
-        ...process.env,
-        XDG_RUNTIME_DIR: runtimeDir,
-        CAPTAINHOOK_LOG: trailPath,
-        CAPTAINHOOK_HARNESS_DIR: join(sandbox, "no-harness"),
-        CAPTAINHOOK_DISPATCH_FILE: dispatchPath,
+        ...sandboxEnv,
         CAPTAINHOOK_API_PORT: String(port),
         CAPTAINHOOK_IDLE_MS: "600000",   // out-live the test; teardown kills it
         CAPTAINHOOK_LOG_STDERR: "on",    // to daemon.err, for diagnosis on a stall
@@ -122,8 +139,13 @@ export const test = base.extend<{ daemon: Daemon }>({
         url: `http://127.0.0.1:${apiPort}/ui#t=${token}`,
         trailPath,
         dispatchPath,
+        handlersPath,
         readTrail: () => { try { return readFileSync(trailPath, "utf8"); } catch { return ""; } },
         appendTrail: (obj) => writeFileSync(trailPath, JSON.stringify(obj) + "\n", { flag: "a" }),
+        fireHook: (event) =>
+          execFileSync(join(engineBin, engine), ["hook", event], {
+            env: sandboxEnv, input: "{}", encoding: "utf8", timeout: 15_000,
+          }),
       });
     } finally {
       // WAIT for the daemon to actually exit before the next test — a fixed

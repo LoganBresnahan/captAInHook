@@ -1049,6 +1049,36 @@ run live*. The framework underneath is what exists today.
   inherited-by-design edges (in-string UTF-8 refusal direction, 1 MiB cap,
   symlink flattening) recorded in the flow doc, not defended. Suite 624
   green twice.)
+  `gui-handlers-editor` + `gui-verbatim-confirm` + `gui-enable-disable` +
+  `gui-wiring-hint` (2026-07-19, the GUI batch — phase 8's read-only
+  handlers.json section grown into the install surface (`HandlersSection`):
+  install/edit/uninstall as whole-file read-modify-write over GET+ETag /
+  PUT+If-Match, every write behind the d2 verbatim-and-resolved confirm
+  (exact command/args/events/mode/fail/budget/cwd/env/passEnv + the entry
+  JSON; "resolved" = the GUI mandates absolute command paths, hand edits
+  stay free); a valid-but-unreconciled entry renders "pending (live on the
+  next hook)" — honest to the stat-gate, distinct from skipped; the d4
+  toggle composes a PREPENDED unconditional handler-deny through the
+  existing PUT /policy (enable removes only toggle-shaped denies — off→on
+  is IDENTITY on hand policy); the d5 wiring hint renders the install
+  template per event ({captainShim} → /status shimPath), shown never
+  written. **Adversarial verify (the plan's third mandated pass) —
+  the 412 INVERSION HELD under attack** (no lost-update sequence
+  constructible: conflict verdict structurally tagless, etag/raw travel as
+  one consistent pair, render-time closures can't pair stale raw with fresh
+  etag); five ancillary findings all fixed + pinned: render-crash on
+  daemon-tolerated config shapes (rules:[null], handlers:[null] — defensive
+  parse), badge-vs-daemon divergence (first-match now includes scoped rules
+  ⇒ "scoped", never a wrong-direction "disabled"), malformed-policy badge
+  (— not on/off), destructive toggle round-trip (hand-written allow now
+  kept inert behind the prepended deny), and the two-read tear gate
+  (composable requires raw to parse — a GUI write never drops entries it
+  couldn't render). e2e: fixtures gain an isolated CAPTAINHOOK_HANDLERS_FILE
+  (a latent read-only gap made load-bearing by the write verb) + `fireHook`
+  (the engine's shim mode inside the sandbox); 4 Playwright tests incl. the
+  full loop (install → confirm → real hook runs the payload → registered)
+  and 412-stops-nothing-clobbered. 51 web unit tests; 14 e2e; committed
+  ui/ rebuilt.)
 - ~~**11. N-runtime harness**~~ — **dropped 2026-07-19** (owner decision):
   staying .NET-only for the core. ADR-0010 already made payloads N-language
   by construction — user processes in any language — which satisfies the

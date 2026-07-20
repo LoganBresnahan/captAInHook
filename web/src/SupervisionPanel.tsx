@@ -1,6 +1,7 @@
 import { useStore } from "./store.ts";
 import { useApiJson } from "./api.ts";
 import type { HandlersDto } from "./api.gen.ts";
+import { HandlersSection } from "./HandlersEditor.tsx";
 
 // The Supervision island (ADR-0008 d1; ADR-0010 d8): every registered handler
 // with its fail mode, live supervision state (generation = restart count, dead
@@ -52,7 +53,10 @@ export function SupervisionPanel() {
       )}
 
       <h3>handlers.json</h3>
-      <ExpectedView dto={handlers} />
+      {/* Phase 8's read view, grown into ADR-0011's editor — the expected
+          table now carries install/edit/uninstall + the enable toggle, every
+          write behind the verbatim confirm. */}
+      <HandlersSection dto={handlers} />
     </section>
   );
 }
@@ -61,48 +65,4 @@ function childClass(state: string | null): string {
   if (state === "ready") return "ok";
   if (state === "failed") return "bad";
   return "muted"; // spawning, or no resident child
-}
-
-function ExpectedView({ dto }: { dto: HandlersDto }) {
-  if (dto.source === "absent") {
-    return (
-      <p className="muted" data-file-state="absent">
-        No handlers file — zero exec handlers ({dto.path ?? "default path"}).
-      </p>
-    );
-  }
-  if (dto.source === "malformed") {
-    return (
-      <p className="bad" data-file-state="malformed">
-        Malformed handlers file — zero exec handlers. <code>{dto.error}</code>
-      </p>
-    );
-  }
-  return (
-    <div data-file-state="loaded">
-      {dto.expected.length === 0 ? (
-        <p className="muted">Loaded — no entries.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr><th>entry</th><th>events</th><th>mode</th><th>fail</th><th>registered</th></tr>
-          </thead>
-          <tbody>
-            {dto.expected.map((e, i) => (
-              <tr key={`${e.name}/${i}`} data-expected={e.name} data-registered={e.registered}>
-                <td>{e.name}</td>
-                <td>{e.events.join(", ")}</td>
-                <td>{e.mode ?? "—"}</td>
-                <td>{e.failMode ?? "—"}</td>
-                <td className={e.registered ? "ok" : "bad"}>
-                  {e.registered ? "registered" : "skipped"}
-                  {e.skipReason ? <span className="muted"> — {e.skipReason}</span> : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
 }
