@@ -7,9 +7,11 @@ re-audit checklist when a fact changes or a new OS becomes a target. Each entry
 names what leans on it, so nothing here is trivia.
 
 Verification status: **Linux/WSL2 is the lived-in target** — facts there are
-exercised by the test suite or observed live. macOS and Windows entries are
-researched, not yet exercised; treat them as design inputs, and promote them to
-verified the day a real run touches them.
+exercised by the test suite or observed live. **macOS is a committed target**
+(ADR-0012) pending the `/proc`→`sysctl` port; its entries are researched, not
+yet exercised — promote them to verified the day a real run touches them.
+**Windows-native is out of scope** (ADR-0012): WSL2 is the Windows path.
+Windows entries below are kept as WSL2/AF_UNIX context, not a portability goal.
 
 ## Unix domain sockets
 
@@ -95,4 +97,4 @@ own mechanics live in [flow/management-api.md](flow/management-api.md):
 | `XDG_RUNTIME_DIR` | ✓ set | ✗ → fallback | ✗ → fallback |
 | Fallback `~/.captainHook` short enough | ✓ (guard covers container/network homes) | ✓ | ✓ |
 | Lock/unlink rendezvous as designed | ✓ | ✓ (POSIX) | ✗ — needs own audit |
-| Status | **target** | should-work | parked |
+| Status (ADR-0012) | **lived-in target** | **committed target** — pending `/proc`→`sysctl` port | **out of scope** (WSL2 is the path) |

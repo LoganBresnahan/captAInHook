@@ -11,6 +11,18 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
+- [ ] **16. Distribution & macOS** — ship a runtime-free single binary and add
+  the second target. Per **ADR-0012** (accepted 2026-07-20): target Linux +
+  macOS (Windows-native out of scope, WSL2 is the path); the engine goes
+  self-contained single-file so no host .NET runtime is needed (the shim is
+  already Native AOT); port the two `/proc` identity sites
+  (`ChildRecords.ProcStartTime`, `Doctor`'s daemon pid-reuse cmdline/starttime)
+  to a `sysctl(KERN_PROC)` branch so the safety guard holds on macOS — the kill
+  path (`setsid`+`kill(-pgid)`) is already POSIX; all containerization deferred.
+  Build order: ADR-0012 § Implementation plan (single-file publish + determinism
+  re-verify → `/proc`→`sysctl` port + test → platform.md flip). Small, not
+  `/adr-plan`-decomposed.
+
 - [x] **1. Converge the C# dispatcher and F# actor layer** — handlers become
   supervised actors: dispatch = `Ask` with the latency budget as the ask
   timeout; fail-open/fail-closed maps onto supervision (fail-open ≈ restart +
