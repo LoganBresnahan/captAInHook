@@ -174,6 +174,47 @@ save-twice with no reload 200s twice). Pinned by `policy.test.ts` and the
 `ReloadingPolicy`'s stat-gate, exactly as a hand-edit — so editing policy in the
 GUI surfaces a `policy.reload` in the very trace beside it.
 
+## The handlers editor — install behind the verbatim confirm (ADR-0011)
+
+The Supervision island's handlers.json section (`HandlersSection` in
+`HandlersEditor.tsx`) grew from phase 8's read view into the install surface:
+install / edit / uninstall as a **whole-file read-modify-write** over
+`GET /handlers`+ETag / `PUT /handlers`+If-Match (`submitHandlers` in
+`handlers.ts`), every write gated by the **verbatim-and-resolved confirm**
+(d2 — the modal renders the exact command, args, events, mode, fail mode,
+budget, cwd, env/passEnv, plus the exact entry JSON; the GUI mandates an
+ABSOLUTE command path so "resolved" needs no server round-trip). The daemon's
+verdicts are surfaced, never guessed: a 422 (including d3's skip-refusal)
+lists the parser's own violations inside the modal.
+
+**The 412 discipline INVERTS the policy editor's pin 3** — the phase's named
+sharp edge. A raw-text editor may adopt `current` and retry (overwriting a
+SEEN conflict on text the user is looking at); a composed read-modify-write
+doing that silently clobbers the other editor's entries — the classic lost
+update, because the compose was built over a stale file. So `submitHandlers`
+maps a 412 to a tagless `conflict` verdict (blind retry is unrepresentable),
+and the panel STOPS: the stale compose is discarded, the file re-fetched, the
+user's draft form preserved for re-review over what is actually there. A
+valid-but-not-yet-reconciled entry renders as **pending (live on the next
+hook)** — registration rides the per-dispatch stat-gate, and the row says so
+instead of reading like a fault.
+
+**Enable/disable is composed from shipped layers** (d4): the toggle writes an
+UNCONDITIONAL handler-level deny into dispatch.json through the existing
+`PUT /policy` — PREPENDED, so first-match-wins can't be defeated by a later
+hand-written allow; enable removes exactly those toggle-shaped denies and
+nothing else. Scoped rules (event/project/session) render a "scoped" badge —
+no clean off-switch is pretended. Each toggle GETs policy fresh (raw+etag),
+composes, and PUTs conditionally; a 412 is surfaced and re-tried by the user.
+The toggle never composes over a malformed or unparsable policy.
+
+**The wiring hint is shown, never written** (d5): the confirm modal renders,
+per selected event, the harness install template (`{captainShim}` → /status's
+resolved `shimPath`, else the deploy-home fallback; `{event-kebab}` →
+kebab-cased event) as the line to hand-paste into settings.json. The GUI
+cannot know whether an event is already wired (N3) — the hint states the
+requirement, not a diagnosis.
+
 ## Types are generated from the C# DTOs — drift is a build failure (d6)
 
 The server is a dumb `HttpListener` (no ASP.NET, so no OpenAPI), so the pipeline
@@ -224,13 +265,15 @@ residual all-cores-pegged transient.
 | the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `SseFrame`, `PolicyVerdict`, `TRACE_CAP`) |
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`) |
 | policy write client (ETag lifecycle) | `web/src/policy.ts` (`submitPolicy`) |
+| handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
+| handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal`, `VerbatimEntry`, `WiringHints`) |
 | shared read hook (fetch-on-live, 401⇒session-dead) | `web/src/api.ts` (`useApiJson`) |
 | pure display logic | `web/src/format.ts` (`dispatchHue`, `uptime`, `clockTime`, `traceMatches`) |
 | islands + mount table | `web/src/{App,StatusPanel,SupervisionPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx`, `main.tsx` |
 | DTO→schema→TS codegen | `web/scripts/gen-types.mjs`, `web/schema/api.schema.json`, `web/src/api.gen.ts` |
 | deploy staging (third artifact) | `.claude/skills/deploy/SKILL.md` (§1 `cp -r ui`, §3 `/ui` shell check) |
 | engine-side pins | `ApiUiRouteHttpTests`, `UiResolveGuardTests`, `UiShellGateTests` (route + guard + inert shell), `ApiSchemaTests` (codegen drift), `UiVerbTests` (verb + fragment + shim refusal) — `dotnet/captainHookTests/{ApiUiRouteTests,ApiSchemaTests,UiVerbTests}.cs` |
-| frontend unit pins | `web/src/{store,sse,policy,format}.test.ts` (`node --test`, zero deps) |
-| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts`, `web/e2e/{shell,session,panels,trace,policy}.spec.ts` |
-| decision record | `doc/adr/0008-management-gui.md`; the SSE resume-cursor contract `doc/adr/0009-trail-rotation.md` |
+| frontend unit pins | `web/src/{store,sse,policy,format,handlers}.test.ts` (`node --test`, zero deps) |
+| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (isolated handlers.json + `fireHook`), `web/e2e/{shell,session,panels,trace,policy,handlers}.spec.ts` |
+| decision record | `doc/adr/0008-management-gui.md`; the SSE resume-cursor contract `doc/adr/0009-trail-rotation.md`; the handlers editor + trust surface `doc/adr/0011-hook-trust-model.md` |
 | the API this is a client of | [management-api.md](management-api.md) · the policy it edits | [dispatch-policy.md](dispatch-policy.md) · the dispatch it observes | [hook-dispatch.md](hook-dispatch.md) |

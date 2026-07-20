@@ -1001,7 +1001,7 @@ run live*. The framework underneath is what exists today.
   N2's process isolation as the backstop. The old `HandlerContext`-hands-out-
   capabilities principle survives only for first-party *in-process* handlers,
   if an egress-bearing one ever exists.
-- [ ] **10. Hook trust model** — installing a hook = installing arbitrary code
+- [x] **10. Hook trust model** — installing a hook = installing arbitrary code
   that runs on every prompt. The install UX must show exactly what will
   execute, from where, before touching settings. **Rides WITH items 5–6**
   (the install operations and install UX are its only real surface), not a
@@ -1079,6 +1079,14 @@ run live*. The framework underneath is what exists today.
   full loop (install → confirm → real hook runs the payload → registered)
   and 412-stops-nothing-clobbered. 51 web unit tests; 14 e2e; committed
   ui/ rebuilt.)
+  `docs-update` (2026-07-19, the capstone — terminal by construction:
+  management-api.md § The writes (both writers, the d3 strictness split,
+  the three accepted LOW edges), management-gui.md § The handlers editor
+  (the 412 inversion, the toggle compose, the wiring hint), ADR-0011's
+  Ground truth back-filled as a decision→code index. **Item 10 complete —
+  ADR-0011 fully landed: all 10 slices, 5 phases; installing a payload is
+  a consented, verbatim-shown, atomically-written, hot-reloaded act on
+  both API and GUI, and the trust boundary is a written document.**)
 - ~~**11. N-runtime harness**~~ — **dropped 2026-07-19** (owner decision):
   staying .NET-only for the core. ADR-0010 already made payloads N-language
   by construction — user processes in any language — which satisfies the

@@ -206,4 +206,17 @@ endpoint commit — never left half-specified between commits).*
 
 ## Ground truth
 
-*Back-filled at the capstone, per house pattern (ADR-0008 precedent).*
+*Back-filled 2026-07-19 at the capstone (ADR-0008 precedent) — decision → code.*
+
+| decision | lives in |
+|---|---|
+| d1 same-user boundary | This document + [management-api.md](../flow/management-api.md) § Auth (the token-proves-file-access reduction) — deliberately no new code |
+| d2 verbatim-and-resolved confirm | `web/src/HandlersEditor.tsx` (`ConfirmModal`, `VerbatimEntry`); "resolved" = the absolute-path mandate in `web/src/handlers.ts` `formProblems` |
+| d3 `PUT /api/v1/handlers` | `dotnet/captainHook/Api/ApiHandlersWriter.cs` (+ `HandlersWriteOutcome`), routed in `ApiHost.ServeHandlersPutAsync`, wired in `DaemonHost`; skip-refusal pinned by the contrast test in `ApiHandlersWriteTests` |
+| d3 ETag chain | `HandlersDto.Raw/Etag` (`ApiDtos.cs`, `ApiReadModel.Handlers`), `GET /handlers` ETag header; client discipline + the 412 INVERSION in `web/src/handlers.ts` (`submitHandlers` → tagless `conflict`) |
+| d4 enable/disable from shipped layers | `web/src/handlers.ts` (`togglePolicyText` prepend-deny, `disabledState` incl. "scoped"), zero engine change |
+| d5 wiring hint shown-not-written | `web/src/handlers.ts` (`wiringHint`, `kebab`), `StatusDto.ShimPath` (`ApiReadModel.ResolveShimPath`), the corrected `{captainShim}` template in `harnesses/claude-code.json` (spec-pinned, N4) |
+| d6 write-authz as-is | No code — the existing `ApiAuthGate` covers the new verb by construction (pinned: 401-without-token test) |
+| d7 sandboxing/provenance un-triggered | No code; the trigger text in this document |
+| tests | `ApiHandlersWriteTests` (17: mapping, atomicity interleave, both-directions next-dispatch daemon E2E), `HarnessTests` install-template pin, `web/src/handlers.test.ts` (unit), `web/e2e/handlers.spec.ts` (4 E2E: install-confirm-wiring-register, 422-in-modal, 412-stops-nothing-clobbered, uninstall+toggle) |
+| flow docs | [management-api.md](../flow/management-api.md) § The writes; [management-gui.md](../flow/management-gui.md) § The handlers editor |
