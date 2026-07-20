@@ -149,6 +149,12 @@ public static class DaemonHost
         // writer => PUT /policy 404s, exactly as the reads report "absent".
         var policyWriter = policyPath is not null ? new ApiPolicyWriter(policyPath) : null;
 
+        // Same seam for the handlers file (ADR-0011 d3): the writer edits the
+        // SAME handlersPath the read model reports and ReloadingHandlers
+        // stat-gates, so a PUT reconciles warm children on the next dispatch
+        // exactly as a hand edit does. Null path => PUT /handlers 404s.
+        var handlersWriter = handlersPath is not null ? new ApiHandlersWriter(handlersPath) : null;
+
         // The SSE feed tails the SAME trail file both emitters append (ADR-0007
         // decision 5): CAPTAINHOOK_LOG or the default, resolved here at daemon
         // start like the rest of the environment. `sse` is the test seam (the
@@ -163,7 +169,8 @@ public static class DaemonHost
                 // The GUI shell (ADR-0008 d2): serve the ui/ dir staged beside
                 // the executables by /deploy — absent (no GUI shipped yet) every
                 // /ui request 404s through the shell gate, nothing else changes.
-                uiDir: uiDir ?? Path.Combine(AppContext.BaseDirectory, "ui"))
+                uiDir: uiDir ?? Path.Combine(AppContext.BaseDirectory, "ui"),
+                handlersWriter: handlersWriter)
             : null;
         superseded ??= MakeSupersededProbe();
 

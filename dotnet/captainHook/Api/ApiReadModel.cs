@@ -50,7 +50,18 @@ public sealed class ApiReadModel
         Active: _stats.Active,
         Served: _stats.Served,
         BackgroundPending: _dispatcher.BackgroundPending,
-        OpenStreams: openStreams);
+        OpenStreams: openStreams,
+        ShimPath: ResolveShimPath());
+
+    // The co-located native shim, if this deploy dir carries one — the wiring
+    // hint's {captainShim} substitution (ADR-0011 d5). Resolved at read time
+    // from the SAME BaseDirectory the daemon's identity is keyed to, so the
+    // hint always names the executable a hand-paste would actually run.
+    private static string? ResolveShimPath()
+    {
+        var p = System.IO.Path.Combine(AppContext.BaseDirectory, "captainShim");
+        return File.Exists(p) ? p : null;
+    }
 
     public HandlersDto Handlers()
     {
@@ -94,7 +105,24 @@ public sealed class ApiReadModel
             _ => ("absent", (string?)null, new List<ExpectedHandlerDto>()),
         };
 
-        return new HandlersDto(registered, source, error, _handlersPath, expected);
+        // raw+etag mirror Policy(): a separate best-effort read so PUT /handlers
+        // has an If-Match token (ADR-0011 d3). The two reads can race an edit —
+        // benign for a GET, the next one converges.
+        string? raw = null, etag = null;
+        if (_handlersPath is not null)
+        {
+            try
+            {
+                if (File.Exists(_handlersPath))
+                {
+                    raw = File.ReadAllText(_handlersPath);
+                    etag = Etag(raw);
+                }
+            }
+            catch { /* unreadable: raw/etag stay null; `source` already reflects malformed */ }
+        }
+
+        return new HandlersDto(registered, source, error, _handlersPath, expected, raw, etag);
     }
 
     public HarnessesDto Harnesses()

@@ -68,6 +68,21 @@ public class HarnessRegistryTests
     }
 
     [Fact]
+    public void EmbeddedClaudeCodeSpec_InstallTemplate_NamesTheShim()
+    {
+        // ADR-0011 N4: the install template is load-bearing the moment the GUI
+        // renders it as the wiring hint users hand-paste into their live
+        // settings.json. It must name the deployed hook command — the native
+        // shim (item 12) — never the ancient `{dotnet} {captainHookDll}` form
+        // this pin was added to bury.
+        var spec = HarnessTestUtil.EmbeddedOnlyRegistry().Get("claude-code");
+        var entry = spec.Install.GetProperty("entry");
+        Assert.Equal("command", entry.GetProperty("type").GetString());
+        Assert.Equal("{captainShim} hook {event-kebab}", entry.GetProperty("command").GetString());
+        Assert.Equal("~/.claude/settings.json", spec.Install.GetProperty("configFile").GetString());
+    }
+
+    [Fact]
     public void UnknownName_Throws_NamingItAndListingKnownHarnesses()
     {
         var ex = Assert.Throws<InvalidOperationException>(

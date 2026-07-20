@@ -10,6 +10,7 @@ export interface StatusDto {
   served: number;
   backgroundPending: number;
   openStreams: number;
+  shimPath: string | null;
 }
 
 export interface PolicyDto {
@@ -67,6 +68,8 @@ export interface HandlersDto {
     registered: boolean;
     skipReason: string | null;
   }[];
+  raw: string | null;
+  etag: string | null;
 }
 
 export interface ApiDiscovery {

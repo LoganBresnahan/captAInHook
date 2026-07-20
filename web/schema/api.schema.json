@@ -26,6 +26,12 @@
         },
         "openStreams": {
           "type": "integer"
+        },
+        "shimPath": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -35,7 +41,8 @@
         "active",
         "served",
         "backgroundPending",
-        "openStreams"
+        "openStreams",
+        "shimPath"
       ]
     },
     "PolicyDto": {
@@ -300,6 +307,18 @@
               "skipReason"
             ]
           }
+        },
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "etag": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -307,7 +326,9 @@
         "source",
         "error",
         "path",
-        "expected"
+        "expected",
+        "raw",
+        "etag"
       ]
     },
     "ApiDiscovery": {

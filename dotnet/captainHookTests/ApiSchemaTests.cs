@@ -41,12 +41,19 @@ public class ApiSchemaTests
     public void Schema_IsHonestAboutNullability()
     {
         // PolicyDto's tri-state fields are genuinely nullable (string? Error);
-        // StatusDto's version is not. The generated TS leans on this.
+        // StatusDto's serve counters are not — its ONE nullable is shimPath
+        // (ADR-0011 d5: null when no shim is co-located). The generated TS
+        // leans on this.
         var schema = ApiSchema.Export();
         Assert.Contains("\"null\"", schema);            // some nullable exists
         var start = schema.IndexOf("\"StatusDto\"", StringComparison.Ordinal);
         var end = schema.IndexOf("\"PolicyDto\"", StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start, "defs out of order");
-        Assert.DoesNotContain("\"null\"", schema[start..end]);   // StatusDto: all required, none nullable
+        var statusSlice = schema[start..end];
+        Assert.Contains("\"shimPath\"", statusSlice);   // the nullable is present…
+        var beforeShim = statusSlice[..statusSlice.IndexOf("\"shimPath\"", StringComparison.Ordinal)];
+        Assert.DoesNotContain("\"null\"", beforeShim);  // …and it is the ONLY one
+        Assert.Equal(statusSlice.IndexOf("\"null\"", StringComparison.Ordinal),
+                     statusSlice.LastIndexOf("\"null\"", StringComparison.Ordinal));
     }
 }

@@ -20,7 +20,7 @@
     "hooksPath": "hooks.{event}",
     "entry": {
       "type": "command",
-      "command": "{dotnet} {captainHookDll} hook {event-kebab}"
+      "command": "{captainShim} hook {event-kebab}"
     }
   }
 }

@@ -147,37 +147,58 @@ from the file), never a growing daemon and never a silent disconnect.
 | file absent / vanishes mid-read | quiet — an empty poll, retried; never an exception out of the tailer |
 | CRLF | trimmed; `\r\n` and `\n` behave identically |
 
-## The write — PUT /policy, editor of the file
+## The writes — PUT /policy and PUT /handlers, editors of the files
 
-`ApiPolicyWriter` validates the body with the daemon's OWN strict
-`DispatchPolicy.TryParse` (**refuse to write what the daemon would refuse to
-load**), honors `If-Match` when supplied (the content-hash ETag `GET /policy`
-returns), and installs **atomically — temp+rename in the target's OWN
-directory** so a concurrent hook stat-gating the file sees the old whole file or
-the new whole file, never a torn/absent seam (`GetTempFileName()`+`Move` would
-ship a cross-device, non-atomic write that transiently Noops every hook and
-passes green single-threaded tests). It becomes effective on the next dispatch
-via `ReloadingPolicy`'s `(mtime,size)` stat-gate, exactly as a hand-edit does —
-no parallel store, no API-held config. See [dispatch-policy.md](dispatch-policy.md)
-for what the policy then governs.
+Two write verbs, one discipline. `ApiPolicyWriter` (ADR-0007 d4) and
+`ApiHandlersWriter` (ADR-0011 d3) each validate the body with the daemon's OWN
+strict parser (**refuse to write what the daemon would refuse to load** —
+`DispatchPolicy.TryParse` / `ExecHandlersFile.TryParse`), honor `If-Match` when
+supplied (the content-hash ETag the matching GET returns — `GET /handlers`
+carries `raw`+`etag` since ADR-0011, mirroring `GET /policy`), and install
+**atomically — temp+rename in the target's OWN directory** so a concurrent hook
+stat-gating the file sees the old whole file or the new whole file, never a
+torn/absent seam (`GetTempFileName()`+`Move` would ship a cross-device,
+non-atomic write that transiently Noops every hook — or, for handlers, kills
+every resident child through a flashed Malformed — and passes green
+single-threaded tests). Each becomes effective on the next dispatch via its
+stat-gate (`ReloadingPolicy` / `ReloadingHandlers`), exactly as a hand-edit does
+— no parallel store, no API-held config. See
+[dispatch-policy.md](dispatch-policy.md) and [exec-handlers.md](exec-handlers.md)
+for what the files then govern.
 
-The closed `PolicyWriteOutcome` DU maps 1:1 to HTTP, so a new case can't silently
-fall through to a wrong status:
+**The handlers writer's one divergence** (ADR-0011 d3's tightening): the
+handlers parser is FILE-strict/ENTRY-lenient at registration (ADR-0010 d4 — a
+typo'd entry warns-and-skips), but the WRITE path refuses BOTH fault classes: a
+body whose parse yields any skipped entry is a 422 with the violations labeled
+per entry. The API must never *install* a known-broken entry; hand edits keep
+d4's tolerance — the split lives in the writer, not the parser, and is pinned
+by a contrast test (same bytes: writer refuses, `Resolve` loads-with-skips).
+
+The closed outcome DUs (`PolicyWriteOutcome` / `HandlersWriteOutcome`) map 1:1
+to HTTP, so a new case can't silently fall through to a wrong status:
 
 | outcome | HTTP | when |
 |---|---|---|
 | `Written(etag)` | **200** + `ETag` | installed; the tag we WROTE (authoritative for the next `If-Match`) |
-| `Invalid(errs)` | **422** | bad UTF-8, bad JSON, or a policy the daemon would refuse to load |
+| `Invalid(errs)` | **422** | bad UTF-8, bad JSON, content the daemon would refuse — or (handlers only) any warn-and-skip entry |
 | `Mismatch(cur)` | **412** | `If-Match` supplied and stale (or the file is gone) |
 | — (body cap) | **413** | body over 1 MiB, refused before any parse |
 | `Failed(msg)` | **500** | the write itself failed (permissions, disk) — the file is untouched |
 
 Concurrency is **guarded, not locked** (d4): `If-Match` narrows the blind-
 overwrite window but the etag-read and the rename are not one atomic step — two
-racing PUTs both pass and the later rename wins. The file is always a VALID whole
-policy, which is the invariant that matters to the hot path. A leading BOM is
-stripped so the writer and the daemon's loader agree (both `File.ReadAllText`-
-strip it), keeping the ETag round-trip exact.
+racing PUTs both pass and the later rename wins. The file is always a VALID
+whole document, which is the invariant that matters to the hot path. A leading
+BOM is stripped so the writers and the daemon's loaders agree (all
+`File.ReadAllText`-strip it), keeping the ETag round-trip exact.
+
+Three shared low-severity edges, probed by the 2026-07-19 adversarial pass and
+accepted by design (inherited verbatim from the proven policy writer): invalid
+UTF-8 *inside a string value* is refused by a writer though a hand-written file
+with the same bytes loads (U+FFFD substitution) — refusal-direction only; the
+1 MiB body cap refuses what a hand edit could create; and a PUT over a
+symlinked target replaces the LINK with a regular file (rename semantics),
+where a hand edit would follow it.
 
 ## Notes for the GUI (item 6)
 
@@ -202,15 +223,16 @@ strip it), keeping the ETag round-trip exact.
 | discovery file (0600 at birth, version-partitioned, `Write`/`TryRead`) | `dotnet/captainHook/Api/ApiDiscovery.cs` |
 | read projection over live Core objects | `dotnet/captainHook/Api/ApiReadModel.cs` (+ `Etag`) |
 | write path (validate → If-Match → atomic temp+rename), `PolicyWriteOutcome` DU | `dotnet/captainHook/Api/ApiPolicyWriter.cs` |
+| handlers write path (same shape + the d3 skip-refusal), `HandlersWriteOutcome` DU | `dotnet/captainHook/Api/ApiHandlersWriter.cs` |
 | SSE tailer (`TrailCursor`, `TrailSubscription`, `SseEvent`, backpressure) | `dotnet/captainHook/Api/TrailTail.cs` |
 | response DTOs (camelCase, reflection STJ) + `ApiJson.WriteAsync` | `dotnet/captainHook/Api/ApiDtos.cs`, `ApiJson.cs` |
 | daemon wiring (read model + writer + sse + `onRequest` idle stamp; supersession probe) | `dotnet/captainHook/Core/DaemonHost.cs` |
 | serve counters (Interlocked) | `dotnet/captainHook/Core/ServeStats.cs` |
 | port resolution (`4665`, `CAPTAINHOOK_API_PORT`, `0` disables) | `ApiHost.ResolvePort`, threaded via `Program.cs` |
 | discovery path | `RendezvousPaths.ApiJsonPath` (`captainHookWire/Rendezvous.cs`) |
-| endpoints | `GET /api/v1/{status,policy,harnesses,handlers,events}`, `PUT /api/v1/policy`, else 404 |
+| endpoints | `GET /api/v1/{status,policy,harnesses,handlers,events}`, `PUT /api/v1/{policy,handlers}`, else 404 |
 | log events | `api.listening`, `api.stopped`, `api.bindContended`, `api.bindBlocked`, `api.discoveryFailed`, `api.tailError`, `api.handlerError`, `api.loopCrashed`; `daemon.superseded` (src `api`/`daemon`) |
-| pinned by | `ApiHostTests`, `ApiHostInDaemonTests` (listener + hand-off + in-daemon); `ApiAuthGateTests`, `ApiAuthHttpTests` (auth, listener prefix-match); `ApiDiscoveryTests`, `ApiDiscoveryInDaemonTests` (0600, publish⟺holds-port); `ApiPortResolveTests`, `ApiRetryBindTests`, `ApiCutoverTests` (port singleton + two-daemon cutover); `ApiReadEndpointsTests` (read DTOs); `TrailCursorTests`, `TrailSubscriptionTests`, `SseBackpressureTests`, `SseIdleDeferTests`, `ApiSseHttpTests` (SSE edges, backpressure, idle-defer, wedged-Stop bound); `ApiPolicyWriteTests` (write mapping, atomicity probe, end-to-end deny-short-circuit) |
+| pinned by | `ApiHostTests`, `ApiHostInDaemonTests` (listener + hand-off + in-daemon); `ApiAuthGateTests`, `ApiAuthHttpTests` (auth, listener prefix-match); `ApiDiscoveryTests`, `ApiDiscoveryInDaemonTests` (0600, publish⟺holds-port); `ApiPortResolveTests`, `ApiRetryBindTests`, `ApiCutoverTests` (port singleton + two-daemon cutover); `ApiReadEndpointsTests` (read DTOs); `TrailCursorTests`, `TrailSubscriptionTests`, `SseBackpressureTests`, `SseIdleDeferTests`, `ApiSseHttpTests` (SSE edges, backpressure, idle-defer, wedged-Stop bound); `ApiPolicyWriteTests` (write mapping, atomicity probe, end-to-end deny-short-circuit); `ApiHandlersWriteTests` (handlers write mapping, d3 skip-refusal contrast, resolver-interleave atomicity, both-directions next-dispatch daemon E2E) |
 | platform facts | `doc/platform.md` § Loopback TCP & managed `HttpListener` (co-bind, SO_REUSEADDR/TIME_WAIT pairwise, teardown-blocks-behind-wedged-write, Host prefix-match); § Runtime directories (0600 token, mtime resolution) |
 | decision record | `doc/adr/0007-management-api.md` (d7 carries the 2026-07-08 supersession amendment) |
 | the policy this API edits | [dispatch-policy.md](dispatch-policy.md) · the dispatch it observes | [hook-dispatch.md](hook-dispatch.md) |

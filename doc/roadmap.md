@@ -1024,6 +1024,31 @@ run live*. The framework underneath is what exists today.
   gui-handlers-editor → gui-verbatim-confirm → docs-update; adversarial
   verify on exactly three slices — the write endpoint, its test pins, and
   the editor's 412 re-merge; no ultracode). Tick slices here as they land.
+  Slices landed: `handlers-put-endpoint` + `handlers-install-strictness` +
+  `handlers-etag-ifmatch` + `handlers-write-adversarial-tests` +
+  `install-template-fix` (2026-07-19, the server seam as one batch —
+  `ApiHandlersWriter` on ApiPolicyWriter's exact pattern (strict-parse with
+  the daemon's own ExecHandlersFile, RFC 7232 If-Match after validation,
+  sibling-temp same-dir rename, BOM parity) with its own closed
+  `HandlersWriteOutcome` DU; d3's tightening pinned by CONTRAST — the same
+  bytes the write path 422s (any warn-and-skip entry, violations labeled
+  per entry) load entry-lenient via Resolve, so the split can't silently
+  converge; `GET /handlers` gains raw/etag (HandlersDto + header) and
+  `StatusDto` gains the resolved `shimPath` for the wiring hint (decided
+  pre-pin per the plan's sequencing note); DaemonHost wires the writer from
+  the same handlersPath the read model and ReloadingHandlers share; the
+  stale `{dotnet} {captainHookDll}` install template → `{captainShim} hook
+  {event-kebab}` with a spec-pin test (N4). 17 tests incl. the
+  resolver-interleave atomicity probe (400 writes against the REAL
+  ExecHandlersFile.Resolve — never a non-Loaded flash) and the
+  both-directions daemon E2E (PUT-install → the NEXT dispatch runs the
+  child; PUT-uninstall with If-Match → gone), the plan's two named
+  vacuous-pass traps. Adversarially verified (skeptic, 21-case
+  writer-vs-loader matrix + ETag round-trip + If-Match grammar + stamp
+  collision probes): NOTHING above LOW survived; three LOW
+  inherited-by-design edges (in-string UTF-8 refusal direction, 1 MiB cap,
+  symlink flattening) recorded in the flow doc, not defended. Suite 624
+  green twice.)
 - ~~**11. N-runtime harness**~~ — **dropped 2026-07-19** (owner decision):
   staying .NET-only for the core. ADR-0010 already made payloads N-language
   by construction — user processes in any language — which satisfies the

@@ -10,9 +10,14 @@ namespace CaptainHook.Api;
 
 /// GET /status — who this daemon is and how busy it has been. OpenStreams is
 /// the live SSE subscription count (the idle-defer signal, ADR-0007 d7).
+/// ShimPath is THIS daemon's deploy dir's shim executable — the resolved
+/// command the GUI's wiring hint renders into the harness install template
+/// (ADR-0011 d5: shown, never written); null when no shim is co-located
+/// (dev runs of the bare engine).
 public sealed record StatusDto(
     string Version, int Pid, long UptimeMs,
-    int Active, long Served, int BackgroundPending, int OpenStreams);
+    int Active, long Served, int BackgroundPending, int OpenStreams,
+    string? ShimPath);
 
 /// GET /policy — the resolved dispatch-policy tri-state (ADR-0006 decision 4)
 /// plus the raw file and a content-hash ETag (the token put-policy-write's
@@ -45,10 +50,14 @@ public sealed record HarnessRequestDto(string EventNameField, string SessionIdFi
 /// A warn-and-skip entry appears in `Expected` with `Registered:false`, NEVER
 /// as a live `Handlers` row (the N2 caution: a skipped fail-closed gate must
 /// never read as live).
+/// `Raw`/`Etag` mirror PolicyDto: the file's current text and its content-hash
+/// tag (null when absent/unreadable) — the If-Match token PUT /handlers
+/// consumes (ADR-0011 d3).
 public sealed record HandlersDto(
     IReadOnlyList<HandlerDto> Handlers,
     string Source, string? Error, string? Path,
-    IReadOnlyList<ExpectedHandlerDto> Expected);
+    IReadOnlyList<ExpectedHandlerDto> Expected,
+    string? Raw, string? Etag);
 
 /// A live registered handler. `ChildState` ("spawning"|"ready"|"failed") and
 /// `ChildPid` are set only for a resident exec handler — null for oneshot and

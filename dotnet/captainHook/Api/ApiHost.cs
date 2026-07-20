@@ -65,6 +65,7 @@ public sealed class ApiHost : IDisposable
     private readonly ApiAuthGate _auth;                  // the pure Host/Origin/token decision
     private readonly ApiReadModel? _read;                // null => read endpoints 404 (no daemon behind us)
     private readonly ApiPolicyWriter? _writer;           // null => PUT /policy 404s (no writable path)
+    private readonly ApiHandlersWriter? _handlersWriter; // null => PUT /handlers 404s (no writable path)
     private readonly SseOptions? _sse;                   // null => /events 404s (no trail to tail)
     private readonly string? _uiDir;                     // null => /ui stays fully gated + 404s (no GUI staged)
     private readonly Action? _onRequest;                 // the daemon's idle-clock stamp (decision 7)
@@ -80,12 +81,13 @@ public sealed class ApiHost : IDisposable
 
     private ApiHost(
         int port, RendezvousPaths? rendezvous, ApiReadModel? readModel, ApiPolicyWriter? writer,
-        SseOptions? sse, Action? onRequest, string? uiDir)
+        SseOptions? sse, Action? onRequest, string? uiDir, ApiHandlersWriter? handlersWriter)
     {
         Port = port;
         _rendezvous = rendezvous;
         _read = readModel;
         _writer = writer;
+        _handlersWriter = handlersWriter;
         _sse = sse;
         _uiDir = uiDir;
         _onRequest = onRequest;
@@ -139,9 +141,9 @@ public sealed class ApiHost : IDisposable
     public static ApiHost Start(
         int port, RendezvousPaths? rendezvous = null, ApiReadModel? readModel = null,
         ApiPolicyWriter? writer = null, SseOptions? sse = null, Action? onRequest = null,
-        string? uiDir = null)
+        string? uiDir = null, ApiHandlersWriter? handlersWriter = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest, uiDir);
+        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest, uiDir, handlersWriter);
         if (host.TryBindOnce() is { } err) ExceptionDispatchInfo.Capture(err).Throw();
         _ = Task.Run(host.AcceptLoopAsync);
         return host;
@@ -158,9 +160,10 @@ public sealed class ApiHost : IDisposable
     public static ApiHost StartRetrying(
         int port, TimeSpan fastWindow, RendezvousPaths? rendezvous = null,
         ApiReadModel? readModel = null, ApiPolicyWriter? writer = null, SseOptions? sse = null,
-        Action? onRequest = null, TimeSpan? slowRetry = null, string? uiDir = null)
+        Action? onRequest = null, TimeSpan? slowRetry = null, string? uiDir = null,
+        ApiHandlersWriter? handlersWriter = null)
     {
-        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest, uiDir);
+        var host = new ApiHost(port, rendezvous, readModel, writer, sse, onRequest, uiDir, handlersWriter);
         if (host.TryBindOnce() is not { } err)
         {
             _ = Task.Run(host.AcceptLoopAsync);
@@ -394,6 +397,11 @@ public sealed class ApiHost : IDisposable
             await ServePolicyPutAsync(ctx);
             return;
         }
+        if (_handlersWriter is not null && ctx.Request.HttpMethod == "PUT" && path == "/api/v1/handlers")
+        {
+            await ServeHandlersPutAsync(ctx);
+            return;
+        }
         if (_read is not null && ctx.Request.HttpMethod == "GET")
         {
             switch (path)
@@ -405,7 +413,9 @@ public sealed class ApiHost : IDisposable
                     await ApiJson.WriteAsync(ctx.Response, 200, _read.Harnesses());
                     return;
                 case "/api/v1/handlers":
-                    await ApiJson.WriteAsync(ctx.Response, 200, _read.Handlers());
+                    var handlers = _read.Handlers();
+                    if (handlers.Etag is not null) ctx.Response.AddHeader("ETag", handlers.Etag);
+                    await ApiJson.WriteAsync(ctx.Response, 200, handlers);
                     return;
                 case "/api/v1/policy":
                     var policy = _read.Policy();
@@ -573,6 +583,60 @@ public sealed class ApiHost : IDisposable
                 // programming error, not a request one. Throw rather than fall
                 // through to a silent empty response (HandleAsync logs + aborts).
                 throw new InvalidOperationException("unhandled policy write outcome");
+        }
+    }
+
+    // PUT /api/v1/handlers (ADR-0011 decision 3): the API as editor of the
+    // handlers file — ServePolicyPutAsync's exact shell over ApiHandlersWriter
+    // (which carries d3's write-side strictness: any warn-and-skip entry is a
+    // 422 here, though a hand edit would register around it). Same body cap:
+    // a handlers file is KiB like a policy.
+    private async Task ServeHandlersPutAsync(HttpListenerContext ctx)
+    {
+        byte[]? body;
+        try { body = await ReadBodyAsync(ctx.Request, MaxPolicyBytes, _stop.Token); }
+        catch (OperationCanceledException)
+        {
+            // Draining while we read the body — routine cutover, file untouched;
+            // the client retries on the successor (mirrors ServePolicyPutAsync).
+            try { await ApiJson.WriteAsync(ctx.Response, 503, new { error = "draining" }); }
+            catch { /* peer/listener already gone */ }
+            return;
+        }
+        if (body is null)
+        {
+            await ApiJson.WriteAsync(ctx.Response, 413,
+                new { error = "payload_too_large", limit = MaxPolicyBytes });
+            return;
+        }
+
+        switch (_handlersWriter!.Write(body, ctx.Request.Headers["If-Match"]))
+        {
+            case HandlersWriteOutcome.Written w:
+                // The tag we WROTE is authoritative for the client's next If-Match.
+                ctx.Response.AddHeader("ETag", w.Etag);
+                // Echo the freshly-resolved handlers view so the GUI re-renders
+                // from one round-trip (mirrors GET /handlers; same benign
+                // concurrent-PUT caveat as the policy echo).
+                object echo = _read is not null ? _read.Handlers() : new { ok = true, etag = w.Etag };
+                await ApiJson.WriteAsync(ctx.Response, 200, echo);
+                return;
+            case HandlersWriteOutcome.Invalid inv:
+                await ApiJson.WriteAsync(ctx.Response, 422,
+                    new { error = "invalid_handlers", violations = inv.Violations });
+                return;
+            case HandlersWriteOutcome.Mismatch m:
+                if (m.Current is not null) ctx.Response.AddHeader("ETag", m.Current);
+                await ApiJson.WriteAsync(ctx.Response, 412,
+                    new { error = "etag_mismatch", current = m.Current });
+                return;
+            case HandlersWriteOutcome.Failed f:
+                await ApiJson.WriteAsync(ctx.Response, 500,
+                    new { error = "write_failed", detail = f.Message });
+                return;
+            default:
+                // Closed DU; a new case reaching here is a programming error.
+                throw new InvalidOperationException("unhandled handlers write outcome");
         }
     }
 
