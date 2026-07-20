@@ -97,6 +97,58 @@ vocabulary) rather than a flat feature list.
   hooks. Deterministic-inject is the safe opener; these two are where the
   "composition primitive" claim earns its keep.
 
+## Item 15 sandboxing — the container-runtime shape (2026-07-20 design chat)
+
+Non-authoritative sketch for when item 15 (handler egress / sandboxing) or the
+community registry firms up. The insight: **a container is just another way to
+spawn a wire-speaking child**, so most of this is *already available* and the
+"build" is small and deferred.
+
+- **Free today, zero framework code.** Payloads are processes speaking ExecWire
+  over stdin/stdout — and `docker run -i --rm <image>` is exactly that. A user
+  can put `"command": "/usr/bin/docker", "args": ["run","-i","--rm",
+  "--network=none","-v","/home/me/notes:/notes:ro","img"]` in `handlers.json`
+  NOW; captAInHook spawns it, pipes the envelope, reads the Effect, and never
+  knows a container is in the middle. The flags ARE the sandbox. Invariant 3
+  holds — we don't ship/require Docker, the user's command invokes it (same as
+  it invokes `bash`). Worth an `examples/payloads/` demo as the documented
+  "cage a payload" pattern.
+- **Why it beats per-OS seccomp/namespaces:** the container runtime already
+  solved multi-OS. One vocabulary (`--network`/`-v`/`--memory`/`--read-only`/
+  `--cap-drop`) means the same on every host it supports; captAInHook writes
+  NO platform-specific isolation code. This is the better answer than the
+  Linux-seccomp path ADR-0011's d7 trigger note gestures at.
+- **Three seams where it stops being free:**
+  1. *Resident wants to be the container.* `docker run` per oneshot re-adds the
+     cold-start tax item 12 killed; but `docker run -i` once + the lock-step
+     JSONL loop over its stdin/stdout for the daemon's life = the container IS
+     the warm child. Containerized ⇒ resident is the natural shape.
+  2. *Kill discipline differs.* Phase-5 `setsid`+`kill(-pgid)` assumes a host
+     process tree; a container's lifecycle is `docker stop` (reaps everything
+     inside — cleaner, but a DIFFERENT kill path the current ProcessGroup code
+     doesn't cover). See doc/flow/actor-supervision.md + ExecHandler kill code.
+  3. *Event cwd is a host path; the container has its own FS.* The set of
+     mounts is precisely the "what may this handler reach" declaration — item
+     15's egress question, rendered portable and OS-neutral.
+- **The design fork if we build it (needs an ADR):**
+  - *Dumb (ships today):* user writes the whole `docker run`; sandboxing is
+    their expression, we stay a spawner. House pattern at its limit — no
+    template language because there's no template.
+  - *Structured (item 15 scope):* `handlers.json` grows `sandbox:{image,
+    mounts,network,memory}`, a CLOSED set of coded runtime adapters
+    (docker/podman) render it — ADR-0003's declare-in-data/bind-in-code applied
+    to isolation. The GUI's verbatim confirm (ADR-0011 d2) then shows the
+    sandbox spec ("no network, ro ~/notes, 256MB") — a far more honest trust
+    surface than "runs as you." Earns its ADR only when the community registry
+    makes UNTRUSTED payloads real (a registry entry can't be trusted to write
+    its own docker flags — it must carry a declarative, auditable spec).
+- **Caveats, not overselling:** mounting the Docker socket / `--privileged` is
+  its own escape hatch (containerized ≠ safe; the flags must be right); a
+  container is heavyweight for the simple "deny network" case a 10-line seccomp
+  filter also solves. But as THE cross-platform answer that costs captAInHook
+  nothing and reuses the process-boundary-as-isolation-seam the design already
+  leans on, this is the shape item 15 should take.
+
 ## Security follow-ups
 
 - [ ] **Trail-at-rest hardening** (surfaced by ADR-0007 auth-token-origin's
