@@ -635,10 +635,11 @@ run live*. The framework underneath is what exists today.
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
   the planned ADR would have recorded — decided here instead.)
-- [ ] **8. TUI** — geex-style terminal UI against the same API, for product
-  reasons (SSH-side admin, terminal-native users) — not as the agent's
-  feedback instrument: the feedback pyramid is API assertions (bulk) →
-  Playwright over the web UI (visual) → TUI capture only to test the TUI.
+- ~~**8. TUI**~~ — **dropped 2026-07-20** (owner decision): staying
+  browser-only for the product's face. The web GUI is first-class on WSL2 and
+  answers the admin/observability need; a terminal UI earns nothing the
+  browser doesn't already give, and the feedback pyramid never needed it (API
+  assertions + Playwright over the web UI carry the agent-dev loop). No TUI.
 - [x] **9. Exec handlers — user processes as payloads** *(2026-07-12 reframe;
   was "Real handlers" — retriever/memory as framework code)*. The payload
   surface is the user's own process in any language: one coded `ExecHandler`
