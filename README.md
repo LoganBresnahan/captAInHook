@@ -104,7 +104,9 @@ hooks config) — each event you want worked points at the shim:
 From there: `~/.captainHook/bin/captainHook ui` opens the GUI (live traces,
 supervision, policy editor, and handler install); payloads register in
 `~/.captainHook/handlers.json` — by hand or through the GUI — and
-`examples/payloads/` has working retriever/memory scripts to start from.
+`examples/payloads/` has working scripts to start from (a resident
+retriever, a memory logger, and the two payloads dogfooded live on the
+maintainer's own hooks: a git-bearing injector and a deploy guard).
 
 **Nice-to-haves:**
 
