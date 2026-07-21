@@ -11,6 +11,25 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
+- [ ] **17. Dogfood findings: queued-ask fast-fail + payload reentrancy** —
+  the first LLM-backed payload (orient-brief, field report
+  `doc/dogfood/2026-07-21-llm-payload-and-a-find.md`) surfaced two engine
+  truths when its `claude -p` child transitively fired the handler's own
+  event:
+  (a) **a worker restart strands queued asks** — an ask enqueued in the old
+  generation's mailbox is never answered, so the dispatcher burns the FULL
+  budget before classifying `backlogged` (observed: a 20s SessionStart stall
+  for a dispatch whose script never spawned). Fix shape: on restart/swap,
+  fail the drained mailbox's pending asks immediately → fail-mode applies in
+  ms, not budget-seconds. Needs its own tests (swap/ask race).
+  (b) **payload reentrancy self-blocks** — a payload whose work fires its
+  own (event, handler) queues behind itself on the serialized worker; only
+  budget timeouts unwind it. Engine-side detection is likely not worth it
+  (the envelope can't be traced through arbitrary payload subprocesses);
+  document the constraint where payload authors look (exec-payloads flow
+  doc + ADR-0010 note): *a payload must not transitively fire its own
+  event* — orient-brief's `--setting-sources ""` guard is the pattern.
+
 - [x] **16. Distribution & macOS** — ship a runtime-free single binary and add
   the second target. Per **ADR-0012** (accepted 2026-07-20): target Linux +
   macOS (Windows-native out of scope, WSL2 is the path); the engine goes
