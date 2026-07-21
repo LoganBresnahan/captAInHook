@@ -148,6 +148,9 @@ lib replaced.
   imposes (socket path caps, lock semantics, per-OS availability), each tied to what
   leans on it. The lane rule: the environment *imposes* → platform.md; we *chose* →
   ADR; the code *does* → flow doc.
+- **Live observations → [doc/dogfood/](doc/dogfood/)**: dated field reports from
+  running the payloads on the maintainer's real sessions — append-only, never
+  retro-edited; a finding graduates into a commit/ADR, the report just cites it.
 - **[doc/scratch.md](doc/scratch.md)** is an informal idea list — non-authoritative;
   don't cite it as a plan.
 

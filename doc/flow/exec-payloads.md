@@ -93,11 +93,14 @@ grant. `handlers.residentDegraded` marks it in the trail.
 Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
 `retriever.sh` (resident, PreToolUse, injects a matched note) and
 `memory.sh` (oneshot, Stop, appends a durable log) — dependency-free POSIX
-`sh`, driven end-to-end through the daemon by `DemoPayloadTests`. Two more
+`sh`, driven end-to-end through the daemon by `DemoPayloadTests`. Four more
 run as LIVE dogfood on the maintainer's own hooks: `git-orient.sh` (oneshot,
-UserPromptSubmit — once-per-session git bearing, sessionId marker dedup) and
-`deploy-guard.sh` (oneshot, PreToolUse — `Decide(ask)` when a shell command
-would mutate `~/.captainHook/bin`; fail-open until proven in the trail).
+SessionStart — once-per-session git bearing), `deploy-guard.sh` (oneshot,
+PreToolUse — `Decide(ask)` when a shell command would mutate
+`~/.captainHook/bin`), `session-pulse.sh` (oneshot, Stop — per-turn activity
+ledger), and `doc-pointer.sh` (resident, PreToolUse — warm ground-truth
+index, injects keep-docs-in-sync reminders). Field reports:
+[doc/dogfood/](../dogfood/).
 
 ## Hot reload (phase 7) — edit the file, next hook obeys
 

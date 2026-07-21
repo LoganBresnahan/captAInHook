@@ -105,8 +105,9 @@ From there: `~/.captainHook/bin/captainHook ui` opens the GUI (live traces,
 supervision, policy editor, and handler install); payloads register in
 `~/.captainHook/handlers.json` — by hand or through the GUI — and
 `examples/payloads/` has working scripts to start from (a resident
-retriever, a memory logger, and the two payloads dogfooded live on the
-maintainer's own hooks: a git-bearing injector and a deploy guard).
+retriever, a memory logger, and the four payloads dogfooded live on the
+maintainer's own hooks — see [doc/dogfood/](doc/dogfood/) for field
+reports).
 
 **Nice-to-haves:**
 
