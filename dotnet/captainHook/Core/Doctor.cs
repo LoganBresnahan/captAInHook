@@ -226,12 +226,25 @@ public static class Doctor
     private static bool IsCaptainHookDaemon(int pid)
     {
         if (!IsAlive(pid)) return false;
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                var argv = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0');
+                return argv.Any(a => a.Contains("captainHook", StringComparison.Ordinal)) && argv.Contains("--daemon");
+            }
+            catch { return false; }   // can't read cmdline: cannot prove a live owner
+        }
+        // macOS (ADR-0012 d3, the DefaultIsOurs pattern): executable-name proof
+        // without argv — the same N3 residue (no --daemon check off-Linux). A
+        // misread here is a wrong doctor.orphan trail line, never a signal:
+        // orphan reporting stays report-only by construction.
         try
         {
-            var argv = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0');
-            return argv.Any(a => a.Contains("captainHook", StringComparison.Ordinal)) && argv.Contains("--daemon");
+            using var proc = System.Diagnostics.Process.GetProcessById(pid);
+            return (proc.MainModule?.FileName ?? "").Contains("captainHook", StringComparison.Ordinal);
         }
-        catch { return false; }   // can't read cmdline: cannot prove a live owner
+        catch { return false; }
     }
 
     private static void TryDelete(string path)
