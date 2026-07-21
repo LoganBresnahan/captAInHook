@@ -73,7 +73,8 @@ graceful oneshot conclusions release it. Resident children die at: budget
 overrun, protocol failure, readiness failure, instance eviction (supervised
 restart), escalation, daemon drain (the N6 child phase), idle-exit, and
 DisposeAsync — never survive their daemon. Each resident child writes
-`~/.captainHook/children/child-<pid>.json` (pid + /proc starttime identity
+`~/.captainHook/children/child-<pid>.json` (pid + start-time identity —
+raw `/proc` ticks on Linux, BCL `Process.StartTime` on macOS, ADR-0012 d3
 proof + entry + daemonPid) at spawn — deliberately NOT the XDG tmpfs, which
 is wiped exactly when the forensic record matters (SIGKILLed daemon) —
 deleted only at confirmed GROUP death; a per-process sweep clears stale

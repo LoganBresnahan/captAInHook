@@ -2,13 +2,13 @@
 
 *Lifecycle hooks as the composition primitive for agents.*
 
-> **Work in progress — building in public.** The framework layer (dispatch
-> engine, daemon + native shim, dispatch policy, management API, browser GUI)
-> works and is dogfooded live on the maintainer's own sessions; the payload
-> handlers it exists to carry (retrieval, memory, tool gating) and the
-> install/catalog UX are not built yet. Validated on Linux/WSL2 only. See
-> [Status](#status) for the precise line between the two, and
-> [doc/roadmap.md](doc/roadmap.md) for what's next.
+> **Building in public — feature-complete, pre-release.** The whole stack
+> works and is dogfooded live on the maintainer's own sessions: dispatch
+> engine, warm daemon + native shim, dispatch policy, exec-handler payloads
+> (your own scripts, any language), management API, and a browser GUI with
+> install UX. Validated on Linux/WSL2; macOS is a committed target, not yet
+> exercised on real hardware. See [Status](#status) and
+> [doc/roadmap.md](doc/roadmap.md).
 
 A framework for splicing deterministic **or** LLM-backed subsystems into an AI
 agent's loop at guaranteed seams — turning *"the model might call the tool"*
@@ -73,11 +73,57 @@ code** rather than walling the code off — a latency budget, a fail-open/closed
 policy, and a supervised actor per handler. See [DESIGN.md](DESIGN.md) for the full
 thesis and the per-event effect contracts.
 
+## Install
+
+Targets **Linux** (incl. WSL2 — the lived-in platform) and **macOS**
+(code-complete, awaiting real-hardware validation). No runtime dependencies:
+the engine ships self-contained (bundled .NET runtime) and the shim is a
+native binary. GitHub Releases with prebuilt artifacts are the intended
+channel; until the first release is tagged, build from source:
+
+```sh
+# prereqs (build-time only): .NET 10 SDK + clang (links the native shim)
+git clone https://github.com/LoganBresnahan/captAInHook && cd captAInHook
+
+RID=linux-x64        # macOS: osx-arm64 (Apple silicon) or osx-x64
+dotnet publish dotnet/captainHook/captainHook.csproj -c Release -r $RID \
+  --self-contained -p:PublishSingleFile=true -o ~/.captainHook/bin
+dotnet publish dotnet/captainShim/captainShim.csproj -c Release -r $RID -o /tmp/shim \
+  && cp /tmp/shim/captainShim ~/.captainHook/bin/
+cp -r ui ~/.captainHook/bin/ui        # the committed GUI assets
+```
+
+Then wire the hook commands into `~/.claude/settings.json` (Claude Code's
+hooks config) — each event you want worked points at the shim:
+
+```
+~/.captainHook/bin/captainShim hook user-prompt-submit
+~/.captainHook/bin/captainShim hook pre-tool-use
+```
+
+From there: `~/.captainHook/bin/captainHook ui` opens the GUI (live traces,
+supervision, policy editor, and handler install); payloads register in
+`~/.captainHook/handlers.json` — by hand or through the GUI — and
+`examples/payloads/` has working retriever/memory scripts to start from.
+
+**Nice-to-haves:**
+
+- **macOS: `brew install util-linux`** (provides `setsid`). Without it,
+  payload kill discipline degrades from process-group kills to a tree walk —
+  everything still gets killed except a payload's *re-parented* background
+  children (a script that does `something &` then exits). Flagged loudly per
+  spawn (`pgroup=false` in the trail) either way.
+- **A `$XDG_RUNTIME_DIR`** (standard on systemd Linux): rendezvous files land
+  on per-user tmpfs. Absent (macOS default), they fall back to
+  `~/.captainHook/` — fine, just not RAM-backed.
+
 ## Status
 
-**Work in progress.** The infrastructure below works today and runs live on the
-maintainer's own Claude Code sessions; the product layer on top of it does not
-exist yet. Development is on Linux (WSL2) — other platforms are untested.
+**Feature-complete, pre-release.** Everything below works today and runs live
+on the maintainer's own Claude Code sessions. Linux/WSL2 is validated by the
+test suite and live use; macOS support is implemented per
+[ADR-0012](doc/adr/0012-distribution-and-platform-targets.md) but not yet
+exercised on real hardware.
 
 ### Works today (dogfooded live)
 
@@ -110,34 +156,45 @@ exist yet. Development is on Linux (WSL2) — other platforms are untested.
   live dispatch traces, supervision view, policy editor, harness registry —
   observability-first, driven end-to-end by Playwright
   ([ADR-0008](doc/adr/0008-management-gui.md)).
+- **Exec handlers — your processes as payloads** — register any command in
+  `~/.captainHook/handlers.json` (any language; strict JSON wire on
+  stdin/stdout): `oneshot` spawn-per-dispatch or `resident` daemon-held warm
+  children with readiness handshake, per-handler budgets, a stripped env
+  allowlist, group-kill discipline, hot reload, and orphan detection.
+  Working retriever/memory demo scripts in `examples/payloads/`
+  ([ADR-0010](doc/adr/0010-exec-handlers.md)).
+- **Install UX + trust model** — the GUI installs/edits/uninstalls handlers
+  behind a verbatim-confirm panel (the exact command, args, env, and budget
+  shown before anything is written), with enable/disable toggles composed
+  from dispatch policy; same-user trust boundary recorded in
+  [ADR-0011](doc/adr/0011-hook-trust-model.md).
+- **Runtime-free distribution** — the engine ships single-file
+  self-contained (no .NET install needed) and the shim is Native AOT;
+  Linux + macOS ([ADR-0012](doc/adr/0012-distribution-and-platform-targets.md)).
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
   kept pure for the hook protocol.
-- **Tests** — xunit suite (400+) plus web unit tests and Playwright E2E; the
-  bar is green twice in a row (`/shipshape` verifies coverage, docs, and
-  logging conventions).
+- **Tests** — xunit suite (620+, green twice in a row as the ship bar) plus
+  web unit tests and Playwright E2E; the `/shipshape` skill verifies
+  coverage, docs, and logging conventions.
 
-### Not implemented yet
+### Deliberately not built / deferred
 
-- **Real handlers** — the payloads the framework exists for (retrieval on
-  prompt submit, session memory, tool-call gating). Today the only shipped
-  handler is a demo echo; installing captAInHook gets you the rails, not yet
-  the cargo.
-- **Catalog + one-click install** and the hook **trust model** — the GUI is
-  read/observe + policy edit only; no install/uninstall operations yet.
 - **Trail rotation** — the JSONL trail grows unbounded (design recorded in
-  [ADR-0009](doc/adr/0009-trail-rotation.md), deliberately deferred).
-- **Desktop shell / TUI** — browser-only for now.
-- **Node & BEAM runtimes** — the one-spec / N-runtime comparison is still the
-  thesis, not yet the code.
+  [ADR-0009](doc/adr/0009-trail-rotation.md), deferred until growth bites).
+- **Sandboxing untrusted payloads + a community registry** — parked until
+  third-party code distribution exists; the recorded shape is per-payload
+  containers ([ADR-0011](doc/adr/0011-hook-trust-model.md) d7,
+  `doc/scratch.md`).
+- **Desktop shell / TUI / Windows-native / other-runtime ports** — decided
+  out, not merely postponed: browser-only, Linux+macOS, .NET core with
+  any-language *payloads* carrying the polyglot story
+  ([ADR-0012](doc/adr/0012-distribution-and-platform-targets.md)).
 
 Maps of the system live in [doc/flow/](doc/flow/); decisions in
 [doc/adr/](doc/adr/); direction in [doc/roadmap.md](doc/roadmap.md). The
-`/shipshape` skill verifies tests, docs, and logging are in order.
-
-The core remains a **one-spec / N-runtime harness**: the same contracts are
-planned in Node (event loop) and BEAM (actors) to compare concurrency
-philosophies on one real workload. See [DESIGN.md](DESIGN.md).
+`/shipshape` skill verifies tests, docs, and logging are in order. The
+design thesis — why hooks, why these rails — is [DESIGN.md](DESIGN.md).
 
 ## License
 

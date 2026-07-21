@@ -39,7 +39,7 @@ The `/deploy` skill *performs* this; this doc explains what it leaves behind.
 
 | path | what |
 |---|---|
-| `~/.captainHook/bin/` | the published build — native `captainShim` (the hook command) + apphost `captainHook` (daemon/collapsed engine) + dlls; the managed dlls' content identity names the socket (the native shim carries no MVID and is invisible to the hash — by design, ADR-0004 d7 amendment) |
+| `~/.captainHook/bin/` | the published build — native `captainShim` (the hook command) + single-file self-contained `captainHook` (daemon/collapsed engine, runtime bundled — ADR-0012) + the four LOOSE app dlls; the loose dlls' content identity names the socket (the native shim and the bundle carry no readable MVID and are invisible to the hash — by design, ADR-0004 d7 amendment + ADR-0012 d2) |
 | `~/.captainHook/bin.prev/` | the previous build, kept by `/deploy` for one-step rollback |
 | `~/.captainHook/logs/captainHook.jsonl` | the trail — shim AND daemon write here (same default), one dispatchId per prompt across both halves |
 | `~/.captainHook/harnesses/` | user harness overrides — editable live; the daemon stats the dir per dispatch and reloads (`harness.reload`) |

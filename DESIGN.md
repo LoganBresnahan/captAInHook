@@ -125,8 +125,12 @@ matter more than raw CPU throughput.
 by [ADR-0001](doc/adr/0001-actor-runtime-fsharp-hybrid.md): the .NET spike's
 actor/supervision layer is an F# hybrid (`MailboxProcessor` default, bounded
 Channels hot path, hand-rolled one_for_one; Akka.NET deferred). The dispatcher
-core remains C#, and the N-runtime comparison harness above continues as
-planned for the Node and BEAM ports.
+core remains C#. *(Superseded 2026-07-19/20: the N-runtime comparison was
+retired as a build goal — roadmap item 11 dropped; ADR-0012 records the
+final runtime decision, including why a BEAM port was rejected outright and
+a Go port deferred to its own merits. ADR-0010's N-language payloads carry
+the polyglot story instead: user processes in any language are the payload
+surface, no core port required.)*
 [ADR-0002](doc/adr/0002-handlers-as-supervised-actors.md) then converged the
 two halves: handlers now run as supervised `Worker<'Req,'Reply>` actors and
 dispatch is an ask with the latency budget as the timeout.
