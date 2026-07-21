@@ -118,4 +118,14 @@ ADR-0010 made payloads user processes.
 
 ## Ground truth
 
-*Back-filled when the port lands.*
+*Back-filled 2026-07-21 — the port landed as one commit (roadmap item 16).*
+
+| decision | lives in |
+|---|---|
+| d1 targets | `doc/platform.md` (verification banner + per-OS summary: macOS committed, Windows out of scope) |
+| d2 single-file publish | `dotnet/captainHook/captainHook.csproj` (`KeepAppAssembliesLooseForIdentity` — the four app assemblies stay loose for ContentIdentity + the shim skew guard); `.claude/skills/deploy/SKILL.md` § 1 (the publish flags + loose-DLL postcondition); `doc/platform.md` § Single-file distribution (the three probed facts) |
+| d3 `/proc` port | `ChildRecords.ProcStartTime` (Linux raw field-22 / macOS BCL `StartTime` — the jitter asymmetry, platform.md § Process groups) + `PidExists` (POSIX `kill(0)`); `Doctor.DefaultIsOurs` (Linux cmdline / macOS `MainModule.FileName`, the N3 residue) + `SweepOrphans` liveness via `IsAlive` |
+| d4 containerization deferred | `doc/scratch.md` § Item 15 sandboxing (the container-runtime shape, for when item 15's trigger fires) |
+| determinism | clean publish ×2 + empty-commit leg ⇒ loose DLLs byte-identical (probed 2026-07-21; platform.md § Single-file distribution) |
+| N2/N3 open | macOS unproven until a real Mac run; the macOS `DefaultIsOurs` argv gap — both noted at their code sites |
+| tests | existing `DoctorOrphansTests` / doctor + child-record suites pin the Linux branches; the macOS branches compile under the same guards and await a Mac run (N2) |

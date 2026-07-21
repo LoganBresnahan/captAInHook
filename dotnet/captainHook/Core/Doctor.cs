@@ -41,14 +41,33 @@ public static class Doctor
 
     private static bool DefaultIsOurs(int pid, PidRecord rec)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                var argv = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0');
+                return argv.Length > 0 && argv[0] == rec.BinaryPath && argv.Contains("--daemon");
+            }
+            catch
+            {
+                return false;   // no cmdline to read = cannot prove ours = never signal
+            }
+        }
+        // macOS (ADR-0012 d3): no /proc — the BCL's MainModule.FileName
+        // (proc_pidpath underneath) proves the executable path. WEAKER than
+        // Linux's argv check on purpose-honesty grounds: argv (--daemon) isn't
+        // reachable without a KERN_PROCARGS2 P/Invoke we can't exercise off-Mac,
+        // so a short-lived collapsed run at the same path could momentarily
+        // read as "ours". Documented macOS residue (ADR-0012 N3) — tighten
+        // with the argv sysctl when a real Mac run exercises this path.
         try
         {
-            var argv = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0');
-            return argv.Length > 0 && argv[0] == rec.BinaryPath && argv.Contains("--daemon");
+            using var proc = System.Diagnostics.Process.GetProcessById(pid);
+            return proc.MainModule?.FileName == rec.BinaryPath;
         }
         catch
         {
-            return false;   // no cmdline to read = cannot prove ours = never signal
+            return false;   // gone or unreadable = cannot prove ours = never signal
         }
     }
 
@@ -170,8 +189,10 @@ public static class Doctor
             }
 
             // Child gone, or pid reused (starttime drift): a stale record, not
-            // an orphan — sweep it, don't report it.
-            if (!Directory.Exists($"/proc/{rec.Pid}")
+            // an orphan — sweep it, don't report it. Liveness via signal 0
+            // (IsAlive), not /proc existence — same semantics (zombies count),
+            // POSIX on both targets (ADR-0012 d3).
+            if (!IsAlive(rec.Pid)
                 || (rec.StartTime != 0 && ChildRecords.ProcStartTime(rec.Pid) != rec.StartTime))
             {
                 TryDelete(f);

@@ -27,7 +27,12 @@ sibling dir, then swap:
 ```sh
 STAGE=~/.captainHook/bin.new
 rm -rf $STAGE
-dotnet publish dotnet/captainHook/captainHook.csproj -c Release -o $STAGE
+# Single-file self-contained (ADR-0012): the runtime rides INSIDE the exe (no
+# host .NET needed); the four app assemblies stay LOOSE beside it (the csproj's
+# KeepAppAssembliesLooseForIdentity target) because ContentIdentity hashes the
+# deploy dir's *.dll MVIDs and the shim's skew guard reads captainHookWire.dll
+# — a fully-bundled publish would break both.
+dotnet publish dotnet/captainHook/captainHook.csproj -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -o $STAGE
 dotnet publish dotnet/captainShim/captainShim.csproj -c Release -r linux-x64 -o /tmp/shim-stage
 cp /tmp/shim-stage/captainShim $STAGE/
 cp -r ui $STAGE/ui        # the COMMITTED GUI assets (web/ builds them; repo root ui/)
@@ -38,8 +43,12 @@ mv $STAGE ~/.captainHook/bin
 ```
 
 Both executables must exist and be executable: `~/.captainHook/bin/captainShim`
-(native — the hook command) and `~/.captainHook/bin/captainHook` (apphost — the
-daemon/collapsed engine; never `dotnet captainHook.dll`, doc/platform.md).
+(native — the hook command) and `~/.captainHook/bin/captainHook` (single-file
+self-contained engine, ~74MB; never `dotnet captainHook.dll`, doc/platform.md).
+The four loose app DLLs must ALSO be present (`captainHook.dll`,
+`captainHookWire.dll`, `captainHookActors.dll`, `FSharp.Core.dll`) — identity
+and the skew guard read them; their absence means the exclusion target didn't
+run and the shim will read permanent skew.
 `~/.captainHook/bin/ui/index.html` must exist — the daemon serves `GET /ui`
 from this dir (absent ⇒ the GUI 404s; hooks are unaffected). If `web/` sources
 changed this session, the committed `ui/` must have been rebuilt in that commit

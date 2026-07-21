@@ -85,20 +85,46 @@ internal static class ChildRecords
         try { File.Delete(path); } catch (Exception) { /* evidence cleanup is best-effort */ }
     }
 
-    /// /proc/<pid>/stat field 22 (starttime, clock ticks since boot) — the
-    /// pid-reuse identity proof. 0 when unreadable (record still useful).
+    /// The pid-reuse identity proof: a per-process start-time value that is
+    /// EXACT and STABLE across reads, compared by equality against the value
+    /// recorded at spawn. 0 when unreadable (record still useful).
+    ///
+    /// Linux reads /proc/<pid>/stat field 22 RAW (clock ticks since boot) —
+    /// deliberately NOT the BCL's Process.StartTime, which on Linux derives a
+    /// DateTime from boot-time arithmetic and jitters several ms between
+    /// calls (doc/platform.md): a jittering value under equality would misread
+    /// a LIVE child as pid-reused and sweep its record. macOS has no /proc;
+    /// there the BCL is the seam (sysctl/proc_pidinfo underneath, a stored
+    /// absolute timestamp — stable across reads, so equality is sound).
+    /// The two branches never mix: a record is always compared on the OS that
+    /// wrote it (ADR-0012 decision 3).
     internal static long ProcStartTime(int pid)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                var stat = File.ReadAllText($"/proc/{pid}/stat");
+                // fields 3.. start after the parenthesized comm (which may itself
+                // contain spaces/parens — split after the LAST ')').
+                var rest = stat[(stat.LastIndexOf(')') + 2)..].Split(' ');
+                return long.Parse(rest[19]);   // field 22 overall = index 19 after state
+            }
+            catch (Exception) { return 0; }
+        }
         try
         {
-            var stat = File.ReadAllText($"/proc/{pid}/stat");
-            // fields 3.. start after the parenthesized comm (which may itself
-            // contain spaces/parens — split after the LAST ')').
-            var rest = stat[(stat.LastIndexOf(')') + 2)..].Split(' ');
-            return long.Parse(rest[19]);   // field 22 overall = index 19 after state
+            using var proc = System.Diagnostics.Process.GetProcessById(pid);
+            return proc.StartTime.ToUniversalTime().Ticks;
         }
-        catch (Exception) { return 0; }
+        catch (Exception) { return 0; }   // gone, or start time unreadable
     }
+
+    /// Does the pid exist at all (zombies count, per the /proc semantics this
+    /// replaces)? POSIX kill(pid, 0) — works identically on Linux and macOS,
+    /// so the sweep needs no /proc (ADR-0012 decision 3).
+    private static bool PidExists(int pid) =>
+        ProcessGroup.IsAlive(pid, pgroup: false, proc: null);
 
     /// Once per process: sweep records whose pid is gone or whose starttime
     /// no longer matches (pid reused) — pre-phase-8 hygiene so the dir cannot
@@ -115,7 +141,7 @@ internal static class ChildRecords
                 try
                 {
                     var rec = JsonSerializer.Deserialize<Record>(File.ReadAllText(f));
-                    if (rec is null || !Directory.Exists($"/proc/{rec.Pid}")
+                    if (rec is null || !PidExists(rec.Pid)
                         || (rec.StartTime != 0 && ProcStartTime(rec.Pid) != rec.StartTime))
                         File.Delete(f);
                 }

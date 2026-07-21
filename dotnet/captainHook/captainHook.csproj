@@ -37,4 +37,27 @@
     <InternalsVisibleTo Include="captainHookTests" />
   </ItemGroup>
 
+  <!-- Single-file distribution (ADR-0012): /deploy publishes with
+       PublishSingleFile+SelfContained so no host .NET runtime is needed — but
+       the FOUR app assemblies stay LOOSE beside the bundle. Two consumers
+       require real DLLs on disk: ContentIdentity.Compute (the rendezvous
+       identity = MVIDs of *.dll in the deploy dir — a fully-bundled publish
+       has none and identity THROWS) and the shim's wire-stamp skew guard
+       (TryReadMvid on captainHookWire.dll — missing reads as skew, permanent
+       collapse). Keeping exactly the app assemblies loose preserves today's
+       identity surface byte-for-byte; the bundle carries only the runtime.
+       Probed 2026-07-21: the excluded ENTRY assembly loads fine from beside
+       the bundle, and a cold hook + warm answer both work. Dev builds and
+       tests are untouched (condition on PublishSingleFile). -->
+  <Target Name="KeepAppAssembliesLooseForIdentity"
+          AfterTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(PublishSingleFile)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish
+          Condition="'%(Extension)' == '.dll' and ('%(Filename)' == 'captainHook' or '%(Filename)' == 'captainHookWire' or '%(Filename)' == 'captainHookActors' or '%(Filename)' == 'FSharp.Core')">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
 </Project>

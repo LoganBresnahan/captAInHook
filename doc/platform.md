@@ -80,6 +80,15 @@ own mechanics live in [flow/management-api.md](flow/management-api.md):
 | A native image has no MVID | The ELF/Mach-O binary carries no managed metadata; `PEReader` throws `BadImageFormatException`, which `ContentIdentity.Compute` already skips. | The decision-7 amendment's identity story: the hash stays over the deploy dir's managed DLLs; the shim is invisible to it *by this fact*, and co-location + the wire-stamp guard carry the rest. |
 | `AppContext.BaseDirectory` / `Environment.ProcessPath` work under AOT | Both resolve to the native executable's directory/path. | `ShimMain.DefaultEnginePath` (co-located engine), the shim's identity hash over its own directory. |
 | `Process.GetCurrentProcess().StartTime` is coarse | /proc-derived; jitter of several ms observed on WSL2 — fine for the gated `shim.boot` trail line, not for benchmarking. | The `CAPTAINHOOK_COLDSTART` probe's shim half; real measurement is wall-clock over batched runs. |
+| `Process.StartTime` jitters on Linux, is stable on macOS | On Linux the BCL derives a DateTime from boot-time arithmetic per call (the jitter above); on macOS it reads sysctl/`proc_pidinfo`'s stored absolute timestamp — stable across reads. Equality comparison of two reads is therefore UNSOUND on Linux and sound on macOS. | Why `ChildRecords.ProcStartTime` keeps the RAW `/proc/<pid>/stat` field-22 ticks on Linux and uses the BCL only on the macOS branch (ADR-0012 d3) — a jittering identity under equality would misread a live child as pid-reused and sweep its record. |
+
+## Single-file distribution (ADR-0012)
+
+| fact | detail | leaned on by |
+| --- | --- | --- |
+| A default `PublishSingleFile` bundle has ZERO loose managed DLLs | Everything (app + runtime) rides inside the exe; `Directory.EnumerateFiles(dir, "*.dll")` finds nothing. Probed 2026-07-21 (.NET 10, linux-x64: one 74MB exe). | `ContentIdentity.Compute` THROWS on such a dir, and the shim's skew guard reads missing-wire-DLL as permanent skew — why the engine csproj's `KeepAppAssembliesLooseForIdentity` target excludes the four app assemblies from the bundle. |
+| The ENTRY assembly can be excluded from its own bundle | `ExcludeFromSingleFile` on the `ResolvedFileToPublish` item works for `captainHook.dll` itself: it publishes loose beside the exe and the single-file host loads it from there. Probed 2026-07-21: cold hook + daemon spawn + warm answer all work. | The publish shape: runtime-only in the bundle, identity surface (4 app DLLs) on disk, byte-identical to the framework-dependent layout's identity. |
+| Single-file publish is deterministic where it matters | Clean publish ×2 (obj/bin wiped between): all four loose DLLs byte-identical. The bundle exe itself was not asserted identical — identity never reads it. | Build-determinism invariant (MVID rendezvous) survives the ADR-0012 publish-shape change. |
 
 ## Build determinism (content identity leans on all of these)
 

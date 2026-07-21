@@ -11,17 +11,37 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
-- [ ] **16. Distribution & macOS** — ship a runtime-free single binary and add
+- [x] **16. Distribution & macOS** — ship a runtime-free single binary and add
   the second target. Per **ADR-0012** (accepted 2026-07-20): target Linux +
   macOS (Windows-native out of scope, WSL2 is the path); the engine goes
   self-contained single-file so no host .NET runtime is needed (the shim is
-  already Native AOT); port the two `/proc` identity sites
-  (`ChildRecords.ProcStartTime`, `Doctor`'s daemon pid-reuse cmdline/starttime)
-  to a `sysctl(KERN_PROC)` branch so the safety guard holds on macOS — the kill
-  path (`setsid`+`kill(-pgid)`) is already POSIX; all containerization deferred.
-  Build order: ADR-0012 § Implementation plan (single-file publish + determinism
-  re-verify → `/proc`→`sysctl` port + test → platform.md flip). Small, not
-  `/adr-plan`-decomposed.
+  already Native AOT); port the `/proc` identity sites so the safety guards
+  hold on macOS — the kill path (`setsid`+`kill(-pgid)`) is already POSIX;
+  all containerization deferred.
+  Landed 2026-07-21 as one commit (the ADR's three steps):
+  **single-file publish** — `/deploy` publishes
+  `--self-contained -p:PublishSingleFile=true`; the csproj's
+  `KeepAppAssembliesLooseForIdentity` target keeps the FOUR app assemblies
+  loose beside the ~74MB bundle because ContentIdentity hashes the deploy
+  dir's *.dll MVIDs and the shim's skew guard reads captainHookWire.dll (a
+  fully-bundled publish would throw identity and read permanent skew —
+  probed both, plus the excluded-ENTRY-assembly layout running a cold hook +
+  daemon spawn + warm answer end-to-end); determinism re-verified (clean
+  publish ×2 + empty-commit leg ⇒ loose DLLs byte-identical).
+  **`/proc` port** — no third-party lib and no hand-rolled sysctl: the BCL's
+  `Process` IS the cross-platform seam (sysctl/`proc_pidinfo` underneath on
+  macOS). `ChildRecords.ProcStartTime` keeps RAW `/proc` field-22 ticks on
+  Linux (BCL `StartTime` jitters there — equality would misread a live
+  child as pid-reused; platform.md records the asymmetry) and uses BCL
+  ticks on the macOS branch where they are stable; liveness checks moved
+  from `/proc` existence to POSIX `kill(pid,0)` (both OSes, one path);
+  `Doctor.DefaultIsOurs` gets a `MainModule.FileName` macOS branch (weaker
+  than Linux's argv check — no `--daemon` proof without a KERN_PROCARGS2
+  P/Invoke; recorded as the ADR-0012 N3 residue to tighten on a real Mac).
+  platform.md: macOS → committed target, Windows → out of scope, § Single-file
+  distribution added. ADR-0012 N2 stands: macOS is code-complete but
+  UNPROVEN until a real Mac run exercises the sysctl branch. Suite 624
+  green twice.
 
 - [x] **1. Converge the C# dispatcher and F# actor layer** — handlers become
   supervised actors: dispatch = `Ask` with the latency budget as the ask
