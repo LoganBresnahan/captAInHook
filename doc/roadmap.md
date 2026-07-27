@@ -11,24 +11,35 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
-- [ ] **17. Dogfood findings: queued-ask fast-fail + payload reentrancy** —
+- [x] **17. Dogfood findings: queued-ask fast-fail + payload reentrancy** —
   the first LLM-backed payload (orient-brief, field report
   `doc/dogfood/2026-07-21-llm-payload-and-a-find.md`) surfaced two engine
   truths when its `claude -p` child transitively fired the handler's own
-  event:
-  (a) **a worker restart strands queued asks** — an ask enqueued in the old
-  generation's mailbox is never answered, so the dispatcher burns the FULL
-  budget before classifying `backlogged` (observed: a 20s SessionStart stall
-  for a dispatch whose script never spawned). Fix shape: on restart/swap,
-  fail the drained mailbox's pending asks immediately → fail-mode applies in
-  ms, not budget-seconds. Needs its own tests (swap/ask race).
-  (b) **payload reentrancy self-blocks** — a payload whose work fires its
-  own (event, handler) queues behind itself on the serialized worker; only
-  budget timeouts unwind it. Engine-side detection is likely not worth it
-  (the envelope can't be traced through arbitrary payload subprocesses);
-  document the constraint where payload authors look (exec-payloads flow
-  doc + ADR-0010 note): *a payload must not transitively fire its own
-  event* — orient-brief's `--setting-sources ""` guard is the pattern.
+  event. Landed 2026-07-27:
+  (a) **a worker restart strands queued asks** — an ask enqueued in a mailbox
+  the supervisor then supersedes is never dequeued (F#'s `MailboxProcessor`
+  can't be drained), so the classified ask burned the FULL budget before
+  guessing `backlogged` (observed: a 20s SessionStart stall for a dispatch
+  whose script never spawned). Fix as built: each `ActorRef` instance carries
+  an **abort** `TaskCompletionSource` that `Swap`/`MarkDead` completes on
+  supersession; `current`+`epoch` fold into ONE atomically-swapped `Instance`
+  record so the ask reads a consistent (mailbox, epoch, abort) triple; the
+  classified ask races reply / abort / window and returns a new sixth status
+  **`Abandoned`** (fast-fail, uncounted, distinct trail classification
+  `abandoned`). Genuine backlog — instance still alive — is unchanged, keyed
+  apart by `abortedTask.IsCompleted`. Pinned by `WorkerAbandonedAskTests`
+  (incident-shaped fast-fail + a backlog-stays-backlogged split guard); the
+  dispatcher-level `ClassificationTests` backlog case was revealed to have
+  ALWAYS been an abandonment (d1's cancel-restart strands d2) and now asserts
+  `abandoned`. Recorded as the **ADR-0004 d5 amendment** (2026-07-27), flow
+  doc `doc/flow/actor-supervision.md` (six-status table + the swap section).
+  (b) **payload reentrancy self-blocks** — engine-side detection isn't
+  feasible (the re-entering `claude` mints its own dispatchId; stripped env
+  means no depth marker survives the socket), so it's a documented
+  payload-authoring constraint: *a payload must not transitively fire its own
+  event* — `--setting-sources ""` is the pattern. Recorded as **ADR-0010 N7**
+  and in the exec-payloads flow doc; `orient-brief.sh` carries the guard.
+  Suite 626 green twice.
 
 - [x] **16. Distribution & macOS** — ship a runtime-free single binary and add
   the second target. Per **ADR-0012** (accepted 2026-07-20): target Linux +

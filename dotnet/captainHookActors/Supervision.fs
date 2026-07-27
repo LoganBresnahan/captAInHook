@@ -5,14 +5,35 @@ open System.Collections.Concurrent
 open System.Threading
 open System.Threading.Tasks
 
+/// One live instance behind an ActorRef: the mailbox, the epoch it was spawned
+/// at, and an ABORT signal that fires when this instance is superseded. The
+/// three travel as ONE atomically-swapped reference so an ask reads a
+/// consistent (mailbox, epoch, abort) triple — never a torn pair where the
+/// mailbox is the new instance's but the epoch the old one's.
+///
+/// `Aborted` is the item-17a fix. F#'s MailboxProcessor cannot be drained: when
+/// the supervisor swaps a fresh instance in, any Work message still QUEUED in
+/// the old mailbox (never dequeued — the old loop crashed or is abandoned) is
+/// stranded, its reply channel dangling forever. Before this signal existed the
+/// asker could only wait the FULL budget+grace and then guess `Backlogged`
+/// (a 20s stall for a dispatch whose handler never even ran — the
+/// 2026-07-21 orient-brief field report). Completing this instance's `Aborted`
+/// on supersession lets a stranded ask fail in milliseconds, distinctly
+/// classified.
+type private Instance<'Msg> =
+    { Mailbox: MailboxProcessor<'Msg>
+      Epoch: int
+      Aborted: TaskCompletionSource }
+
 /// Stable handle callers keep across restarts. The supervisor swaps the live
 /// MailboxProcessor underneath on every restart, so a reference held by the C#
 /// host never goes stale — this is the fix for the classic gotcha where callers
 /// keep posting into a dead mailbox after a crash.
 type ActorRef<'Msg> internal (id: string) =
-    // Written by the supervisor on (re)start, read by callers. Swap happens
-    // before the ref is ever handed out, and again on each restart.
-    let mutable current: MailboxProcessor<'Msg> = Unchecked.defaultof<_>
+    // The live instance, published by the supervisor on (re)start and read by
+    // callers. Swap happens before the ref is ever handed out, and again on each
+    // restart. One reference so mailbox+epoch+abort are always consistent.
+    let instance: Instance<'Msg> ref = ref Unchecked.defaultof<_>
     // Instance generation, bumped by every Swap: the per-handle RESTART COUNT,
     // read by the host's supervision read model (ADR-0007 get-handlers).
     let generation = ref 0
@@ -29,31 +50,58 @@ type ActorRef<'Msg> internal (id: string) =
     // signals from an ABANDONED instance — a wedged worker's stuck task finally
     // dying — carry the epoch they belonged to, the same stale-detection ADR-
     // 0004 d5 used the generation for, now alias-proof.)
-    let epoch = ref 0
     // Set once by the supervisor on escalation; read by ask paths to fail
     // fast instead of burning the full ask timeout on a corpse (carry-in b).
     let dead = ref false
 
     member _.Id = id
     member internal _.Swap(agent: MailboxProcessor<'Msg>, ep: int) =
-        current <- agent
-        Volatile.Write(&epoch.contents, ep)
+        // Continuations run asynchronously so completing Aborted never inlines a
+        // waiting ask's continuation onto the supervisor's fault loop.
+        let fresh = { Mailbox = agent; Epoch = ep
+                      Aborted = TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) }
+        let prev = Volatile.Read(&instance.contents)
+        // Publish the fresh instance FIRST (new asks route to the live mailbox),
+        // THEN signal the outgoing one — its queued-but-never-dequeued asks can
+        // now fail fast instead of waiting the full window (item 17a).
+        Volatile.Write(&instance.contents, fresh)
         Volatile.Write(&generation.contents, generation.Value + 1)
+        if not (obj.ReferenceEquals(prev, null)) then prev.Aborted.TrySetResult() |> ignore
     member _.Generation = Volatile.Read(&generation.contents)
-    member _.Epoch = Volatile.Read(&epoch.contents)
+    member _.Epoch = (Volatile.Read(&instance.contents)).Epoch
     member _.IsDead = Volatile.Read(&dead.contents)
-    member internal _.MarkDead() = Volatile.Write(&dead.contents, true)
+    member internal _.MarkDead() =
+        Volatile.Write(&dead.contents, true)
+        // Escalation/removal retires the current instance too: an ask queued in
+        // it at retirement time can never be dequeued — abort it (item 17a).
+        let cur = Volatile.Read(&instance.contents)
+        if not (obj.ReferenceEquals(cur, null)) then cur.Aborted.TrySetResult() |> ignore
 
     /// tell — fire-and-forget. Never blocks (MailboxProcessor is UNBOUNDED —
     /// use the Channels shape in HotPath.fs when you need a bounded mailbox).
-    member _.Post(msg: 'Msg) = current.Post msg
+    member _.Post(msg: 'Msg) = (Volatile.Read(&instance.contents)).Mailbox.Post msg
 
     /// ask — request/reply surfaced as a Task so C# can `await` it directly.
     /// A default timeout makes a reply lost to a crash fail loudly (TimeoutException)
     /// instead of hanging the caller forever.
     member _.Ask<'Reply>(build: Func<AsyncReplyChannel<'Reply>, 'Msg>, ?timeoutMs: int) : Task<'Reply> =
         let t = defaultArg timeoutMs 2000
-        Async.StartAsTask(current.PostAndAsyncReply((fun rc -> build.Invoke rc), timeout = t))
+        let inst = Volatile.Read(&instance.contents)
+        Async.StartAsTask(inst.Mailbox.PostAndAsyncReply((fun rc -> build.Invoke rc), timeout = t))
+
+    /// The classified ask's post seam (item 17a): post ONE request and return
+    /// the reply task together with the instance context the message landed in —
+    /// the epoch (for wedge attribution) and the abort task that completes if
+    /// that exact instance is superseded before the message is dequeued. The
+    /// instance is read ONCE, so the abort watched is genuinely the one the
+    /// message was posted into: if a swap slips between the read and the post,
+    /// the message lands in an already-orphaned mailbox whose Aborted is already
+    /// complete — a correct immediate fast-fail, not a lost message.
+    member internal _.AskTracked<'Reply>(build: Func<AsyncReplyChannel<'Reply>, 'Msg>, timeoutMs: int)
+                                         : Task<'Reply> * int * Task =
+        let inst = Volatile.Read(&instance.contents)
+        let reply = Async.StartAsTask(inst.Mailbox.PostAndAsyncReply((fun rc -> build.Invoke rc), timeout = timeoutMs))
+        (reply, inst.Epoch, inst.Aborted.Task)
 
 /// The supervisor's own protocol. Faults are REIFIED AS MESSAGES (the
 /// Node/BEAM idiom): they queue in this mailbox and are handled one at a time,

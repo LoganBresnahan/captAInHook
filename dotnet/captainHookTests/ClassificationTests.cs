@@ -147,13 +147,21 @@ public class TimeoutClassificationTests
     }
 
     [Fact]
-    public async Task Backlog_NeverReceivedAsk_DoesNotCountAgainstTheWorker()
+    public async Task NeverReceivedAsk_StrandedByCancelRestart_ClassifiesAbandoned_Uncounted()
     {
         // Dispatch 1 parks INSIDE the handler (receipt marked) and honors its
-        // token; dispatch 2 queues BEHIND it (receipt never marked). Verdicts:
-        // d1 = cancelled (uncounted), d2 = backlogged (uncounted). With
-        // maxRestarts=0, ANY counted fault would escalate — so "no escalation"
-        // proves both classifications stayed uncounted.
+        // token; dispatch 2 queues BEHIND it (receipt never marked). d1's
+        // honored cancel is reply-then-crash, which RESTARTS the worker — and
+        // that restart strands d2 in the superseded mailbox. Verdicts:
+        // d1 = cancelled (uncounted), d2 = ABANDONED (uncounted, item 17a). This
+        // used to read as `backlogged` only because the old impl couldn't tell a
+        // stranded ask from a still-queued one and waited the whole window to
+        // guess; the abort signal now names it precisely AND fails it fast. (Pure
+        // backlog — a queued ask whose worker never restarts — needs asymmetric
+        // budgets the dispatcher's single budget can't express; it is pinned at
+        // the Worker level by QueuedAsk_LiveWorkerNoRestart_StaysBacklogged.)
+        // With maxRestarts=0, ANY counted fault would escalate — so "no
+        // escalation" proves both classifications stayed uncounted.
         var clock = new FakeClock();
         var sup = new Supervisor("class-backlog", maxRestarts: 0, TimeSpan.FromSeconds(5), clock.Now);
         var escalated = false;
@@ -180,8 +188,8 @@ public class TimeoutClassificationTests
         var r1 = await d1;
         var r2 = await d2;
         Assert.Contains("TIMEOUT(cancelled)", r1.Trace.Render());
-        Assert.Contains("TIMEOUT(backlogged)", r2.Trace.Render());
-        Assert.False(escalated, "neither honored cancellation nor backlog may count toward escalation");
+        Assert.Contains("TIMEOUT(abandoned)", r2.Trace.Render());
+        Assert.False(escalated, "neither honored cancellation nor an engine-stranded ask may count toward escalation");
 
         // The worker is alive (restarted uncounted after d1's crash) and serves.
         Volatile.Write(ref park[0], false);

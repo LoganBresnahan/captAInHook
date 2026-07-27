@@ -755,11 +755,20 @@ public sealed class Dispatcher
                     return Timeout(r, e, dispatchId, sw, trace, "wedged");
 
                 case AskStatus.Backlogged:
-                    // Never received — queued behind a busy sibling dispatch.
-                    // Backlog, not a defect: nothing counted against the worker
-                    // (sustained backlog is the router evidence ADR-0004 d6
-                    // waits for).
+                    // Never received — queued behind a busy sibling dispatch
+                    // that is still alive. Backlog, not a defect: nothing
+                    // counted against the worker (sustained backlog is the
+                    // router evidence ADR-0004 d6 waits for).
                     return Timeout(r, e, dispatchId, sw, trace, "backlogged");
+
+                case AskStatus.Abandoned:
+                    // Queued in a mailbox superseded by a restart/removal before
+                    // it was ever dequeued (item 17a). The fail-mode outcome is
+                    // identical to backlog, but the CAUSE differs — the engine
+                    // stranded it, the traffic didn't — so it classifies
+                    // distinctly for the trail. Fails fast (ms), not a full
+                    // budget, via the instance abort signal.
+                    return Timeout(r, e, dispatchId, sw, trace, "abandoned");
 
                 case AskStatus.Dead:
                     // Escalated worker: fail fast in ~0ms instead of burning

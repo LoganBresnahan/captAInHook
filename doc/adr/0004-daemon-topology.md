@@ -226,6 +226,30 @@ layer (the Akka re-evaluation below).
      converts to the handler's fail-mode effect in ~0ms, instead of burning
      the full budget per dispatch while dead workers accumulate.
 
+   **Amendment (2026-07-27, roadmap item 17a — the orient-brief dogfood
+   find).** The wedge/backlog split above assumed a queued ask always resolves
+   by the window elapsing. It misses a case: a message queued in a mailbox that
+   is **superseded by a restart/removal before it is ever dequeued** — the old
+   loop crashed or was abandoned, so it will never run, and its reply channel
+   dangles. `MailboxProcessor` cannot be drained, so before this amendment such
+   an ask waited the **whole** budget + grace and was then classified
+   `Backlogged` — indistinguishable from honest backlog, and a full-budget stall
+   for a handler that never ran (observed live: a 20s `SessionStart`, the
+   2026-07-21 field report, when an LLM payload's subprocess transitively fired
+   its own event and cancel-restarted the worker under a queued dispatch). A
+   sixth outcome, **`Abandoned`, closes it**: each `ActorRef` instance carries an
+   abort signal the `Swap`/`MarkDead` completes on supersession, and the
+   classified ask races reply / abort / window — so a stranded ask fails fast
+   (milliseconds) and is named distinctly in the trail. Like backlog it counts
+   nothing (the strand is the engine's doing; the restart that caused it was
+   already accounted where it originated). Genuine backlog — the instance still
+   alive — is unchanged, keyed apart by whether the abort completed. This is an
+   engine correctness fix, not a contract change: the child wire, the effect
+   set, and the fail-mode semantics are untouched; only the classification and
+   its latency improve. Reentrancy itself (a payload firing its own event) is a
+   payload-authoring constraint, not an engine-detectable condition — recorded
+   in ADR-0010 and the exec-payloads flow doc, not here.
+
    Concurrent dispatch also becomes real in a daemon: ADR-0002's per-worker
    serialization turns load-bearing — already pinned in-process by
    `ConcurrentDispatches_SerializePerWorker` — and the `Dispatcher`, which

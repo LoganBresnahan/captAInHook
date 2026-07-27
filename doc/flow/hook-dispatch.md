@@ -182,10 +182,12 @@ lands inside the window instead of racing it. No-answer outcomes are then unambi
 `cancelled` (the handler honored its token — a timeout, never a fault),
 `wedged` (received but silent — the supervisor abandons the worker and it
 counts toward escalation), `backlogged` (never received, queued behind a busy
-sibling — uncounted), and `dead` (already-escalated worker — fails fast in
-~0ms instead of burning the budget). All four degrade to the handler's
-fail-mode effect; classification changes what the *supervisor counts*, never
-what the dispatch returns. Worst-case dispatch wall time is the max over
+sibling still alive — uncounted), `abandoned` (never received, queued in a
+mailbox a restart/removal superseded — uncounted, fails fast in ms via the
+instance abort signal rather than burning the window; item 17a), and `dead`
+(already-escalated worker — fails fast in ~0ms instead of burning the
+budget). All degrade to the handler's fail-mode effect; classification
+changes what the *supervisor counts*, never what the dispatch returns. Worst-case dispatch wall time is the max over
 its handlers of (budget_i + grace_i), paid only when a handler never
 answers; `dispatch.start` logs the default budget, and a handler whose spec
 overrides it carries its own `budgetMs` on its `handler.*` lines.
@@ -265,6 +267,6 @@ relocated.
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `policy.skip/exclude/malformed/reload` (src `policy`); `doctor.verdict` (src `doctor`) |
+| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged/abandoned), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `policy.skip/exclude/malformed/reload` (src `policy`); `doctor.verdict` (src `doctor`) |
 | pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `AtMostOnceTests.cs` (commit-marker boundary, mid-write deadline → truncated frame dispatches nothing, one-dispatch-per-id accounting); `SoakTests.cs` (round-trip golden wire; 200-dispatch soak: serialization permutation, queue count, escalation under load); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md`; `doc/adr/0006-dispatch-policy.md` |

@@ -64,6 +64,12 @@ the supervisor calls `Swap` on every (re)start, so the same C# reference
 transparently routes to the live instance. Pinned by
 `SameCounterReference_StillWorksAfterRestart`.
 
+`Swap` publishes one `Instance` record — mailbox + epoch + an **abort** signal
+— as a single atomic reference, so an ask reads a consistent triple rather than
+a torn (new mailbox, old epoch) pair. Publishing the fresh instance *first* and
+completing the outgoing instance's abort *second* is what lets a stranded ask
+fail fast without misrouting a live one (see the classified-ask section).
+
 ## Crash as a message
 
 A `MailboxProcessor` whose body throws dies *silently* — the exception
@@ -93,7 +99,7 @@ What counts toward that window is **classified**, not everything that goes
 wrong. `Worker.AskClassifiedAsync(req, budget, grace, correlationId)` waits
 budget + grace — the grace exists so a token-honoring handler's cancellation
 reply, which *leaves* the handler at the budget, lands **inside** the ask
-window instead of racing the deadline — and resolves to one of five statuses:
+window instead of racing the deadline — and resolves to one of six statuses:
 
 | status | what happened | counted? | worker fate |
 |---|---|---|---|
@@ -101,12 +107,30 @@ window instead of racing the deadline — and resolves to one of five statuses:
 | `Faulted` (OCE) | budget token **honored** | **no** | restart (mailbox died via reply-then-crash) |
 | `Faulted` (other) | handler crashed | yes | restart or escalate |
 | `Wedged` | **received, never answered** | **yes** | **abandoned**: factory re-runs, handle swaps, stuck task LEAKED |
-| `Backlogged` | never received (queued behind a busy sibling) | no | untouched — backlog is load evidence, not a defect |
+| `Backlogged` | never received — queued behind a busy sibling that is **still alive** | no | untouched — backlog is load evidence, not a defect |
+| `Abandoned` | never received — queued in a mailbox **superseded** by restart/removal | no | none — the strand is the engine's, counted where the restart originated |
 | `Dead` | already escalated | — | ask fails fast, ~0ms |
 
 The wedge/backlog split rides a **receipt flag** the worker flips the moment
 it dequeues the message; wedges reach the supervisor through its narrow
 reporting channel (`ReportWedge`), because the supervisor owns *all* counting.
+The receipt flag also splits *never-received* itself. A `MailboxProcessor`
+cannot be drained: when the supervisor swaps a fresh instance in, a message
+still queued in the old mailbox — never dequeued, because the old loop crashed
+or is abandoned — is stranded, its reply channel dangling. It used to resolve
+only by waiting the **whole** budget+grace and then guessing `Backlogged` (a
+20s SessionStart stall for a dispatch whose handler never ran — the 2026-07-21
+orient-brief field report). Each instance now carries an **abort** signal
+(`Instance.Aborted`) the swap completes on supersession; the classified ask
+races reply / abort / window, so a stranded ask fails FAST as `Abandoned`
+(item 17a; ADR-0004 d5 amendment). Crucially the abort **only** short-circuits
+the *never-received* case — it is consulted solely while the receipt flag is
+still false. Once a message is dequeued its outcome is reply-or-wedge, and a
+reply-then-crash fires the reply AND the restart's abort together; letting the
+abort win there would misread an *answered* dispatch (`Faulted`) as `Wedged`,
+so on `receipt=true` the ask ignores the abort and waits out reply-vs-window
+exactly as before. Genuine backlog — instance still alive, never superseded —
+has no abort and resolves as `Backlogged` when the window elapses.
 Wedges count precisely because each abandonment leaks a stuck task — .NET
 cannot kill user code mid-flight — so a chronic wedger must escalate rather
 than leak forever. Every fault signal carries the **epoch** of the instance
@@ -123,11 +147,13 @@ repetition; the phase-7 adversarial-verify HIGH). A monotonic epoch never
 aliases across a reused id.
 
 One observable race, seen live and deliberate: a dispatch fired in the moment
-between a wedge report and the respawn posts into the doomed mailbox and
-classifies `Backlogged` (physically true — it queued behind the stuck
-handler). It degrades identically and merely doesn't count, so a chronic
-wedger may take a few extra dispatches to escalate. Classification guides
-counting, never correctness.
+between a wedge report and the respawn posts into the doomed mailbox. Its
+message is never dequeued (the stuck handler still holds the worker), and the
+respawn's `Swap` completes that instance's abort — so it now resolves as
+`Abandoned` the instant the respawn lands, rather than waiting the full window
+to guess `Backlogged` as it did before item 17a. It degrades identically and
+still doesn't count, so a chronic wedger may take a few extra dispatches to
+escalate. Classification guides counting, never correctness.
 
 ## The generic Worker — the convergence seam
 
@@ -200,12 +226,12 @@ disposed on the spot.
 
 | what | where |
 |---|---|
-| `ActorRef` (Post/Ask/Swap/Generation/IsDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`, `SubscribeEscalated`, `Remove` — runtime child retirement for the ADR-0010 hot-reload reconcile) | `dotnet/captainHookActors/Supervision.fs` |
+| `Instance` (mailbox+epoch+`Aborted`), `ActorRef` (Post/Ask/`AskTracked`/Swap/Generation/IsDead; abort completed on Swap + MarkDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`, `SubscribeEscalated`, `Remove` — runtime child retirement for the ADR-0010 hot-reload reconcile) | `dotnet/captainHookActors/Supervision.fs` |
 | the teardown seam: `TrackSwap`, the escalation subscription, `DisposeHandlersAsync`, events `handler.teardown` / `handler.teardownError` | `dotnet/captainHook/Core/Dispatcher.cs` |
 | kill mechanics: setsid spawn prefix, `TermThenKillAsync` (TERM→grace→KILL, group-wide) | `dotnet/captainHook/Handlers/ProcessGroup.cs`, `ExecHandler.cs` |
-| `WorkMsg` DU (with receipt flag), `AskStatus`, `AskOutcome`, `Worker<'Req,'Reply>` (Supervised/AskAsync/AskClassifiedAsync, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
+| `WorkMsg` DU (with receipt flag), `AskStatus` (incl. `Abandoned`), `AskOutcome`, `Worker<'Req,'Reply>` (Supervised/AskAsync/AskClassifiedAsync — reply/abort/window race, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `CounterMsg` DU, worker loop, `Counter` facade | `dotnet/captainHookActors/Counter.fs` |
 | `AuditWriter` bounded actor | `dotnet/captainHookActors/HotPath.fs` |
 | log events | `actor.spawn`, `actor.restart` (data: `kind` = cancelled/crash/wedge, `counted`), `actor.wedge`, `actor.escalate` (data: `kind`), `actor.staleExit`, `counter.increment/boom`, `audit.drain` |
-| pinned by | `dotnet/captainHookTests/ActorTests.cs`, `HotPathTests.cs`; the Worker path by `DispatcherTests.cs` and `ConvergenceTests.cs`; classification by `ClassificationTests.cs`; the teardown seam + kill mechanics by `KillDisciplineTests.cs` |
+| pinned by | `dotnet/captainHookTests/ActorTests.cs` (incl. `WorkerAbandonedAskTests` — the item-17a stranded-ask fast-fail + the backlog-stays-backlogged split guard), `HotPathTests.cs`; the Worker path by `DispatcherTests.cs` and `ConvergenceTests.cs`; classification by `ClassificationTests.cs` (`abandoned`/`cancelled` split); the teardown seam + kill mechanics by `KillDisciplineTests.cs` |
 | decision records | `doc/adr/0001-actor-runtime-fsharp-hybrid.md`, `doc/adr/0002-handlers-as-supervised-actors.md`, `doc/adr/0004-daemon-topology.md` (decision 5) |

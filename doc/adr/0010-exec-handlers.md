@@ -395,6 +395,20 @@ child-process specifics; children that speak MCP.
   cut dispatch's sibling Background effect lands on the loud
   `side.dropped` path instead of silently starting doomed work. Doctor's
   reap grace grew 12s→18s to cover the whole tail.)*
+- **N7 · A payload must not transitively fire its own event.** A payload whose
+  work re-enters the agent — the sharp case is an LLM-backed payload that shells
+  out to `claude`, which boots a session and fires `SessionStart`/`UserPromptSubmit`
+  — dispatches BACK into the same handler's single serialized worker, queuing
+  behind the very dispatch that is awaiting it. It self-blocks until budget
+  timeouts unwind both (found live: the 2026-07-21 orient-brief dogfood, which
+  also surfaced the item-17a stranded-ask fix). The engine cannot detect this:
+  the re-entering process is a separate program that mints its own dispatchId,
+  and the stripped env (decision 5) means no depth marker survives the socket —
+  the daemon cannot tell a descendant of the current dispatch from an unrelated
+  caller. So this is a **payload-authoring constraint, not an engine guard**.
+  The pattern for the LLM case: run the inner agent with hooks disabled
+  (`claude -p … --setting-sources ""`), plus a filesystem lock as a backstop —
+  see `examples/payloads/orient-brief.sh` and the exec-payloads flow doc.
 
 ## Pattern lineage — pharos-mcp (`~/pharos-mcp`)
 

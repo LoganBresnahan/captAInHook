@@ -26,11 +26,20 @@ type AskStatus =
     /// Received but never answered within budget + grace. The worker has been
     /// reported to the supervisor (abandon-and-respawn; counts to the window).
     | Wedged = 2
-    /// Never received within budget + grace — queued behind a busy sibling.
-    /// Backlog, not a defect: nothing is reported, nothing counts.
+    /// Never received within budget + grace — queued behind a busy sibling that
+    /// is still alive. Backlog, not a defect: nothing is reported, nothing counts.
     | Backlogged = 3
     /// The worker was already escalated; the ask failed fast without waiting.
     | Dead = 4
+    /// Queued in a mailbox that was SUPERSEDED (worker restart / removal) before
+    /// the message was ever dequeued — the reply channel is stranded and can
+    /// never fire. Detected via the instance abort signal, so it fails fast
+    /// (milliseconds) instead of burning the full budget the way an
+    /// indistinguishable Backlogged once did (item 17a; ADR-0004 d5 amendment).
+    /// Like Backlogged it counts nothing against the worker: the strand is the
+    /// engine's doing, not the handler's — the restart that caused it was
+    /// already accounted where it originated.
+    | Abandoned = 5
 
 /// One classified ask outcome. Reply is only meaningful for Ok, Error for Faulted.
 type AskOutcome<'Reply> internal (status: AskStatus, reply: 'Reply, error: exn) =
@@ -127,28 +136,64 @@ type Worker<'Req, 'Reply> private (sup: Supervisor, id: string, handle: ActorRef
                 return AskOutcome<'Reply>(AskStatus.Dead, Unchecked.defaultof<'Reply>, null)
             else
                 let receipt = ref false
-                let epoch = handle.Epoch
                 let windowMs = budgetMs + graceMs
-                // The mailbox-level timeout sits far beyond our own window:
-                // THIS layer owns the deadline; the inner one is only a
-                // never-leak backstop for the abandoned task.
-                let replyTask = handle.Ask((fun rc -> Work(req, receipt, rc)), windowMs + 60_000)
-                let! winner = Task.WhenAny(replyTask :> Task, Task.Delay windowMs)
-                if obj.ReferenceEquals(winner, replyTask :> Task) then
-                    match! replyTask with
-                    | Choice1Of2 v -> return AskOutcome<'Reply>(AskStatus.Ok, v, null)
-                    | Choice2Of2 ex -> return AskOutcome<'Reply>(AskStatus.Faulted, Unchecked.defaultof<'Reply>, ex)
-                else
-                    // We are abandoning replyTask; observe its eventual fault so
-                    // it can never surface as an unobserved task exception.
+                // AskTracked posts and hands back the instance context the
+                // message landed in: its epoch (wedge attribution) and its abort
+                // task (fires if that instance is superseded). The mailbox-level
+                // timeout sits far beyond our own window: THIS layer owns the
+                // deadline; the inner one is only a never-leak backstop for the
+                // abandoned task.
+                let (replyTask, epoch, abortedTask) =
+                    handle.AskTracked((fun rc -> Work(req, receipt, rc)), windowMs + 60_000)
+                let windowTask = Task.Delay windowMs
+                // Observe replyTask's eventual fault however we exit, so an
+                // abandoned reply can never surface as an unobserved exception.
+                let observeReplyFault () =
                     replyTask.ContinueWith(
                         (fun (t: Task<Choice<'Reply, exn>>) -> t.Exception |> ignore),
                         TaskContinuationOptions.OnlyOnFaulted) |> ignore
-                    if Volatile.Read(&receipt.contents) then
-                        sup.ReportWedge(id, epoch, correlationId)
-                        return AskOutcome<'Reply>(AskStatus.Wedged, Unchecked.defaultof<'Reply>, null)
+                let fromReply () =
+                    task {
+                        match! replyTask with
+                        | Choice1Of2 v -> return AskOutcome<'Reply>(AskStatus.Ok, v, null)
+                        | Choice2Of2 ex -> return AskOutcome<'Reply>(AskStatus.Faulted, Unchecked.defaultof<'Reply>, ex)
+                    }
+                // Race: reply, the instance being superseded (abort — item 17a),
+                // or the window. The abort ONLY short-circuits the never-received
+                // strand: once the message is dequeued (receipt set), its outcome
+                // is reply-or-wedge and abort must NOT preempt it — reply-then-
+                // crash fires the reply AND the restart-abort together, and
+                // consulting abort here would misread an answered dispatch as
+                // wedged. So abort counts only while receipt is still false.
+                let! _ = Task.WhenAny(replyTask :> Task, abortedTask, windowTask)
+                if replyTask.IsCompleted then
+                    return! fromReply ()
+                elif not (Volatile.Read(&receipt.contents)) && abortedTask.IsCompleted then
+                    // Never dequeued AND the instance was superseded ⇒ the message
+                    // is stranded in an orphaned mailbox and can never be answered.
+                    // Fail fast instead of burning the rest of the window.
+                    observeReplyFault ()
+                    return AskOutcome<'Reply>(AskStatus.Abandoned, Unchecked.defaultof<'Reply>, null)
+                else
+                    // Either the message was dequeued (receipt set — abort excluded
+                    // from here, so a reply-then-crash resolves as Faulted, never a
+                    // spurious Wedged), or the window already elapsed. Wait out
+                    // reply-vs-window; abort is deliberately not in this race.
+                    let! _ = Task.WhenAny(replyTask :> Task, windowTask)
+                    if replyTask.IsCompleted then
+                        return! fromReply ()
                     else
-                        return AskOutcome<'Reply>(AskStatus.Backlogged, Unchecked.defaultof<'Reply>, null)
+                        observeReplyFault ()
+                        // No reply by the window. receipt discriminates the two
+                        // no-reply outcomes: received-but-silent = Wedged (report +
+                        // count); never-received = Backlogged (queued behind a busy
+                        // sibling still alive — the abort-superseded case already
+                        // returned Abandoned above).
+                        if Volatile.Read(&receipt.contents) then
+                            sup.ReportWedge(id, epoch, correlationId)
+                            return AskOutcome<'Reply>(AskStatus.Wedged, Unchecked.defaultof<'Reply>, null)
+                        else
+                            return AskOutcome<'Reply>(AskStatus.Backlogged, Unchecked.defaultof<'Reply>, null)
         }
 
     /// Plain-data supervision state for the read API (ADR-0007 get-handlers).

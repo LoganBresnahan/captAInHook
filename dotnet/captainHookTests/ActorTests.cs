@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CaptainHook.Actors;
 using static CaptainHook.Tests.TestUtil;
 
@@ -182,5 +183,90 @@ public class SupervisionTests
         // Crash 3 with the clock frozen at t=6s: two in-window attempts -> escalate.
         counter.Boom();
         await escalated.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+}
+
+// The item-17a fix: an ask QUEUED in a mailbox that gets superseded by a
+// restart before it is ever dequeued must fail FAST (AskStatus.Abandoned via
+// the instance abort signal), not burn the full budget then guess Backlogged.
+// Shaped exactly like the 2026-07-21 orient-brief field-report incident: a
+// dispatch queued behind a sibling that crashes-and-restarts, whose script
+// (here, whose handler) never ran.
+public class WorkerAbandonedAskTests
+{
+    [Fact]
+    public async Task QueuedAsk_StrandedByRestart_FailsFastAbandoned_NotFullBudget()
+    {
+        var sup = new Supervisor("abandon", maxRestarts: 5, TimeSpan.FromSeconds(5));
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // req 0 = the occupier: park the worker, then throw → reply-then-crash →
+        // restart. Any other req would just echo, but the stranded ask below is
+        // never dequeued, so its delegate never runs.
+        var worker = Worker<int, int>.Supervised(sup, "w", () => async req =>
+        {
+            if (req == 0)
+            {
+                firstEntered.TrySetResult();
+                await gate.Task;
+                throw new InvalidOperationException("occupier crashes → restart");
+            }
+            return req;
+        });
+
+        // Ask #1 occupies the single serialized worker.
+        var d1 = worker.AskClassifiedAsync(0, budgetMs: 5000, graceMs: 200, "c1");
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Ask #2 enqueues BEHIND #1 in the current (soon-to-be-superseded)
+        // mailbox. A generous 10s budget: a broken impl (no abort signal) can
+        // only classify this by waiting the whole window, so it would take >10s;
+        // the fix must return in milliseconds.
+        var d2 = worker.AskClassifiedAsync(7, budgetMs: 10_000, graceMs: 200, "c2");
+
+        var sw = Stopwatch.StartNew();
+        gate.TrySetResult();                       // #1 crashes → worker restarts → #2 stranded
+        var r2 = await d2.WaitAsync(TimeSpan.FromSeconds(20));
+        sw.Stop();
+
+        Assert.Equal(AskStatus.Abandoned, r2.Status);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(3),
+            $"stranded ask took {sw.Elapsed.TotalMilliseconds:F0}ms — the abort signal should fail it fast, " +
+            "not burn the 10s budget");
+
+        // #1 saw its own crash as a (non-cancellation) fault via reply-then-crash.
+        Assert.Equal(AskStatus.Faulted, (await d1).Status);
+    }
+
+    [Fact]
+    public async Task QueuedAsk_LiveWorkerNoRestart_StaysBacklogged_NotAbandoned()
+    {
+        // The split guard: same "queued behind a busy worker" shape, but the
+        // worker is never superseded — so the outcome must remain Backlogged.
+        // Proves the abort signal splits never-received into Abandoned ONLY when
+        // an instance actually died, never for honest backlog.
+        var sup = new Supervisor("backlog", maxRestarts: 5, TimeSpan.FromSeconds(5));
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var worker = Worker<int, int>.Supervised(sup, "w", () => async req =>
+        {
+            if (req == 0) { firstEntered.TrySetResult(); await gate.Task; return 0; }
+            return req;
+        });
+
+        // Ask #1 occupies with a generous budget so IT never times out.
+        var d1 = worker.AskClassifiedAsync(0, budgetMs: 5000, graceMs: 200, "c1");
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Ask #2 queues behind it with a SHORT window and no restart → the
+        // window elapses with the instance still alive → Backlogged.
+        var r2 = await worker.AskClassifiedAsync(7, budgetMs: 300, graceMs: 100, "c2")
+                             .WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(AskStatus.Backlogged, r2.Status);
+
+        gate.TrySetResult();                       // release; #1 completes cleanly
+        Assert.Equal(AskStatus.Ok, (await d1).Status);
     }
 }
