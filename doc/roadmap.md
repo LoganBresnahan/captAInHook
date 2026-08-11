@@ -11,6 +11,24 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
+- [ ] **19. GUI overhaul — sidebar views, template-gallery authoring, the
+  screenshot loop** — the GUI works but has a visible defect (handlers table
+  overflows its card), a broken one-page layout (trace buried, dead space),
+  a cramped authoring surface, and a raw-JSON policy editor. Per **ADR-0015**
+  (accepted 2026-08-11): sidebar + one-view-at-a-time over the untouched
+  island architecture (a store `view` slice, no router; Trace lands first);
+  a real token system, polished-terminal direction, both themes; authoring =
+  a client-side **template gallery** single-sourced from `examples/payloads/`
+  via Vite `?raw` — the script-write API verb explicitly REFUSED (ADR-0011's
+  trigger stays unfired); policy rule builder + raw toggle with the
+  round-trip guard; and the **screenshot-driven agentic loop as a committed
+  deliverable** (extracted daemon sandbox → `preview.mjs`/`snap.mjs` + the
+  `ui-loop` skill) — landed FIRST, since it is the eyes for the rest.
+  Build order: ADR-0015 § Implementation plan (8 slices; the risk slice is
+  `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
+  atomic commit). API surface frozen throughout. Tick slices here as they
+  land.
+
 - [x] **18. Own the spawn seam: bosun** — the exec-handler kill discipline stops
   renting `setsid(1)` from the host's package set. Per **ADR-0014** (accepted
   2026-08-11, out of the ADR-0013 language analysis — which measured the Go
