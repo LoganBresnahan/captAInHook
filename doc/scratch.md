@@ -11,7 +11,12 @@ Running list — jot ideas here, promote to DESIGN.md / real tasks when they fir
 
 ## Trail integrity follow-up
 
-- [ ] **Emitters don't actually O_APPEND** (surfaced by ADR-0007 sse-trail-tail's
+- [x] **DONE 2026-08-11** — both emitters now open with real `O_APPEND` over
+      libc (`captainHookWire/PosixTrail.cs` + its `Logging.fs` mirror), pinned by
+      `TrailAppendTests`; the probe that justified it (55% line loss at 8×250)
+      and the per-OS flag/ABI facts are in platform.md § File locking, the
+      story in ADR-0004 N3's amendment. Original note:
+- [ ] ~~**Emitters don't actually O_APPEND**~~ (surfaced by ADR-0007 sse-trail-tail's
       adversarial verify, 2026-07-08; probed via strace). `File.AppendAllText`
       on .NET 10/Linux opens WITHOUT O_APPEND and pwrites at offsets cached at
       open — so the shim and daemon appending the trail in the same sub-ms

@@ -82,6 +82,14 @@ thing: the id contract.**
    atomicity + per-call append opens mean a shim append racing a rotation lands in
    one segment or the other, never lost. The collapsed-mode-no-daemon edge is for
    the impl slices.
+   *(**Note, 2026-08-11 — this argument's premise only became true today.** It
+   assumes each append is a per-call `O_APPEND` open, which the emitters did
+   NOT do when this was written: every BCL append path `pwrite`s at an offset
+   resolved at open, so a racing append could have landed in neither segment.
+   Both emitters now open with real `O_APPEND` over libc (ADR-0004 N3's
+   amendment, `PosixTrail`), so decision 6's reasoning is sound as stated —
+   and the warning against a held `FileStream` in the impl notes below is
+   doubly load-bearing: it would undo this too.)*
 
 ### The 0007 ↔ 0009 hand-off — so both halves get done at the right time
 

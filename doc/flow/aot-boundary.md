@@ -71,6 +71,12 @@ string, and the mirrored default log path. Changing the trail schema means
 moving `Logging.fs` and `WireJsonl.cs` in the SAME commit. *Enforced by:*
 the 17 golden cross-emitter tests in `WireJsonlTests` — schema drift is a
 red build, by design.
+The same duplication rule covers the WRITE, not just the render: both
+emitters append through their own libc `O_APPEND` writer (`PosixTrail`,
+mirrored in `Logging.fs`) because no BCL append path sets `O_APPEND` and
+the leaf may not reference the wire lib. A P/Invoke is AOT-native — this
+is not a rule-2 violation — but the two copies must stay in step, and
+`TrailAppendTests` drives BOTH across one file to say so.
 
 **6. Content identity ignores the shim, and that is correct.**
 The rendezvous hash covers the deploy dir's managed DLLs only; a native
@@ -145,8 +151,9 @@ the IL tests already give. *Enforced by:* convention + the `/deploy` skill.
 | wire JSON context (rule 3) | `dotnet/captainHookWire/Frame.cs` (`WireJson`) |
 | log seam + bridge (rule 4) | `dotnet/captainHookWire/WireLog.cs`, `dotnet/captainHook/Core/WireLogBridge.cs` |
 | schema twin renderers (rule 5) | `dotnet/captainHookWire/WireJsonl.cs` ≡ `dotnet/captainHookActors/Logging.fs` |
+| twin `O_APPEND` writers (rule 5) | `dotnet/captainHookWire/PosixTrail.cs` ≡ `PosixTrail` module in `dotnet/captainHookActors/Logging.fs` |
 | identity + skew guard (rules 6–7) | `dotnet/captainHookWire/Rendezvous.cs`, `dotnet/captainShim/SkewGuard.cs` |
 | shim program + delegation (rules 11–12) | `dotnet/captainShim/ShimMain.cs`, `Program.cs` |
-| pinned by | `WireJsonlTests.cs` (golden schema), `ShimMainTests.cs` (relay/skew/at-most-once), `FrameTests.cs`, `RendezvousTests.cs` |
+| pinned by | `WireJsonlTests.cs` (golden schema), `TrailAppendTests.cs` (both writers, one file, concurrently), `ShimMainTests.cs` (relay/skew/at-most-once), `FrameTests.cs`, `RendezvousTests.cs` |
 | decisions behind all of it | `doc/adr/0004-daemon-topology.md` decision 7 + 2026-07-06 amendment |
 | environment facts | `doc/platform.md` §§ Native AOT, Build determinism |

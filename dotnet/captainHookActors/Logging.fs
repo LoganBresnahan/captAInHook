@@ -95,6 +95,77 @@ type LogSpan internal (lvl: string, src: string, evt: string, fields: LogFields,
     interface IDisposable with
         member this.Dispose() = this.Complete()
 
+/// A REAL `O_APPEND` line appender — the mirror of `captainHookWire`'s
+/// `PosixTrail`, duplicated rather than shared because this assembly is a leaf
+/// and may reference nothing (the two emitters share the trail FILE, not code).
+///
+/// Every BCL append path — `File.AppendAllText`, `FileStream(FileMode.Append)`,
+/// `File.OpenHandle(FileMode.Append)` — opens WITHOUT `O_APPEND` and `pwrite`s
+/// at an offset resolved at open (strace-probed on .NET 10 / linux-x64,
+/// 2026-08-11). The daemon and the shim append the same trail concurrently, so
+/// two opens in one window compute the same end offset and one line silently
+/// overwrites the other. `O_APPEND` puts the seek-to-end inside the kernel's
+/// write, under the inode lock.
+module internal PosixTrail =
+    open System.Runtime.InteropServices
+    open System.Text
+
+    // open(2) flags are per-OS ABI constants, not portable numbers.
+    let private O_WRONLY = 1
+    let private O_APPEND = if OperatingSystem.IsMacOS() then 0x0008 else 0x0400
+    let private O_CLOEXEC = if OperatingSystem.IsMacOS() then 0x1000000 else 0x80000
+    let private ENOENT = 2
+    let private EINTR = 4
+
+    // The TWO-argument form of open(2), deliberately: open() is variadic, and
+    // on Apple arm64 the variadic tail uses a different calling convention than
+    // fixed args, so a three-arg declaration would pass `mode` in the wrong
+    // place. The file is created through the BCL instead, and opened with no
+    // variadic argument at all.
+    [<DllImport("libc", SetLastError = true, EntryPoint = "open")>]
+    extern int private sys_open(byte[] path, int flags)
+
+    [<DllImport("libc", SetLastError = true, EntryPoint = "write")>]
+    extern nativeint private sys_write(int fd, byte[] buf, unativeint count)
+
+    [<DllImport("libc", SetLastError = true, EntryPoint = "close")>]
+    extern int private sys_close(int fd)
+
+    /// Append `text` to `path` as one O_APPEND write; false if it did not land
+    /// (the caller is a log sink and owns the decision to swallow).
+    let append (path: string) (text: string) : bool =
+        let cPath = Array.zeroCreate<byte> (Encoding.UTF8.GetByteCount path + 1)
+        Encoding.UTF8.GetBytes(path, 0, path.Length, cPath, 0) |> ignore   // trailing 0 = NUL
+
+        let flags = O_WRONLY ||| O_APPEND ||| O_CLOEXEC
+        let mutable fd = sys_open (cPath, flags)
+        if fd < 0 && Marshal.GetLastPInvokeError() = ENOENT then
+            // Absent file: the BCL owns creation (and the directory), then one retry.
+            try
+                (new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)).Dispose()
+                fd <- sys_open (cPath, flags)
+            with _ -> ()
+
+        if fd < 0 then
+            false
+        else
+            try
+                let buf = Encoding.UTF8.GetBytes text
+                let mutable offset = 0
+                let mutable failed = false
+                while not failed && offset < buf.Length do
+                    // One write(2) for the whole line is the atomic unit; a
+                    // short write (signal, ENOSPC) copies the remainder and
+                    // re-enters, which another writer may split — rare, and
+                    // strictly better than losing the line entirely.
+                    let chunk = if offset = 0 then buf else buf[offset..]
+                    let n = sys_write (fd, chunk, unativeint chunk.Length)
+                    if n > 0n then offset <- offset + int n
+                    elif not (n < 0n && Marshal.GetLastPInvokeError() = EINTR) then failed <- true
+                not failed
+            finally
+                sys_close fd |> ignore
+
 /// The static Log API — the single seam every layer (C# host, F# actors) logs
 /// through. Two sinks by default:
 ///   (a) JSONL appended to $CAPTAINHOOK_LOG (default ~/.captainHook/logs/
@@ -138,7 +209,7 @@ type Log private () =
                     let dir = Path.GetDirectoryName filePath
                     if not (String.IsNullOrEmpty dir) then Directory.CreateDirectory dir |> ignore
                     fileReady <- true
-                File.AppendAllText(filePath, e.ToJson() + Environment.NewLine)
+                PosixTrail.append filePath (e.ToJson() + Environment.NewLine) |> ignore
             with _ -> ())
         // stderr sink: human-readable by default, NEVER stdout.
         if isNull stderrMode then stderrMode <- defaultStderrMode ()

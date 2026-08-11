@@ -494,6 +494,19 @@ Zero new runtime dependencies, as always: BCL + FSharp.Core only.
   shim-minted `dispatchId` (decision 1) and the shared default log path keep
   a digest able to stitch one dispatch together, but both halves must be
   read.
+  *(**Amendment, 2026-08-11 — the append was never atomic.** This note assumed
+  two processes could append one file safely; the emitters did not deliver it.
+  `File.AppendAllText` — and every other BCL append path — opens WITHOUT
+  `O_APPEND` and `pwrite`s at an offset resolved at open, so two writers in one
+  window overwrite each other. Probed at 8 writers × 250 lines: **~55% of lines
+  silently lost**, some fused. In production the exposure was narrower than
+  that number suggests — F#'s sink serializes its own process under a lock and
+  the shim writes few lines from one thread — but the CROSS-process case N3 is
+  about had no protection at all. Fixed by giving both emitters a real
+  `O_APPEND` writer over libc `open`/`write` (`captainHookWire/PosixTrail.cs`
+  and its mirror in `Logging.fs` — duplicated because the F# lib is a leaf and
+  may not reference the wire lib). N3 now describes what the code does.
+  Surfaced by ADR-0007 `sse-trail-tail`'s adversarial verify, 2026-07-08.)*
 - **N4 · A second hand-rolled category.** OS-process lifecycle — locks, signals,
   reaping — is fiddly and ours to get right, mitigated by adopting pharos's
   proven ADR-030 contract wholesale rather than designing from scratch.

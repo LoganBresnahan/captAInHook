@@ -90,16 +90,19 @@ public static class WireJsonl
                 ".captainHook", "logs", "captainHook.jsonl");
     }
 
-    /// Append one rendered line. O_APPEND keeps concurrent writers whole
-    /// (already the shim/daemon story — ADR-0004 N3); failures are swallowed —
-    /// logging must never take the hook down, same contract as the F# sink.
+    /// Append one rendered line through a real `O_APPEND` write, so a line the
+    /// shim writes cannot overwrite one the daemon is writing in the same
+    /// window (ADR-0004 N3's convergence story; the BCL append paths all
+    /// `pwrite` at a stale offset instead — see `PosixTrail`). Failures are
+    /// swallowed — logging must never take the hook down, same contract as the
+    /// F# sink.
     public static void Append(string path, string line)
     {
         try
         {
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.AppendAllText(path, line + Environment.NewLine);
+            PosixTrail.Append(path, line + Environment.NewLine);
         }
         catch { /* never the hook's problem */ }
     }

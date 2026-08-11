@@ -19,6 +19,16 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
   </PropertyGroup>
 
+  <!-- The trail's O_APPEND writer is internal but is the whole point of the
+       fix: it must be tested DIRECTLY, not through the global Log sink whose
+       file path is process-cached (a test driving the default sink would pin
+       it for the rest of the suite). Same reasoning as the engine's one IVT
+       for ApiAuthGate — security/correctness logic gets tested at its own
+       seam, not through a facade. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="captainHookTests" />
+  </ItemGroup>
+
   <!-- F# compiles files IN ORDER — dependencies must come first.
        Logging.fs is first so every layer (F# actors AND the C# host, which
        references this assembly) shares one Log surface. -->
