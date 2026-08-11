@@ -11,7 +11,7 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
-- [ ] **18. Own the spawn seam: bosun** — the exec-handler kill discipline stops
+- [x] **18. Own the spawn seam: bosun** — the exec-handler kill discipline stops
   renting `setsid(1)` from the host's package set. Per **ADR-0014** (accepted
   2026-08-11, out of the ADR-0013 language analysis — which measured the Go
   rewrite's premise and collapsed to "the only cross-OS defect a native
@@ -62,8 +62,15 @@ run live*. The framework underneath is what exists today.
   why a wrapper at all); ADR-0010 d6 amendment note; README's
   `brew install util-linux` nice-to-have replaced by the staged-deploy story
   ADR-0014 rejected it for.)
-  Remaining: run `/deploy` to put the first rung live and confirm
-  `spawner=bosun` on a real dispatch. d5 (`--pdeathsig`) stays DEFERRED —
+  **Deployed 2026-08-11 and dogfooding live**: `/deploy` staged all four
+  artifacts (the fourth for the first time) and swapped them together — pin
+  verified OK, zero `shim.wireSkew`, warm hook 15–19ms, `/ui` serving, doctor
+  leaving one healthy daemon on the new identity. The rung is in force on the
+  maintainer's OWN hooks: every `exec.spawn` from real tool calls carries
+  `spawner=bosun` with no `pgroup=false`, in BOTH modes (oneshot
+  `deploy-guard`, resident `doc-pointer`), and the live resident child sits at
+  pid 164980 == pgid 164980 — exec-in-place, its own group, so a `kill(-pgid)`
+  would take any grandchild it spawns. d5 (`--pdeathsig`) stays DEFERRED —
   it fires on the parent's forking THREAD exiting, and the engine spawns from
   pooled threads, so it would kill healthy payloads; revisit when a dedicated
   long-lived spawn thread exists or orphan pressure exceeds `doctor`.
