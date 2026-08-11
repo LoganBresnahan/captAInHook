@@ -506,6 +506,56 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .trace-divider.reset { color: var(--bad); }
 .trace-empty { color: var(--text-dim); }
 
+/* ============ template gallery (ADR-0015 d3) ============ */
+
+.editor-actions { margin: var(--s-3) 0; }
+
+.gallery {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--s-3);
+}
+.template {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.template p { margin: 0; font-size: var(--fs-sm); }
+.template-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.template-events { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+.template-why { font-size: var(--fs-xs); border-left: 2px solid var(--border-strong); padding-left: var(--s-2); }
+.template > div:last-child { margin-top: auto; }
+
+.template-detail {
+  margin-top: var(--s-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+  padding: var(--s-4);
+}
+.template-steps { margin: 0 0 var(--s-3); padding-left: var(--s-5); font-size: var(--fs-sm); }
+.template-steps li { margin-bottom: var(--s-1); }
+.template-detail pre {
+  margin: var(--s-3) 0 0;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-3);
+  overflow-x: auto;
+  max-height: 420px;
+  overflow-y: auto;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.event-verbs { margin-left: var(--s-2); font-size: var(--fs-2xs); font-family: var(--font-mono); }
+
 /* ============ handlers editor (ADR-0011: install/edit/toggle) ============ */
 
 [data-editor="handlers"] tr[data-enabled-state="disabled"] td { opacity: 0.5; }

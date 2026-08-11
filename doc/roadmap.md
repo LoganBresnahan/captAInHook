@@ -28,7 +28,40 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
-  Slices landed: `handlers-view` (2026-08-11; d6's split. `SupervisionPanel` →
+  Slices landed: `template-gallery` (2026-08-11; d3 — authoring without a
+  script-writing verb. **ADR-0011's provenance trigger stays UNFIRED**: the
+  daemon gains no ability to write an executable; the gallery shows the whole
+  script, says where to save it, and pre-fills the install form, leaving the
+  verbatim confirm as the gate. Four new GENERIC starters in
+  `examples/payloads/` — one per verb, written to be copied: `starter-inject`
+  (note file + the session's git branch, read from the ENVELOPE's cwd — the
+  first cut ran git in the daemon's own directory, which the smoke test
+  caught), `starter-decide` (a gate that can deny, with the fail-mode choice
+  spelled out), `starter-side-effect` (documents that `background` is NOT an
+  exec verb — that is an in-process handler's word to the engine; the exec
+  equivalent is work + `noop`), and `starter-llm` (the DESIGN.md thesis in 60
+  lines: a second model spliced into the loop, carrying ADR-0010 N7's
+  `--setting-sources ""` reentrancy guard and a degrade-to-noop path). All four
+  **smoke-run through a real daemon** per the plan — Decide/Noop/Noop/Inject on
+  the wire, the side-effect's stderr in the trail, and a stub `claude` that
+  EXITS NONZERO if the reentrancy guard is missing, so the guard is proven
+  passed rather than merely present; the degrade path re-run with an empty
+  PATH. Script text is single-sourced via Vite `?raw` from
+  `templateScripts.ts` — split from `templates.ts` because `node --test` (zero
+  deps, by design) cannot resolve a query suffix — and a unit test reads each
+  template's file off DISK asserting it exists, is `#!/bin/sh`, and is
+  executable, which is the only thing that would catch a template pointing at a
+  moved file. The save path is derived from what the daemon reports, in order:
+  the handlers.json directory (its real runtime home, sandbox included), then
+  the shim's deploy home, then NOTHING — a wrong absolute path is worse than an
+  empty field, since the daemon would accept it and the handler would silently
+  never run (the e2e found this: no shim is staged in the fixture, so the
+  shim-only derivation produced no path at all). Gallery + form now surface the
+  per-event effect verbs from `HarnessesDto.events` — data the client always
+  fetched and never showed — so "why did my decide do nothing on Stop?" is
+  answered on screen (Stop: "no loop effects"). 62 units (48 → 62) + 20 e2e
+  green; dotnet 642 green twice.)
+  `handlers-view` (2026-08-11; d6's split. `SupervisionPanel` →
   `HandlersPanel` (`git mv`, island `data-island="supervision"` →
   `"handlers"`, so `gotoView` loses its last special case): the registered
   table + the handlers.json editor now own a full-width view under two

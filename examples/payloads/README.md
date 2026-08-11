@@ -1,14 +1,37 @@
 # Example payloads
 
-Two worked payloads that prove the exec-handler seam (ADR-0010): the engine
-runs *your* process as the payload and maps its stdout onto the effect set.
-Both are dependency-free POSIX `sh` — the point is that a payload is any
-language, not framework code.
+Worked payloads that prove the exec-handler seam (ADR-0010): the engine runs
+*your* process as the payload and maps its stdout onto the effect set. All are
+dependency-free POSIX `sh` — the point is that a payload is any language, not
+framework code.
+
+**Demos** — the two that show the lifecycle shapes end to end:
 
 | script | mode | event | shows |
 | --- | --- | --- | --- |
 | [`retriever.sh`](retriever.sh) | `resident` | `PreToolUse` | the daemon holds it warm; lock-step JSONL; `{"ready":1}` handshake; `inject` |
 | [`memory.sh`](memory.sh) | `oneshot` | `Stop` | spawn-per-event; a durable side effect; `noop` answer |
+
+**Starters** — one per verb, written to be COPIED and edited. Each is the
+smallest useful shape of its idea, with the reasoning in the header and one
+clearly-marked section to change:
+
+| script | verb | event | the idea |
+| --- | --- | --- | --- |
+| [`starter-inject.sh`](starter-inject.sh) | `inject` | `UserPromptSubmit` | put a note file + one live fact (the session's git branch, read from the envelope's `cwd`) in front of the model |
+| [`starter-decide.sh`](starter-decide.sh) | `decide` | `PreToolUse` | a gate that can DENY a tool call, with a reason — and the fail-mode choice that comes with it |
+| [`starter-side-effect.sh`](starter-side-effect.sh) | `noop` | `Stop` | do work, change nothing (`background` is not an exec verb — see the header) |
+| [`starter-llm.sh`](starter-llm.sh) | `inject` | `UserPromptSubmit` | splice a *model* into the loop, with the reentrancy guard and a degrade-to-noop path |
+
+⚠ **These four are also the GUI's template gallery** (ADR-0015 d3): `web/`
+inlines their text at build time via Vite `?raw`, so **editing a starter script
+changes the shipped GUI on the next `npm run build`**. That is the intended
+coupling — one copy of each script, never a drifting duplicate — but it means a
+change here is a change to what the GUI hands users. The GUI never writes these
+files: it shows the script, tells you where to save it, and installs the entry
+behind the verbatim confirm. The maintainer's dogfood payloads (`git-orient`,
+`deploy-guard`, `session-pulse`, `doc-pointer`, `orient-brief`) are deliberately
+NOT templates — they encode one person's workflow.
 
 ## The wire, in one glance
 

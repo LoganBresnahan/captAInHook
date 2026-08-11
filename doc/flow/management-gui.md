@@ -105,6 +105,35 @@ Append → visible measures **200ms**, but that is the *server's* trail stat-pol
 beat (`TrailTail.cs`, 200ms default), not rendering; the script says so rather
 than flattering the client.
 
+## Authoring is a curated gallery, not a script-writing verb (ADR-0015 d3)
+
+The GUI can install a handler ENTRY; it cannot write the executable that entry
+points at, and that is a decision rather than a gap. A daemon verb that wrote
+script files would be a new trust surface — the "code the user cannot read"
+shape ADR-0011 deferred behind its own ADR — so the gallery makes it
+unnecessary: it shows the whole script, tells you where to save it (derived from
+the daemon's OWN reported paths: the handlers.json directory first, the shim's
+deploy home second, nothing third — a wrong absolute path would be accepted by
+the daemon and silently never run), and pre-fills the install form. The
+verbatim confirm still gates the write. **ADR-0011's provenance trigger stays
+unfired.**
+
+Template text is single-sourced from `examples/payloads/` through Vite `?raw`
+(`templateScripts.ts` is the only file that touches it — `templates.ts` stays
+importable by `node --test`, which cannot resolve a query suffix). The import
+crosses `web/`'s boundary into the repo's examples deliberately (N3): one copy
+of each script, and editing a starter changes the shipped GUI on the next build
+— stated in the examples README, and pinned by a unit test that reads each
+template's file off disk and asserts it exists, starts with `#!/bin/sh`, and is
+executable. Only GENERIC starters are offered; the maintainer's dogfood payloads
+are not templates.
+
+The gallery and the install form both surface **the effect verbs each event
+permits**, straight from `HarnessesDto.events` — data the client always fetched
+and nothing displayed. It answers "why did my `decide` do nothing on `Stop`?"
+on screen (Stop's list is empty: no loop effects at all), and it warns rather
+than forbids, because the registry is data and the daemon is the authority.
+
 ## The token handoff — fragment, scrubbed, tab-scoped (d3)
 
 A browser can't read the 0600 `api.json`, so it must be *handed* the token, and
@@ -323,6 +352,7 @@ the engine — and the config's one retry stays for genuine contention.
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`) |
 | policy write client (ETag lifecycle) | `web/src/policy.ts` (`submitPolicy`) |
 | handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
+| template gallery (cards, script view, save instructions, pre-fill) | `web/src/TemplateGallery.tsx`, `web/src/templates.ts` (`TEMPLATES`, `templateEntry`, `suggestedCommand`, `eventVerbs`, `effectLandsOn`), `web/src/templateScripts.ts` (the ONLY `?raw` importer) — starters in `examples/payloads/starter-*.sh` |
 | handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal` — focus trap + Esc + focus restore, `VerbatimEntry`, `WiringHints`) |
 | the supervision summary (registrations / escalated / restarts / resident children) | `web/src/StatusPanel.tsx` (`Supervision`, `data-supervision`) — restarts is DERIVED as Σ(generation − 1) |
 | shared read hook (fetch-on-live, 401⇒session-dead) | `web/src/api.ts` (`useApiJson`) |
@@ -333,7 +363,7 @@ the engine — and the config's one retry stays for genuine contention.
 | DTO→schema→TS codegen | `web/scripts/gen-types.mjs`, `web/schema/api.schema.json`, `web/src/api.gen.ts` |
 | deploy staging (third artifact) | `.claude/skills/deploy/SKILL.md` (§1 `cp -r ui`, §3 `/ui` shell check) |
 | engine-side pins | `ApiUiRouteHttpTests`, `UiResolveGuardTests`, `UiShellGateTests` (route + guard + inert shell), `ApiSchemaTests` (codegen drift), `UiVerbTests` (verb + fragment + shim refusal) — `dotnet/captainHookTests/{ApiUiRouteTests,ApiSchemaTests,UiVerbTests}.cs` |
-| frontend unit pins | `web/src/{store,sse,policy,format,handlers}.test.ts` (`node --test`, zero deps) |
+| frontend unit pins | `web/src/{store,sse,policy,format,handlers,templates}.test.ts` (`node --test`, zero deps) |
 | sandbox daemon (spawn, isolation, readiness, drain, build+stage) | `web/e2e/daemon.ts` (`startDaemon`, `DaemonHandle.stop`, `buildAndStage`) — one module, three consumers |
 | E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,nav,panels,trace,policy,handlers}.spec.ts`; `gotoView` (the ONE nav helper every spec navigates through) |
 | screenshot loop (preview + snap + seed) | `web/scripts/{preview,snap,seed}.mjs` (`npm run ui:preview`, `npm run snap`) → `web/.screens/`; the loop itself in `.claude/skills/ui-loop/SKILL.md`. `build()`/`stageUi()` are separate on purpose — `--no-build` skips COMPILING, never staging, or a watch-mode snap shoots the previous build |

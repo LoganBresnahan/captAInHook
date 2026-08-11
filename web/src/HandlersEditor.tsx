@@ -6,6 +6,8 @@ import {
   type ExecEntry, parseEntries, serializeEntries, upsertEntry, removeEntry,
   formProblems, submitHandlers, disabledState, togglePolicyText, wiringHint,
 } from "./handlers.ts";
+import { TemplateGallery } from "./TemplateGallery.tsx";
+import { eventVerbs } from "./templates.ts";
 
 // The handlers.json section, grown from phase 8's read-only expected view into
 // ADR-0011's editor: install / edit / uninstall as a whole-file
@@ -44,6 +46,7 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const [toggleErr, setToggleErr] = useState<string | null>(null);
+  const [gallery, setGallery] = useState(false);
 
   // The claude-code spec's event vocabulary + install block (data, not code).
   const spec = harnesses?.harnesses.find((h) => h.name === "claude-code")
@@ -208,12 +211,27 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
         </table>
       )}
       {composable ? (
-        <p>
-          <button data-install disabled={busy}
-                  onClick={() => { setNotice(null); setForm({ entry: EMPTY_ENTRY, originalName: null }); }}>
-            + install
-          </button>
-        </p>
+        <>
+          <p className="editor-actions">
+            <button data-install disabled={busy}
+                    onClick={() => { setNotice(null); setForm({ entry: EMPTY_ENTRY, originalName: null }); setGallery(false); }}>
+              + install
+            </button>{" "}
+            <button data-gallery-toggle disabled={busy}
+                    onClick={() => { setNotice(null); setGallery(!gallery); }}>
+              {gallery ? "Hide templates" : "Start from a template"}
+            </button>
+          </p>
+          {gallery && (
+            <TemplateGallery
+              onUse={(entry) => {
+                setNotice(null);
+                setGallery(false);
+                setForm({ entry, originalName: null });
+              }}
+            />
+          )}
+        </>
       ) : dto.source === "loaded" && (
         <p className="bad" data-editor-uncomposable>
           The file on disk contains entries this editor cannot faithfully
@@ -237,6 +255,7 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
         <EntryForm
           form={form}
           knownEvents={knownEvents}
+          verbs={eventVerbs(harnesses)}
           busy={busy}
           onCancel={() => setForm(null)}
           onReview={(entry) => { setViolations([]); setConfirm({ kind: "install", entry, originalName: form.originalName }); }}
@@ -283,9 +302,10 @@ function FileState({ dto }: { dto: HandlersDto }) {
 
 // ---- the entry form ---------------------------------------------------------
 
-function EntryForm({ form, knownEvents, busy, onCancel, onReview }: {
+function EntryForm({ form, knownEvents, verbs, busy, onCancel, onReview }: {
   form: FormState;
   knownEvents: string[];
+  verbs: Record<string, string[]>;
   busy: boolean;
   onCancel: () => void;
   onReview: (entry: ExecEntry) => void;
@@ -310,6 +330,10 @@ function EntryForm({ form, knownEvents, busy, onCancel, onReview }: {
         onChange={(ev) => set({ args: ev.target.value.length === 0 ? [] : ev.target.value.split("\n") })} /></label>
       <fieldset className="wide" data-field="events">
         <legend>events</legend>
+        {/* Each event carries the effect verbs the harness permits there
+            (ADR-0015 d3) — the client has always fetched this and never shown
+            it, so "why did my decide do nothing on Stop?" had no answer on
+            screen. An empty list is stated plainly rather than left blank. */}
         {events.map((name) => (
           <label key={name} className="event-check">
             <input type="checkbox" checked={e.events.includes(name)}
@@ -319,6 +343,9 @@ function EntryForm({ form, knownEvents, busy, onCancel, onReview }: {
                   : e.events.filter((x) => x !== name),
               })} />
             {name}
+            <span className="muted event-verbs" data-event-verbs={name}>
+              {(verbs[name] ?? []).length > 0 ? (verbs[name] ?? []).join(" ") : "no loop effects"}
+            </span>
           </label>
         ))}
       </fieldset>

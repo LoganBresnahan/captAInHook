@@ -134,6 +134,50 @@ test.describe("handlers editor", () => {
     await expect(page.locator('[data-field="readinessTimeoutMs"]')).toHaveValue("7500");
   });
 
+  test("template gallery: pick → script shown → pre-filled form → install → row", async ({ page, daemon }) => {
+    // ADR-0015 d3, end to end. The gallery is CLIENT-SIDE: no API verb writes a
+    // script, so what this proves is that the curated metadata reaches the form
+    // and the ordinary install path takes it from there.
+    await page.locator("[data-gallery-toggle]").click();
+    const card = page.locator('[data-template="starter-decide"]');
+    await expect(card).toBeVisible();
+    // The card states the effect and the harness's own verbs for that event —
+    // data the client always had and never showed.
+    await expect(card.locator('[data-template-effect="decide"]')).toBeVisible();
+    await expect(card.locator('[data-template-event="PreToolUse"]')).toContainText("decide");
+
+    await card.locator("[data-template-use]").click();
+    const detail = page.locator('[data-template-detail="starter-decide"]');
+    // The whole script is on screen — the user is about to make this executable.
+    await expect(detail.locator("[data-template-script]")).toContainText("#!/bin/sh");
+    await expect(detail.locator("[data-template-script]")).toContainText('"effect":"decide"');
+    // The save path is derived from the LIVE daemon's shim path, not invented.
+    await expect(detail.locator("[data-template-path]")).toContainText("/payloads/starter-decide.sh");
+
+    await detail.locator("[data-template-install]").click();
+
+    // The form arrives pre-filled from the template's metadata…
+    await expect(page.locator('[data-field="name"]')).toHaveValue("guard");
+    await expect(page.locator('[data-field="mode"]')).toHaveValue("oneshot");
+    await expect(page.locator('[data-field="budgetMs"]')).toHaveValue("1500");
+    await expect(page.locator('[data-field="command"]')).toHaveValue(/payloads\/starter-decide\.sh$/);
+    await expect(page.locator('[data-field="events"] label:has-text("PreToolUse") input')).toBeChecked();
+    // …including the per-event verbs beside each checkbox (Stop has none).
+    await expect(page.locator('[data-event-verbs="PreToolUse"]')).toContainText("decide");
+    await expect(page.locator('[data-event-verbs="Stop"]')).toContainText("no loop effects");
+
+    // From here it is the ordinary install path, verbatim confirm and all.
+    await page.locator("[data-review]").click();
+    await page.locator('[data-confirm="install"] [data-confirm-go]').click();
+    await expect(page.locator('[data-notice="saved"]')).toBeVisible();
+    await expect(page.locator('[data-expected="guard"]')).toBeVisible();
+
+    const onDisk = JSON.parse(readFileSync(daemon.handlersPath, "utf8"));
+    expect(onDisk.handlers[0].name).toBe("guard");
+    expect(onDisk.handlers[0].events).toEqual(["PreToolUse"]);
+    expect(onDisk.handlers[0].command).toMatch(/payloads\/starter-decide\.sh$/);
+  });
+
   test("the confirm dialog traps focus and closes on Escape, restoring focus", async ({ page }) => {
     // ADR-0015 N4: this modal is ADR-0011's trust surface — the screen where a
     // user consents to running a process as themselves. A keyboard user must be
