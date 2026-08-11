@@ -267,7 +267,7 @@ its lessons are imported wholesale (§ Pattern lineage).
    entry reads `registered:false` + its violations and NEVER appears as a live
    `handlers[]` row (the N2 caution, made structural). Built in
    `ApiReadModel.Handlers()` by re-resolving the same file — so a mid-reload
-   drift shows honestly (file says X, live is Y). The GUI `SupervisionPanel`
+   drift shows honestly (file says X, live is Y). The GUI Handlers view
    grows a child column + a handlers.json section mirroring `PolicyPanel`'s
    tri-state; DTO→schema→TS regen + the committed `ui/` rebuild rode the same
    `dto-schema-codegen` chain, e2e-asserted.)*
@@ -615,7 +615,7 @@ doctor-orphans + observability):
 | kill mechanics (group TERM→grace→KILL, group-aware liveness) + spawn-prefix rungs (ADR-0014: `SpawnPrefix`/`Resolve`/`Prefix`, argv in `ExecHandler.BuildPsi`) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
 | child pid/identity records + once-per-process sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
 | doctor-orphans (report-only; double-guard: pid+starttime identity, live-owner check) | `dotnet/captainHook/Core/Doctor.cs` (`SweepOrphans`, `IsCaptainHookDaemon`), `Program.cs` (doctor verb) |
-| observability (child state + expected-vs-registered) | `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot` correlation, `HandlerStatus`), `Handlers/ResidentExecHandler.cs`, `Api/ApiReadModel.cs` (`Handlers()` join), `Api/ApiDtos.cs` (`HandlerDto`/`HandlersDto`/`ExpectedHandlerDto`), `web/src/SupervisionPanel.tsx` |
+| observability (child state + expected-vs-registered) | `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot` correlation, `HandlerStatus`), `Handlers/ResidentExecHandler.cs`, `Api/ApiReadModel.cs` (`Handlers()` join), `Api/ApiDtos.cs` (`HandlerDto`/`HandlersDto`/`ExpectedHandlerDto`), `web/src/SupervisionPanel.tsx` (renamed `HandlersPanel.tsx` by ADR-0015 d6) |
 | teardown seam (`IEagerStart`, `TrackSwap` admission, `DisposeHandlersAsync`, `SubscribeEscalated`) | `dotnet/captainHook/Core/Dispatcher.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | hot-reload seam (`Reconcile` diff, `AssignIds` id stability, `ExecFingerprint` injective config identity, volatile `_runners` swap, `ReloadingHandlers` stat-gate) + `Supervisor.Remove` | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | registration file (tri-state, strict parse, budget/readiness bounds) | `dotnet/captainHook/Core/ExecHandlersFile.cs` |
@@ -624,5 +624,5 @@ doctor-orphans + observability):
 | trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout`, `handlers.residentDegraded`, `handlers.collapsedTeardownTimeout`, `handlers.reload` |
 | collapsed degrade + demo payloads | `Core/HookRun.cs` (`collapsedEvent` filter + teardown-at-drain), `examples/payloads/` (retriever resident + memory oneshot + handlers.json) |
 | trail events (src `dispatcher`/`daemon`/`sup`/`doctor`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout`, `actor.remove`, `doctor.orphan` |
-| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, CHANGE-mid-dispatch misattribution guard, resident-child-state Snapshot, the add-then-remove daemon E2E), `DoctorOrphansTests` (alive-orphan reported, healthy-owned ignored, stale/pid-reuse/corrupt swept), `ApiReadEndpointsTests` (child state null on coded, expected-vs-registered join), the `SupervisionPanel` e2e |
+| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, CHANGE-mid-dispatch misattribution guard, resident-child-state Snapshot, the add-then-remove daemon E2E), `DoctorOrphansTests` (alive-orphan reported, healthy-owned ignored, stale/pid-reuse/corrupt swept), `ApiReadEndpointsTests` (child state null on coded, expected-vs-registered join), the Handlers-view e2e |
 | platform facts | `doc/platform.md` § Process groups (spawn wrappers, group signals, pgid persistence) |

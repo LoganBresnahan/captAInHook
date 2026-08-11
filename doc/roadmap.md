@@ -28,7 +28,32 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
-  Slices landed: `trace-landing` (2026-08-11; the landing view stops being a
+  Slices landed: `handlers-view` (2026-08-11; d6's split. `SupervisionPanel` →
+  `HandlersPanel` (`git mv`, island `data-island="supervision"` →
+  `"handlers"`, so `gotoView` loses its last special case): the registered
+  table + the handlers.json editor now own a full-width view under two
+  headings, and the daemon-wide SUMMARY — registrations / escalated / restarts
+  / resident children — moves to Status, where the other health numbers live.
+  `restarts` is derived rather than reported: a worker's generation starts at 1,
+  so restarts survived is Σ(generation − 1) across registrations (ADR-0002's
+  model), reading 0 on a healthy daemon. **N4's modal accessibility debt paid**:
+  the verbatim confirm — ADR-0011's trust surface, the screen where a user
+  consents to running a process as themselves — gains a hand-rolled focus trap
+  (no dep), Esc-to-cancel, and focus RESTORE to the opener; pinned by an e2e
+  that tabs 12 times asserting focus never leaves the dialog, shift-tabs off the
+  first element, then Escapes and asserts the opener is focused and nothing was
+  written. **`readinessTimeoutMs` is settable at last**: `ExecEntry` already
+  carried it (so a hand-written value round-tripped through an edit) but the
+  form could not set it — now a labelled field, shown in the verbatim confirm
+  for resident entries, pinned end-to-end form → confirm → file (typed as a
+  NUMBER) → back into the edit form. Two snap-read fixes in-slice: the consent
+  button was visually identical to Cancel on a trust surface (now primary), and
+  the 11-field form was one tall column taller than the viewport — the ADR's
+  "cramped authoring surface" — now a responsive 2–3 column grid with the wide
+  inputs spanning. Extraction diff reviewed before commit per the plan: pure
+  rename + island rename + section headings, no logic moved. 19 e2e (16 → 19)
+  + 48 units green; dotnet 642 green twice.)
+  `trace-landing` (2026-08-11; the landing view stops being a
   document and becomes a FRAME: shell `100vh`, the view region a definite-height
   flex column, the `createRoot` mount divs `display: contents` so they leave the
   box tree entirely (four empty divs would otherwise share the height and break

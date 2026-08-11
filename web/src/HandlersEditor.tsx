@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "./auth.ts";
 import { useStore } from "./store.ts";
 import type { HandlersDto } from "./api.gen.ts";
@@ -300,14 +300,15 @@ function EntryForm({ form, knownEvents, busy, onCancel, onReview }: {
   return (
     <div className="entry-form" data-form={form.originalName ?? "new"}>
       <h4>{form.originalName === null ? "Install handler" : `Edit ${form.originalName}`}</h4>
+      <div className="entry-form-grid">
       <label>name <input value={e.name} data-field="name"
         onChange={(ev) => set({ name: ev.target.value })} /></label>
       <label>command <input value={e.command} data-field="command" placeholder="/absolute/path/to/payload"
         onChange={(ev) => set({ command: ev.target.value })} /></label>
-      <label>args (one per line) <textarea rows={2} data-field="args"
+      <label className="wide">args (one per line) <textarea rows={2} data-field="args"
         value={(e.args ?? []).join("\n")}
         onChange={(ev) => set({ args: ev.target.value.length === 0 ? [] : ev.target.value.split("\n") })} /></label>
-      <fieldset data-field="events">
+      <fieldset className="wide" data-field="events">
         <legend>events</legend>
         {events.map((name) => (
           <label key={name} className="event-check">
@@ -338,9 +339,19 @@ function EntryForm({ form, knownEvents, busy, onCancel, onReview }: {
       <label>budgetMs (blank = per-event default) <input value={e.budgetMs ?? ""} data-field="budgetMs"
         inputMode="numeric"
         onChange={(ev) => set({ budgetMs: ev.target.value === "" ? undefined : Number(ev.target.value) })} /></label>
+      {/* Resident-only, and the form said nothing about it until ADR-0015
+          slice 4: a resident child must announce {"ready":1} within this window
+          or the daemon gives up on it (ADR-0010). `ExecEntry` already carried
+          the field, so a hand-written value round-tripped through an edit — it
+          just could not be SET here. Rendered for both modes rather than hidden
+          behind `mode`, so an existing value is never invisible. */}
+      <label>readinessTimeoutMs (resident only; blank = default) <input
+        value={e.readinessTimeoutMs ?? ""} data-field="readinessTimeoutMs"
+        inputMode="numeric"
+        onChange={(ev) => set({ readinessTimeoutMs: ev.target.value === "" ? undefined : Number(ev.target.value) })} /></label>
       <label>cwd (blank = event cwd) <input value={e.cwd ?? ""} data-field="cwd"
         onChange={(ev) => set({ cwd: ev.target.value === "" ? undefined : ev.target.value })} /></label>
-      <label>env (KEY=VALUE, one per line) <textarea rows={2} data-field="env"
+      <label className="wide">env (KEY=VALUE, one per line) <textarea rows={2} data-field="env"
         value={Object.entries(e.env ?? {}).map(([k, v]) => `${k}=${v}`).join("\n")}
         onChange={(ev) => {
           const env: Record<string, string> = {};
@@ -357,13 +368,14 @@ function EntryForm({ form, knownEvents, busy, onCancel, onReview }: {
           passEnv: ev.target.value === "" ? undefined
             : ev.target.value.split(",").map((s) => s.trim()).filter(Boolean),
         })} /></label>
+      </div>
       {touched && problems.length > 0 && (
         <ul className="bad" data-form-problems>
           {problems.map((p, i) => <li key={i}>{p}</li>)}
         </ul>
       )}
-      <div>
-        <button data-review disabled={busy || problems.length > 0} onClick={() => onReview(e)}>
+      <div className="form-actions">
+        <button data-review className="btn-primary" disabled={busy || problems.length > 0} onClick={() => onReview(e)}>
           Review &amp; {form.originalName === null ? "install" : "save"}
         </button>{" "}
         <button onClick={onCancel} disabled={busy}>Cancel</button>
@@ -388,9 +400,58 @@ function ConfirmModal({ confirm, entries, violations, busy, shimPath, install, o
     ? confirm.entry
     : entries.find((e) => e.name === confirm.name) ?? null;
 
+  const dialog = useRef<HTMLDivElement>(null);
+
+  // Modal accessibility, hand-rolled — no dependency (ADR-0015 N4). This dialog
+  // is the ADR-0011 trust surface: the one screen where a user says "yes, run
+  // this process as me". A trust surface a keyboard user cannot escape from, or
+  // can tab out of behind the backdrop while it still looks modal, is not one.
+  // Three obligations: focus moves IN on open, Tab cycles WITHIN, and focus
+  // goes back where it came from on close (so the row's edit/✕ button is still
+  // where the user left it).
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const focusables = () => [
+      ...(dialog.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select, textarea, summary, [tabindex]:not([tabindex="-1"])',
+      ) ?? []),
+    ];
+    focusables()[0]?.focus() ?? dialog.current?.focus();
+
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        onCancel();
+        return;
+      }
+      if (ev.key !== "Tab") return;
+      const f = focusables();
+      if (f.length === 0) return;
+      const first = f[0], last = f[f.length - 1];
+      const active = document.activeElement;
+      // Wrap at both ends, and pull focus back in if it has escaped the dialog
+      // entirely (a click on the backdrop, a stray programmatic focus).
+      if (!dialog.current?.contains(active)) {
+        ev.preventDefault();
+        (ev.shiftKey ? last : first).focus();
+      } else if (ev.shiftKey && active === first) {
+        ev.preventDefault();
+        last.focus();
+      } else if (!ev.shiftKey && active === last) {
+        ev.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+  }, [onCancel]);
+
   return (
     <div className="modal-backdrop" data-confirm={confirm.kind}>
-      <div className="modal" role="dialog" aria-modal="true">
+      <div className="modal" role="dialog" aria-modal="true" ref={dialog} tabIndex={-1}>
         {confirm.kind === "install" ? (
           <>
             <h4>Confirm: {confirm.originalName === null ? "install" : "save"} {confirm.entry.name}</h4>
@@ -420,7 +481,7 @@ function ConfirmModal({ confirm, entries, violations, busy, shimPath, install, o
         )}
         <div>
           <button onClick={onCancel} disabled={busy}>Cancel</button>{" "}
-          <button data-confirm-go disabled={busy} onClick={onConfirm}>
+          <button data-confirm-go className="btn-primary" disabled={busy} onClick={onConfirm}>
             {busy ? "Writing…" : confirm.kind === "remove" ? "Uninstall" : "Install"}
           </button>
         </div>
@@ -442,6 +503,14 @@ function VerbatimEntry({ entry }: { entry: ExecEntry }) {
         <dt>mode</dt><dd data-v="mode">{entry.mode ?? "oneshot"}</dd>
         <dt>failMode</dt><dd data-v="failMode">{entry.failMode ?? "open"}</dd>
         <dt>budget</dt><dd data-v="budget">{entry.budgetMs !== undefined ? `${entry.budgetMs}ms` : "per-event default"}</dd>
+        {(entry.mode === "resident" || entry.readinessTimeoutMs !== undefined) && (
+          <>
+            <dt>readiness</dt>
+            <dd data-v="readinessTimeoutMs">
+              {entry.readinessTimeoutMs !== undefined ? `${entry.readinessTimeoutMs}ms` : "default"}
+            </dd>
+          </>
+        )}
         <dt>cwd</dt><dd data-v="cwd">{entry.cwd ?? "(event cwd)"}</dd>
         <dt>env</dt><dd data-v="env">
           fixed allowlist{Object.entries(entry.env ?? {}).length > 0

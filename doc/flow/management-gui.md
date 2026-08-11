@@ -323,10 +323,11 @@ the engine — and the config's one retry stays for genuine contention.
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`) |
 | policy write client (ETag lifecycle) | `web/src/policy.ts` (`submitPolicy`) |
 | handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
-| handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal`, `VerbatimEntry`, `WiringHints`) |
+| handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal` — focus trap + Esc + focus restore, `VerbatimEntry`, `WiringHints`) |
+| the supervision summary (registrations / escalated / restarts / resident children) | `web/src/StatusPanel.tsx` (`Supervision`, `data-supervision`) — restarts is DERIVED as Σ(generation − 1) |
 | shared read hook (fetch-on-live, 401⇒session-dead) | `web/src/api.ts` (`useApiJson`) |
 | pure display logic | `web/src/format.ts` (`dispatchHue`, `uptime`, `clockTime`, `traceMatches`) |
-| islands + mount table | `web/src/{App,StatusPanel,SupervisionPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx`, `main.tsx`, `index.html` (rail + one view region) |
+| islands + mount table | `web/src/{App,StatusPanel,HandlersPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx`, `main.tsx`, `index.html` (rail + one view region) |
 | the nav rail + session notice | `web/src/App.tsx` (`Nav` — `data-nav` buttons, `aria-current`; `SessionNotice` — `data-notice-session`) |
 | design tokens (color/type/space/radius, both themes) | `web/src/styles.css` `:root` + its `prefers-color-scheme: dark` block; the console rail is dark in BOTH themes by design |
 | DTO→schema→TS codegen | `web/scripts/gen-types.mjs`, `web/schema/api.schema.json`, `web/src/api.gen.ts` |

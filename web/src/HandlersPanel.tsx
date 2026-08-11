@@ -3,14 +3,25 @@ import { useApiJson } from "./api.ts";
 import type { HandlersDto } from "./api.gen.ts";
 import { HandlersSection } from "./HandlersEditor.tsx";
 
-// The Supervision island (ADR-0008 d1; ADR-0010 d8): every registered handler
-// with its fail mode, live supervision state (generation = restart count, dead
-// = escalated past its budget), and — for a resident exec handler — its live
-// CHILD state (spawning/ready/failed + pid). Below the live table, the
-// handlers.json EXPECTED-vs-REGISTERED view: the file's declared entries joined
-// to what actually registered, so a warn-and-skip entry shows as skipped (never
-// as a live row — the N2 caution) and a malformed file is loud. Polled every 4s.
-export function SupervisionPanel() {
+// The Handlers view (ADR-0008 d1 + ADR-0010 d8, given its own full-width screen
+// by ADR-0015 d6 — the island was called "supervision" while it shared a
+// three-across card row, and the table it holds is far too wide for that; the
+// overflow defect the ADR opens with was that shape, not this content).
+//
+// Two sections, in the order an operator asks about them:
+//   1. REGISTERED — what the daemon is actually running right now: every
+//      registered handler with its fail mode, live supervision state
+//      (generation = restart count, dead = escalated past its budget) and, for
+//      a resident exec handler, its live child state (spawning/ready/failed +
+//      pid). Polled every 4s.
+//   2. handlers.json — the file's declared entries joined to what actually
+//      registered, so a warn-and-skip entry shows as skipped (never as a live
+//      row — the N2 caution) and a malformed file is loud. This is the editor.
+//
+// The daemon-wide supervision SUMMARY (how many handlers, how many escalated,
+// how many restarts) lives on Status instead: it is a health number, not a
+// per-handler fact, and Status is where the other health numbers are.
+export function HandlersPanel() {
   const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const handlers = useStore((s) => s.handlers);
@@ -22,12 +33,14 @@ export function SupervisionPanel() {
   if (view !== "handlers" || session !== "live" || handlers === null) return null;
 
   return (
-    <section className="card" data-island="supervision">
+    <section className="card" data-island="handlers">
       <h2>Handlers</h2>
+
+      <h3>Registered</h3>
       {handlers.handlers.length === 0 ? (
         <p className="muted">No handlers registered.</p>
       ) : (
-        <table>
+        <table className="registered">
           <thead>
             <tr><th>event</th><th>handler</th><th>fail</th><th>gen</th><th>state</th><th>child</th></tr>
           </thead>
@@ -57,7 +70,7 @@ export function SupervisionPanel() {
 
       <h3>handlers.json</h3>
       {/* Phase 8's read view, grown into ADR-0011's editor — the expected
-          table now carries install/edit/uninstall + the enable toggle, every
+          table carries install/edit/uninstall + the enable toggle, every
           write behind the verbatim confirm. */}
       <HandlersSection dto={handlers} />
     </section>

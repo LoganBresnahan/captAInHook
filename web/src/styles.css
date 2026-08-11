@@ -128,6 +128,7 @@ code {
 }
 .muted { color: var(--text-dim); }
 .ok { color: var(--ok); }
+.warn { color: var(--warn); font-weight: 600; }
 .bad { color: var(--bad); font-weight: 600; }
 
 /* ============================ the shell ============================ */
@@ -517,9 +518,20 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   padding: var(--s-4);
   margin-top: var(--s-3);
 }
+/* Two columns once there is room: the form is 11 fields, and a single stacked
+   column made the authoring surface taller than the viewport — the "cramped
+   authoring surface" ADR-0015 opens with. The wide inputs (args, env, the
+   event checkboxes) span both tracks; everything else pairs up. */
+.entry-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 var(--s-5);
+  align-items: start;
+}
+.entry-form-grid > .wide { grid-column: 1 / -1; }
 .entry-form label { display: block; margin: var(--s-3) 0; font-size: var(--fs-sm); }
 .entry-form input, .entry-form textarea, .entry-form select {
-  width: 100%; max-width: 480px;
+  width: 100%;
   display: block;
   margin-top: var(--s-1);
 }
@@ -529,6 +541,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   margin: var(--s-3) 0;
   padding: var(--s-3);
 }
+.entry-form .form-actions { margin-top: var(--s-4); }
 .entry-form legend { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: var(--track-label); color: var(--text-dim); }
 .entry-form .event-check { display: inline-block; margin-right: var(--s-4); font-family: var(--font-ui); }
 .entry-form .event-check input { display: inline; width: auto; }

@@ -416,7 +416,7 @@ decision→code index.
 | d3 token handoff (fragment → sessionStorage → scrub → bearer) | `web/src/auth.ts`; the `captainHook ui` verb `Api/UiVerb.cs` + `Mode.Ui` (`captainHookWire/Cli.cs`, `Program.cs`, shim refusal `captainShim/ShimMain.cs`) |
 | d4 fetch-streaming client (opaque cursor, reset/gap, dead-credential) | `web/src/sse.ts` (`runEventStream` + protocol layer); the from-now anchor fix in `Api/ApiHost.cs` `ServeEventsAsync` |
 | d1 policy editor + ETag lifecycle | `web/src/policy.ts` (`submitPolicy`), `web/src/PolicyPanel.tsx`; server path in `Api/ApiPolicyWriter.cs` (ADR-0007) |
-| d1 read islands | `web/src/{StatusPanel,SupervisionPanel,HarnessesPanel,TracePanel}.tsx`, shared `api.ts`, pure `format.ts` |
+| d1 read islands | `web/src/{StatusPanel,SupervisionPanel,HarnessesPanel,TracePanel}.tsx`, shared `api.ts`, pure `format.ts` — *`SupervisionPanel.tsx` became `HandlersPanel.tsx` when ADR-0015 d6 gave it its own view and moved the daemon-wide summary to Status* |
 | d6 stack + DTO→schema→TS codegen | `web/` React+Vite+Zustand; `Api/ApiSchema.cs` (`Export`) → `web/schema/api.schema.json` → `web/scripts/gen-types.mjs` → `web/src/api.gen.ts` |
 | d8 islands over one store | `web/src/store.ts` (`useStore`, `foldTrace`), `web/src/main.tsx` mount table, `web/index.html` leaf divs |
 | d2/d7 same-origin serving, third deploy artifact, full-reload loop | `.claude/skills/deploy/SKILL.md` (`ui/` staging + shell check); Vite `base:'/ui/'` `web/vite.config.ts` |

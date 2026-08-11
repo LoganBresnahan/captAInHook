@@ -22,16 +22,15 @@ export const test = base.extend<{ daemon: Daemon }>({
 
 /** Navigate to a view and wait for its island (ADR-0015 d1). ONE helper, so the
  * nav's contract lives in a single place: a spec names the view it needs, not
- * the DOM that switches it. `island` defaults to the view name — only the
- * Handlers view differs, because its island predates the rename (the store's
- * `handlers` view renders `data-island="supervision"`, which slice 4 splits). */
+ * the DOM that switches it. Every view's island carries
+ * `data-island="<view>"` — the Handlers view's rename (ADR-0015 d6) removed the
+ * last exception, so this helper has no special cases at all. */
 export async function gotoView(
   page: Page,
   view: "trace" | "handlers" | "policy" | "harnesses" | "status",
 ): Promise<void> {
   await page.locator(`[data-nav="${view}"]`).click();
-  const island = view === "handlers" ? "supervision" : view;
-  await expect(page.locator(`[data-island="${island}"]`)).toBeVisible();
+  await expect(page.locator(`[data-island="${view}"]`)).toBeVisible();
 }
 
 export { expect } from "@playwright/test";

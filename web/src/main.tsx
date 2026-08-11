@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Nav, SessionNotice } from "./App.tsx";
 import { StatusPanel } from "./StatusPanel.tsx";
-import { SupervisionPanel } from "./SupervisionPanel.tsx";
+import { HandlersPanel } from "./HandlersPanel.tsx";
 import { HarnessesPanel } from "./HarnessesPanel.tsx";
 import { PolicyPanel } from "./PolicyPanel.tsx";
 import { TracePanel } from "./TracePanel.tsx";
@@ -30,7 +30,7 @@ const mount = (id: string, node: React.ReactNode) => {
 mount("nav", <Nav />);
 mount("session-state", <SessionNotice />);
 mount("status", <StatusPanel />);
-mount("supervision", <SupervisionPanel />);
+mount("handlers", <HandlersPanel />);
 mount("harnesses", <HarnessesPanel />);
 mount("policy", <PolicyPanel />);
 mount("trace", <TracePanel />);

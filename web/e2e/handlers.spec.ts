@@ -111,6 +111,61 @@ test.describe("handlers editor", () => {
     await expect(page.locator('[data-expected="theirs"]')).toBeVisible();
   });
 
+  test("readinessTimeoutMs round-trips: form → confirm → file → back into the edit form", async ({ page, daemon }) => {
+    // ADR-0015 slice 4: the field existed in the client type (so a hand-written
+    // value survived an edit) but could not be SET from the form. A resident
+    // handler's readiness window is exactly the thing a GUI should be able to
+    // tune, so the round trip is pinned end to end through the real PUT.
+    await fill(page, { name: "resident-one", command: "/bin/true" });
+    await page.locator('[data-field="mode"]').selectOption("resident");
+    await page.locator('[data-field="readinessTimeoutMs"]').fill("7500");
+    await page.locator("[data-review]").click();
+
+    const modal = page.locator('[data-confirm="install"]');
+    await expect(modal.locator('[data-v="readinessTimeoutMs"]')).toHaveText("7500ms");
+    await modal.locator("[data-confirm-go]").click();
+    await expect(page.locator('[data-notice="saved"]')).toBeVisible();
+
+    // The daemon wrote it, typed as a number rather than a string…
+    const onDisk = JSON.parse(readFileSync(daemon.handlersPath, "utf8"));
+    expect(onDisk.handlers[0].readinessTimeoutMs).toBe(7500);
+    // …and re-opening the entry shows it, so an edit cannot silently drop it.
+    await page.locator('[data-edit="resident-one"]').click();
+    await expect(page.locator('[data-field="readinessTimeoutMs"]')).toHaveValue("7500");
+  });
+
+  test("the confirm dialog traps focus and closes on Escape, restoring focus", async ({ page }) => {
+    // ADR-0015 N4: this modal is ADR-0011's trust surface — the screen where a
+    // user consents to running a process as themselves. A keyboard user must be
+    // able to leave it, and must not be able to tab out behind it.
+    await page.locator("[data-install]").click();
+    await page.locator('[data-field="name"]').fill("esc-victim");
+    await page.locator('[data-field="command"]').fill("/bin/true");
+    await page.locator('[data-field="events"] label:has-text("UserPromptSubmit") input').check();
+    const review = page.locator("[data-review]");
+    await review.click();
+
+    const modal = page.locator('[data-confirm="install"]');
+    await expect(modal).toBeVisible();
+    // Focus moved INTO the dialog on open.
+    expect(await modal.evaluate((m) => m.contains(document.activeElement))).toBe(true);
+
+    // Tab all the way round: focus stays inside, never escapes to the form.
+    for (let i = 0; i < 12; i++) {
+      await page.keyboard.press("Tab");
+      expect(await modal.evaluate((m) => m.contains(document.activeElement))).toBe(true);
+    }
+    // Shift-Tab off the first element wraps backwards, still inside.
+    await page.keyboard.press("Shift+Tab");
+    expect(await modal.evaluate((m) => m.contains(document.activeElement))).toBe(true);
+
+    // Escape closes it, writes nothing, and gives focus back to the opener.
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0);
+    await expect(page.locator('[data-notice="saved"]')).toHaveCount(0);
+    await expect(review).toBeFocused();
+  });
+
   test("uninstall behind its confirm; enable/disable toggles a dispatch.json rule", async ({ page, daemon }) => {
     await fill(page, { name: "victim", command: "/bin/true" });
     await page.locator("[data-review]").click();

@@ -19,16 +19,28 @@ test.describe("read panels", () => {
     await expect(status.locator('[data-metric="open streams"] dd')).toHaveText(/^[1-9]\d*$/);
   });
 
-  test("supervision lists the registered handlers, all live", async ({ page }) => {
+  test("the handlers view lists the registered handlers, all live", async ({ page }) => {
     await gotoView(page, "handlers");
-    const rows = page.locator('[data-island="supervision"] tbody tr');
+    const rows = page.locator('[data-island="handlers"] table.registered tbody tr');
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBeGreaterThan(0);
     // A fresh daemon has no escalated handlers.
-    await expect(page.locator('[data-island="supervision"] [data-dead="true"]')).toHaveCount(0);
+    await expect(page.locator('[data-island="handlers"] [data-dead="true"]')).toHaveCount(0);
     // The expected-vs-registered section renders its handlers.json tri-state
     // (ADR-0010 d8); no file is provisioned in this fixture ⇒ absent.
-    await expect(page.locator('[data-island="supervision"] [data-file-state="absent"]')).toBeVisible();
+    await expect(page.locator('[data-island="handlers"] [data-file-state="absent"]')).toBeVisible();
+  });
+
+  test("status carries the supervision summary, not the handlers view", async ({ page }) => {
+    // ADR-0015 d6: the daemon-wide health numbers moved to Status; the
+    // per-handler detail stayed on Handlers.
+    await gotoView(page, "status");
+    const summary = page.locator("[data-supervision]");
+    await expect(summary).toBeVisible();
+    await expect(summary.locator('[data-metric="registrations"] dd')).toHaveText(/^[1-9]\d*$/);
+    await expect(summary.locator('[data-metric="escalated"] dd')).toHaveText("0");
+    await expect(summary.locator('[data-metric="restarts"] dd')).toHaveText("0");
+    await expect(page.locator('[data-island="handlers"]')).toHaveCount(0);
   });
 
   test("harnesses lists the built-in claude-code with capability chips", async ({ page }) => {
