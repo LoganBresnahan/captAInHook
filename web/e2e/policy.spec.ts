@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { test, expect } from "./fixtures.ts";
+import { test, expect, gotoView } from "./fixtures.ts";
 
 // The policy editor (ADR-0008 d1) writes through the real Phase-6 PUT path, and
 // the ETag adoption (pin 2) holds end to end: a second save with NO reload
@@ -8,6 +8,7 @@ test.describe("policy editor", () => {
   test("edit → save → written, then save again with the adopted ETag → written", async ({ page, daemon }) => {
     await page.goto(daemon.url);
     await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
+    await gotoView(page, "policy");
     const island = page.locator('[data-island="policy"]');
     await expect(island).toBeVisible();
 
@@ -30,6 +31,7 @@ test.describe("policy editor", () => {
   test("an invalid policy is refused with the daemon's own violations, nothing written", async ({ page, daemon }) => {
     await page.goto(daemon.url);
     await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
+    await gotoView(page, "policy");
     const island = page.locator('[data-island="policy"]');
     await island.locator("textarea").fill('{"version":1,"default":"banana","rules":[]}');
     await island.getByRole("button", { name: "Save policy" }).click();

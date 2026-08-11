@@ -8,7 +8,12 @@ test.describe("shell and auth boundary", () => {
     await page.goto(`http://127.0.0.1:${daemon.port}/ui`);
     const line = page.locator(".session-line");
     await expect(line).toHaveAttribute("data-session", "none");
-    await expect(line).toContainText("captainHook ui");
+    // The rail states it tersely; the view region carries the instruction the
+    // visitor can act on (ADR-0015 d1 — the shell restructure moved the prose
+    // out of a 210px rail).
+    const notice = page.locator('[data-notice-session="none"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("captainHook ui");
     // The inert shell served no credential.
     expect(await page.content()).not.toContain(daemon.token);
   });

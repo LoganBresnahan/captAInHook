@@ -32,6 +32,25 @@ export type StreamState = "idle" | "live" | "retrying" | "dead";
  * StreamState: fetch-once panels care about the session even with no stream. */
 export type SessionState = "none" | "checking" | "live" | "dead";
 
+// ---- navigation ---------------------------------------------------------------
+
+/** The five views (ADR-0015 d1). Navigation is a store field, NOT a router: the
+ * island architecture already gives each screen its own root, so "which view is
+ * active" is one more piece of shared state — every island renders `null` unless
+ * its view is active. Trace is the landing view; the URL is deliberately not
+ * involved (the `#t=` token scrub owns the fragment, d1). */
+export const VIEWS = ["trace", "handlers", "policy", "harnesses", "status"] as const;
+export type View = (typeof VIEWS)[number];
+
+/** Human labels for the nav — the only place a view's display name lives. */
+export const VIEW_LABELS: Record<View, string> = {
+  trace: "Trace",
+  handlers: "Handlers",
+  policy: "Policy",
+  harnesses: "Harnesses",
+  status: "Status",
+};
+
 // ---- trace entries ----------------------------------------------------------
 
 /** A parsed trail line. The tailer and transport are schema-blind; the client
@@ -74,6 +93,8 @@ export type PolicyVerdict =
 // ---- the store ---------------------------------------------------------------
 
 export type Store = {
+  // which screen is on (ADR-0015 d1) — the whole of navigation
+  view: View;
   // one slice per screen (decision 1's table)
   trace: TraceEntry[];
   traceTruncated: number;
@@ -88,6 +109,8 @@ export type Store = {
 
   // the ONE place stream state ever mutates (decision 8)
   foldFrame: (frame: SseFrame) => void;
+
+  setView: (v: View) => void;
 
   // fetch-result setters — plain state lands, no logic
   setStatus: (s: StatusDto) => void;
@@ -128,6 +151,7 @@ export function foldTrace(
 }
 
 export const useStore = create<Store>((set) => ({
+  view: "trace",
   trace: [],
   traceTruncated: 0,
   status: null,
@@ -143,6 +167,8 @@ export const useStore = create<Store>((set) => ({
       const { trace, truncated } = foldTrace(s.trace, s.traceTruncated, frame);
       return { trace, traceTruncated: truncated };
     }),
+
+  setView: (view) => set({ view }),
 
   setStatus: (status) => set({ status }),
   setPolicy: (policy) => set({ policy }),

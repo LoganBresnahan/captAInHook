@@ -55,6 +55,7 @@ function Row({ entry, onPickDispatch }: { entry: TraceEntry; onPickDispatch: (id
 }
 
 export function TracePanel() {
+  const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const trace = useStore((s) => s.trace);
   const truncated = useStore((s) => s.traceTruncated);
@@ -76,7 +77,11 @@ export function TracePanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [shown.length, following]);
 
-  if (session !== "live") return null;
+  // The view gate (ADR-0015 d1). The SSE client lives OUTSIDE React (main.tsx)
+  // and folds into the store regardless of what is rendered, so a hidden Trace
+  // loses nothing: leave, come back, and the whole stream is there — including
+  // lines that arrived while another view was on screen.
+  if (view !== "trace" || session !== "live") return null;
 
   const onScroll = () => {
     const el = scrollRef.current;

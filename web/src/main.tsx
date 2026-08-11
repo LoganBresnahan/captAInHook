@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.tsx";
+import { Nav, SessionNotice } from "./App.tsx";
 import { StatusPanel } from "./StatusPanel.tsx";
 import { SupervisionPanel } from "./SupervisionPanel.tsx";
 import { HarnessesPanel } from "./HarnessesPanel.tsx";
@@ -27,7 +27,8 @@ const mount = (id: string, node: React.ReactNode) => {
   if (el) createRoot(el).render(<StrictMode>{node}</StrictMode>);
 };
 
-mount("app", <App />);
+mount("nav", <Nav />);
+mount("session-state", <SessionNotice />);
 mount("status", <StatusPanel />);
 mount("supervision", <SupervisionPanel />);
 mount("harnesses", <HarnessesPanel />);

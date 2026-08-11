@@ -9,12 +9,14 @@ import type { HarnessesDto } from "./api.gen.ts";
 // {eventName: [allowed effect verbs]} — the closed Effect set a harness permits
 // per lifecycle event.
 export function HarnessesPanel() {
+  const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const harnesses = useStore((s) => s.harnesses);
   const setHarnesses = useStore((s) => s.setHarnesses);
   useApiJson<HarnessesDto>("/api/v1/harnesses", setHarnesses);
 
-  if (session !== "live" || harnesses === null) return null;
+  // The view gate (ADR-0015 d1), after the hooks.
+  if (view !== "harnesses" || session !== "live" || harnesses === null) return null;
 
   return (
     <section className="card" data-island="harnesses">

@@ -11,12 +11,15 @@ import { HandlersSection } from "./HandlersEditor.tsx";
 // to what actually registered, so a warn-and-skip entry shows as skipped (never
 // as a live row — the N2 caution) and a malformed file is loud. Polled every 4s.
 export function SupervisionPanel() {
+  const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const handlers = useStore((s) => s.handlers);
   const setHandlers = useStore((s) => s.setHandlers);
   useApiJson<HandlersDto>("/api/v1/handlers", setHandlers, 4000);
 
-  if (session !== "live" || handlers === null) return null;
+  // The view gate (ADR-0015 d1), after the hooks so the poll keeps the slice
+  // warm while hidden.
+  if (view !== "handlers" || session !== "live" || handlers === null) return null;
 
   return (
     <section className="card" data-island="supervision">

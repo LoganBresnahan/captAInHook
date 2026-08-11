@@ -5,25 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>captAInHook</title>
-    <script type="module" crossorigin src="/ui/assets/index-CAelZ1vv.js"></script>
-    <link rel="stylesheet" crossorigin href="/ui/assets/index-DRj_pDmn.css">
+    <script type="module" crossorigin src="/ui/assets/index-CiYrttnX.js"></script>
+    <link rel="stylesheet" crossorigin href="/ui/assets/index-BK0iMwMf.css">
   </head>
   <body>
     <!-- Islands (ADR-0008 d8): each div is its own createRoot mount — DOM
          siblings, no shared React parent; coordination is the store. The shell
          is served unauthenticated, then the bundle authenticates itself via
          the fragment-token handoff (d3). No secrets, no state — inert bytes.
-         The wrapping elements are layout scaffold only; islands mount into the
-         leaf divs by id. -->
-    <div id="app"></div>
-    <main class="layout">
-      <div class="grid">
-        <div id="status"></div>
+
+         The shell is a sidebar + ONE view region (ADR-0015 d1): the nav island
+         writes `view` to the store and every screen island renders null unless
+         its view is active, so the region holds exactly one screen at a time.
+         No router — the wrapping elements stay pure layout scaffold. -->
+    <div class="shell">
+      <div id="nav"></div>
+      <main class="view-region">
+        <div id="session-state"></div>
+        <div id="trace"></div>
         <div id="supervision"></div>
-        <div id="harnesses"></div>
         <div id="policy"></div>
-      </div>
-      <div id="trace"></div>
-    </main>
+        <div id="harnesses"></div>
+        <div id="status"></div>
+      </main>
+    </div>
   </body>
 </html>

@@ -12,6 +12,7 @@ import type { PolicyDto } from "./api.gen.ts";
 // text, the in-flight If-Match tag — decision 8: props/locals within an
 // island are fine; the store is for cross-island truth).
 export function PolicyPanel() {
+  const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const policy = useStore((s) => s.policy);
   const verdict = useStore((s) => s.policyVerdict);
@@ -37,7 +38,12 @@ export function PolicyPanel() {
       .catch(() => { /* load failure: panel stays unmounted; the shell owns session errors */ });
   }, [session, setPolicy]);
 
-  if (session !== "live" || policy === null) return null;
+  // The view gate (ADR-0015 d1), after the hooks. Rendering null does NOT
+  // unmount this island — the component stays alive with its local state, so an
+  // unsaved draft and the pending If-Match tag survive a trip to another view
+  // and come back exactly as they were. (A route swap would have thrown them
+  // away; not routing is what makes this free.)
+  if (view !== "policy" || session !== "live" || policy === null) return null;
 
   const text = draft ?? policy.raw ?? "{\n  \"version\": 1,\n  \"default\": \"allow\",\n  \"rules\": []\n}\n";
 
@@ -81,7 +87,7 @@ export function PolicyPanel() {
   };
 
   return (
-    <section data-island="policy">
+    <section className="card" data-island="policy">
       <h2>Dispatch policy</h2>
       <p>
         {policy.state === "absent" && <>No policy file — every hook is worked (the zero-config default). Saving creates {policy.path ?? "the file"}.</>}

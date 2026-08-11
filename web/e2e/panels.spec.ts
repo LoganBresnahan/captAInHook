@@ -1,6 +1,8 @@
-import { test, expect } from "./fixtures.ts";
+import { test, expect, gotoView } from "./fixtures.ts";
 
-// The read islands (ADR-0008 d1) render real daemon data end to end.
+// The read islands (ADR-0008 d1) render real daemon data end to end. Each lives
+// on its own view now (ADR-0015 d1), so every test navigates first — Trace is
+// the landing view.
 test.describe("read panels", () => {
   test.beforeEach(async ({ page, daemon }) => {
     await page.goto(daemon.url);
@@ -8,6 +10,7 @@ test.describe("read panels", () => {
   });
 
   test("status shows identity, a numeric pid, and the open-streams count", async ({ page }) => {
+    await gotoView(page, "status");
     const status = page.locator('[data-island="status"]');
     await expect(status).toBeVisible();
     await expect(status.locator('[data-metric="identity"] dd')).not.toBeEmpty();
@@ -17,6 +20,7 @@ test.describe("read panels", () => {
   });
 
   test("supervision lists the registered handlers, all live", async ({ page }) => {
+    await gotoView(page, "handlers");
     const rows = page.locator('[data-island="supervision"] tbody tr');
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBeGreaterThan(0);
@@ -28,6 +32,7 @@ test.describe("read panels", () => {
   });
 
   test("harnesses lists the built-in claude-code with capability chips", async ({ page }) => {
+    await gotoView(page, "harnesses");
     const claude = page.locator('[data-harness="claude-code"]');
     await expect(claude).toBeVisible();
     expect(await claude.locator(".event-cap").count()).toBeGreaterThan(0);

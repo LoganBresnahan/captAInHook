@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { test, expect } from "./fixtures.ts";
+import { test, expect, gotoView } from "./fixtures.ts";
 
 // gui-handlers-editor + gui-verbatim-confirm + gui-enable-disable +
 // gui-wiring-hint (ADR-0011 d2/d3/d4/d5), end to end against a real daemon's
@@ -25,6 +25,7 @@ test.describe("handlers editor", () => {
   test.beforeEach(async ({ page, daemon }) => {
     await page.goto(daemon.url);
     await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
+    await gotoView(page, "handlers");
     await expect(page.locator('[data-editor="handlers"]')).toBeVisible();
   });
 

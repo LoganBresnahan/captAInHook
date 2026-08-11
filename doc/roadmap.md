@@ -28,7 +28,33 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
-  Slices landed: `screenshot-loop` (2026-08-11; the eyes, landed first. The
+  Slices landed: `tokens-and-sidebar` (2026-08-11; the risk slice, one atomic
+  commit. A store `view` slice + `VIEWS`/`VIEW_LABELS` is the WHOLE of
+  navigation — no router (ADR-0015 d1): the console rail writes `view`, every
+  screen island returns null unless `view` names it, and the gate sits AFTER
+  each island's hooks so a hidden panel keeps polling and returns current
+  rather than blank. Rendering null does not unmount, so the policy editor's
+  unsaved draft and pending If-Match tag survive a view trip — the thing a
+  router would have thrown away. Token system in `styles.css` (color / type /
+  space / radius / depth, light + dark both first-class via
+  `prefers-color-scheme`, no toggle; the console rail is deliberately dark in
+  BOTH themes, which is what gives the light theme its hierarchy). e2e churn
+  landed as the ADR predicted: ONE `gotoView` helper in `fixtures.ts` that
+  every spec navigates through, plus the new `nav.spec.ts` — exactly-one-view
+  and the regression that matters, **the SSE stream surviving a view switch**
+  (lines appended while Trace is off-screen are all there on return, in order,
+  and the same stream keeps feeding). 14 specs → 16, green first try after the
+  restructure. Two design misses the snap read caught and fixed IN-slice: the
+  Policy island floated uncarded while every other view was carded, and — the
+  real one — a bookmark visit (`/ui` with no token) showed a BLANK region beside
+  a nav that did nothing, with the only instruction buried in 11px rail text;
+  the rail now states the session tersely and a `SessionNotice` island fills the
+  region with the actionable `captainHook ui` copy (`shell.spec` asserts it
+  where a visitor actually looks). The handlers-table overflow the ADR opens
+  with died here as a side effect — full-width views gave it room. Snapped all
+  5 views × 2 themes + both no-session states and read before commit; frontend
+  units 48 green; dotnet suite 642 green twice.)
+  `screenshot-loop` (2026-08-11; the eyes, landed first. The
   e2e fixture's daemon sandbox — spawn, env isolation, api.json readiness,
   drain-by-PID, reclaim — extracted verbatim to `web/e2e/daemon.ts` and now
   shared by THREE consumers: the Playwright fixture (`fixtures.ts` is just the

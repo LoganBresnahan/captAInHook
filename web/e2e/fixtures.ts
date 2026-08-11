@@ -1,4 +1,4 @@
-import { test as base } from "@playwright/test";
+import { test as base, expect, type Page } from "@playwright/test";
 import { startDaemon, type Daemon } from "./daemon.ts";
 
 // The daemon fixture (ADR-0008 phase 6): every test gets a FRESH daemon, fully
@@ -19,5 +19,19 @@ export const test = base.extend<{ daemon: Daemon }>({
     }
   },
 });
+
+/** Navigate to a view and wait for its island (ADR-0015 d1). ONE helper, so the
+ * nav's contract lives in a single place: a spec names the view it needs, not
+ * the DOM that switches it. `island` defaults to the view name — only the
+ * Handlers view differs, because its island predates the rename (the store's
+ * `handlers` view renders `data-island="supervision"`, which slice 4 splits). */
+export async function gotoView(
+  page: Page,
+  view: "trace" | "handlers" | "policy" | "harnesses" | "status",
+): Promise<void> {
+  await page.locator(`[data-nav="${view}"]`).click();
+  const island = view === "handlers" ? "supervision" : view;
+  await expect(page.locator(`[data-island="${island}"]`)).toBeVisible();
+}
 
 export { expect } from "@playwright/test";

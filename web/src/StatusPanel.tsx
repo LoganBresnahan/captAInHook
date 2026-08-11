@@ -10,12 +10,16 @@ import type { StatusDto } from "./api.gen.ts";
 // there is no blank frame. A 401 on any poll flips the whole session to dead
 // (useApiJson owns that), which unmounts this.
 export function StatusPanel() {
+  const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const status = useStore((s) => s.status);
   const setStatus = useStore((s) => s.setStatus);
   useApiJson<StatusDto>("/api/v1/status", setStatus, 3000);
 
-  if (session !== "live" || status === null) return null;
+  // The view gate (ADR-0015 d1) sits AFTER the hooks — a hidden island keeps
+  // polling, so switching to it shows current data, not a blank frame. Gating
+  // before the hook would break the rules of hooks anyway.
+  if (view !== "status" || session !== "live" || status === null) return null;
 
   const metrics: [string, string | number][] = [
     ["identity", status.version],

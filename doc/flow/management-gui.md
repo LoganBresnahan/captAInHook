@@ -32,11 +32,13 @@ captAInHook needs no Node (invariant 3 intact).
  │        │                                                                    │
  │        ▼   every data call carries Authorization: Bearer via apiFetch       │
  │  ┌──────────────────────────── one Zustand store ───────────────────────┐  │
- │  │  session · stream · status · policy · handlers · harnesses · trace    │  │
+ │  │  VIEW · session · stream · status · policy · handlers · harnesses ·   │  │
+ │  │  trace                                                                │  │
  │  └───┬─────────────┬──────────────┬───────────────┬───────────────┬──────┘  │
- │   App(shell)   Status/Superv/   PolicyPanel    TracePanel       (each an     │
- │   session      Harnesses        GET→PUT/policy  SSE → foldFrame  island:     │
- │   lifecycle    useApiJson poll  ETag lifecycle  → trace slice    own root)   │
+ │   Nav(rail)    Status/Superv/   PolicyPanel    TracePanel       (each an     │
+ │   session +    Harnesses        GET→PUT/policy  SSE → foldFrame  island:     │
+ │   view writes  useApiJson poll  ETag lifecycle  → trace slice    own root)   │
+ │        └── every screen island renders null unless `view` names it ──┘       │
  └────────┼──────────────┼──────────────┼───────────────┼─────────────────────┘
           │  GET /status │ GET/PUT       │ GET /events (fetch stream)
           ▼              ▼ policy        ▼
@@ -54,6 +56,23 @@ is prop-threaded across screens. This is React's *grain* (the store is
 `useSyncExternalStore` shrink-wrapped) against React's *default*; it kills the
 giant `<App>` tree and prop drilling the owner set out to avoid, while landing on
 the ecosystem tool rather than a bespoke bus.
+
+**Navigation is one more store field, not a router (ADR-0015 d1).** A persistent
+console rail lists the five views (Trace — the landing view — Handlers, Policy,
+Harnesses, Status); clicking one writes `view`, and every screen island returns
+`null` unless `view` names it, so the region holds exactly one screen. The gate
+sits AFTER each island's hooks, so a hidden island keeps polling and comes back
+current instead of blank — and, because rendering null does not unmount, the
+policy editor's unsaved draft and pending If-Match tag survive a trip to another
+view. A router would have bought URL persistence (deliberately deferred — the
+`#t=` scrub owns the fragment) at the cost of unmounting exactly that state.
+The property that makes this safe is that the SSE client runs OUTSIDE React
+(`main.tsx`) and folds into the store regardless of what is rendered: lines that
+arrive while Trace is off-screen are all there on return
+(`nav.spec.ts` pins both halves). When the session is not live every screen is
+null, so a `SessionNotice` island fills the region with the one actionable
+thing a credential-less visitor has — the `captainHook ui` launch instruction —
+while the rail states the session tersely.
 
 The UI is **state-shaped, not event-shaped**: almost everything rendered is
 current state (status/policy/handlers, the accumulating trace). The one genuine
@@ -278,20 +297,22 @@ the engine — and the config's one retry stays for genuine contention.
 | `uiDir` wiring (defaults beside the executables) | `dotnet/captainHook/Core/DaemonHost.cs` |
 | frontend project (React+Vite+Zustand, `base:'/ui/'`, outDir→ `ui/`) | `web/vite.config.ts`, `web/package.json`, `web/index.html` |
 | token bootstrap (fragment→sessionStorage→scrub→bearer) | `web/src/auth.ts` (`bootstrapToken`, `apiFetch`, `currentToken`, `clearToken`) |
-| the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `SseFrame`, `PolicyVerdict`, `TRACE_CAP`) |
+| the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `SseFrame`, `PolicyVerdict`, `TRACE_CAP`; navigation: `view`, `setView`, `VIEWS`, `VIEW_LABELS`) |
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`) |
 | policy write client (ETag lifecycle) | `web/src/policy.ts` (`submitPolicy`) |
 | handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
 | handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal`, `VerbatimEntry`, `WiringHints`) |
 | shared read hook (fetch-on-live, 401⇒session-dead) | `web/src/api.ts` (`useApiJson`) |
 | pure display logic | `web/src/format.ts` (`dispatchHue`, `uptime`, `clockTime`, `traceMatches`) |
-| islands + mount table | `web/src/{App,StatusPanel,SupervisionPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx`, `main.tsx` |
+| islands + mount table | `web/src/{App,StatusPanel,SupervisionPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx`, `main.tsx`, `index.html` (rail + one view region) |
+| the nav rail + session notice | `web/src/App.tsx` (`Nav` — `data-nav` buttons, `aria-current`; `SessionNotice` — `data-notice-session`) |
+| design tokens (color/type/space/radius, both themes) | `web/src/styles.css` `:root` + its `prefers-color-scheme: dark` block; the console rail is dark in BOTH themes by design |
 | DTO→schema→TS codegen | `web/scripts/gen-types.mjs`, `web/schema/api.schema.json`, `web/src/api.gen.ts` |
 | deploy staging (third artifact) | `.claude/skills/deploy/SKILL.md` (§1 `cp -r ui`, §3 `/ui` shell check) |
 | engine-side pins | `ApiUiRouteHttpTests`, `UiResolveGuardTests`, `UiShellGateTests` (route + guard + inert shell), `ApiSchemaTests` (codegen drift), `UiVerbTests` (verb + fragment + shim refusal) — `dotnet/captainHookTests/{ApiUiRouteTests,ApiSchemaTests,UiVerbTests}.cs` |
 | frontend unit pins | `web/src/{store,sse,policy,format,handlers}.test.ts` (`node --test`, zero deps) |
 | sandbox daemon (spawn, isolation, readiness, drain, build+stage) | `web/e2e/daemon.ts` (`startDaemon`, `DaemonHandle.stop`, `buildAndStage`) — one module, three consumers |
-| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,panels,trace,policy,handlers}.spec.ts` |
+| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,nav,panels,trace,policy,handlers}.spec.ts`; `gotoView` (the ONE nav helper every spec navigates through) |
 | screenshot loop (preview + snap + seed) | `web/scripts/{preview,snap,seed}.mjs` (`npm run ui:preview`, `npm run snap`) → `web/.screens/`; the loop itself in `.claude/skills/ui-loop/SKILL.md` |
 | decision record | `doc/adr/0008-management-gui.md`; the SSE resume-cursor contract `doc/adr/0009-trail-rotation.md`; the handlers editor + trust surface `doc/adr/0011-hook-trust-model.md` |
 | the API this is a client of | [management-api.md](management-api.md) · the policy it edits | [dispatch-policy.md](dispatch-policy.md) · the dispatch it observes | [hook-dispatch.md](hook-dispatch.md) |
