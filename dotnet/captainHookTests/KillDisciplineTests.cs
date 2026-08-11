@@ -9,8 +9,9 @@ namespace CaptainHook.Tests;
 
 // kill-discipline-teardown (ADR-0010 d6 + N6): the teardown seam (restart
 // evicts + disposes the replaced instance; escalation disposes the LAST one —
-// MarkDead never re-runs the factory), the kill mechanics (setsid process
-// group at spawn; TERM→grace→KILL group-wide), and the daemon drain's child
+// MarkDead never re-runs the factory), the kill mechanics (the spawn
+// prefix's process group; TERM→grace→KILL group-wide — WHICH prefix is
+// `SpawnPrefixTests`), and the daemon drain's child
 // phase (children die with the daemon; a budget outlasting the drain deadline
 // is cut). Real /bin/sh children where the subject IS process lifecycle; all
 // waits are bounded PollUntilAsync/WaitAsync, never sleeps.
@@ -65,13 +66,14 @@ public class KillDisciplineTests
     // ---- kill mechanics -----------------------------------------------------
 
     [Fact]
-    public async Task SetsidSpawn_ChildLeadsItsOwnProcessGroup()
+    public async Task PrefixedSpawn_ChildLeadsItsOwnProcessGroup()
     {
-        // The spawn half of the discipline: setsid execs the payload in place,
-        // so the child's pgid IS its pid — the precondition for kill(-pid)
-        // reaching grandchildren. (Probed at the OS level in platform.md; this
-        // pins it end-to-end through the real spawn site.)
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip — setsid is universal on Linux anyway
+        // The spawn half of the discipline: whichever prefix won execs the
+        // payload in place, so the child's pgid IS its pid — the precondition
+        // for kill(-pid) reaching grandchildren. (Probed at the OS level in
+        // platform.md; this pins it end-to-end through the real spawn site,
+        // through whichever rung this machine resolved.)
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — some rung always wins on Linux
         var h = Sh("""read line; pg=$(ps -o pgid= -p $$ | tr -d ' '); printf '{"effect":"inject","text":"%s %s"}\n' "$$" "$pg" """);
 
         var eff = await h.HandleAsync(Ev(), Ctx());
@@ -86,7 +88,7 @@ public class KillDisciplineTests
         // The reason the group exists: `sleep 300 &` inherits the child's
         // group, so the budget kill reaches it even though the child itself
         // (post-exec) is a different program by then.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip — setsid is universal on Linux anyway
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — some rung always wins on Linux
         using var tmp = new TempRuntimeDir();
         Directory.CreateDirectory(tmp.Path);
         var pidFile = Path.Combine(tmp.Path, "pids");
@@ -118,7 +120,7 @@ public class KillDisciplineTests
         // trap '' TERM is inherited through fork+exec, so the WHOLE group
         // shrugs off the SIGTERM; the grace must expire and SIGKILL must land,
         // with the escalation visible as a second exec.kill line (how=kill).
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip — setsid is universal on Linux anyway
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — some rung always wins on Linux
         using var captured = new CapturedLog();
         using var tmp = new TempRuntimeDir();
         Directory.CreateDirectory(tmp.Path);
@@ -264,7 +266,7 @@ public class KillDisciplineTests
         // the reaper). Liveness keyed on the leader alone read this as "gone"
         // and never signaled the group; teardown must probe and kill the
         // GROUP.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip — setsid is universal on Linux anyway
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — some rung always wins on Linux
         var reg = new Registry().On("UserPromptSubmit", "orphaner",
             () => Sh("""sleep 300 & printf '{"effect":"inject","text":"%s"}\n' "$!"; exit 0"""));
         var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5));
@@ -286,7 +288,7 @@ public class KillDisciplineTests
         // it (child stays tracked until the kill concludes; evicted
         // instances' disposals are registered pending), or a daemon exit
         // outruns the SIGKILL and orphans the child.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip — setsid is universal on Linux anyway
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — some rung always wins on Linux
         using var tmp = new TempRuntimeDir();
         Directory.CreateDirectory(tmp.Path);
         var pidFile = Path.Combine(tmp.Path, "stubborn-pid");
@@ -313,7 +315,7 @@ public class KillDisciplineTests
     {
         // Reply-then-linger meets teardown: the child answered long ago and is
         // living its own life — the drain's child phase must still end it.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip — setsid is universal on Linux anyway
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — some rung always wins on Linux
         var reg = new Registry().On("UserPromptSubmit", "linger",
             () => Sh("""printf '{"effect":"inject","text":"%s"}\n' "$$"; exec sleep 300"""));
         var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5));
@@ -355,7 +357,7 @@ public class KillDisciplineTests
         // deadline (400ms). Cutover must not wait out the budget: the drain
         // times out, the child phase kills the wedged child group-wide, the
         // cut is trailed (daemon.drainCut), and the daemon exits promptly.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip — setsid is universal on Linux anyway
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — some rung always wins on Linux
         using var captured = new CapturedLog();
         using var tmp = new TempRuntimeDir();
         Directory.CreateDirectory(tmp.Path);

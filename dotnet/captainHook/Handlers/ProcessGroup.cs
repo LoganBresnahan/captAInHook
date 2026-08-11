@@ -9,15 +9,23 @@ namespace CaptainHook.Handlers;
 ///
 /// The group is made at SPAWN. .NET has no setpgid seam on Linux
 /// (ProcessStartInfo.CreateNewProcessGroup throws PlatformNotSupported off
-/// Windows), so the spawn is prefixed with setsid(1): the forked child is
-/// never a process-group leader, so setsid execs the payload IN PLACE —
-/// Process.Id stays the payload's pid and pgid == sid == pid — and
-/// grandchildren inherit the group. kill(-pid) then reaches them even after
-/// the leader exits, which the /proc tree walk (Process.Kill
+/// Windows) — and no managed runtime does, because the calls that matter run
+/// INSIDE the child, between fork and exec, a window the spawn API never
+/// exposes (P/Invoke would set the attribute on the DAEMON). So the spawn is
+/// prefixed with a wrapper that sets the attribute on ITSELF and then execs
+/// the payload IN PLACE: Process.Id stays the payload's pid and pgid == sid
+/// == pid, and grandchildren inherit the group. kill(-pid) then reaches them
+/// even after the leader exits, which the /proc tree walk (Process.Kill
 /// entireProcessTree) structurally cannot once they reparent to init.
-/// setsid missing from PATH degrades to a direct exec + tree-walk kills,
-/// visible per-spawn as exec.spawn pgroup=false. (doc/platform.md § Process
-/// groups; probed 2026-07-12.)
+///
+/// WHICH wrapper is three rungs, loud at every step (ADR-0014 d1/d2):
+/// co-located `bosun` (the deploy dir — the one we own, present on macOS) →
+/// `setsid(1)` from PATH (dev trees and tests; util-linux, so ABSENT on stock
+/// macOS — the defect bosun exists to fix) → no prefix at all, a direct exec
+/// with tree-walk kills only. The active rung rides every `exec.spawn` line
+/// as `spawner=bosun|setsid|none`; the degraded rung additionally carries
+/// `pgroup=false`. (doc/platform.md § Process groups; probed 2026-07-12,
+/// bosun 2026-08-11.)
 internal static class ProcessGroup
 {
     [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
@@ -26,29 +34,60 @@ internal static class ProcessGroup
     private const int SIGKILL = 9;
     private const int ESRCH = 3;
 
-    /// setsid's absolute path, resolved from PATH once per process — or null:
-    /// no group at spawn, tree-walk kills only.
-    internal static readonly string? SetsidPath = Probe();
+    /// A resolved spawn prefix: the wrapper executable to run instead of the
+    /// payload, plus the argv that must precede the payload's own command
+    /// (bosun requires an explicit `--` terminator; setsid takes the command
+    /// bare). `Exe` null = the degraded rung — spawn the command directly,
+    /// no group, tree-walk kills.
+    internal sealed record SpawnPrefix(string Name, string? Exe, IReadOnlyList<string> PreArgs)
+    {
+        /// Whether a spawn through this prefix yields its own process group —
+        /// the bit every kill site keys on.
+        internal bool Pgroup => Exe is not null;
 
-    private static string? Probe()
+        internal static readonly SpawnPrefix None = new("none", null, []);
+    }
+
+    /// The rung in force, resolved once per process.
+    internal static readonly SpawnPrefix Prefix =
+        Resolve(AppContext.BaseDirectory, Environment.GetEnvironmentVariable("PATH"));
+
+    /// The three-rung resolution, as a pure function of (deploy dir, PATH) so
+    /// every rung is directly testable — the live one is a snapshot of the
+    /// real process's pair.
+    internal static SpawnPrefix Resolve(string? baseDir, string? pathEnv)
+    {
+        // Rung 1 — the artifact we ship and stage (ADR-0014 d3), found by
+        // co-location exactly as the shim finds the engine. On a live deploy
+        // this rung must win; /deploy treats its absence as a staging defect.
+        if (!string.IsNullOrEmpty(baseDir))
+        {
+            var bosun = Path.Combine(baseDir, "bosun");
+            if (IsExecutable(bosun)) return new SpawnPrefix("bosun", bosun, ["--"]);
+        }
+
+        // Rung 2 — the rented wrapper: fine on Linux, absent on stock macOS.
+        foreach (var dir in (pathEnv ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var setsid = Path.Combine(dir, "setsid");
+            if (IsExecutable(setsid)) return new SpawnPrefix("setsid", setsid, []);
+        }
+
+        return SpawnPrefix.None;
+    }
+
+    private static bool IsExecutable(string candidate)
     {
         const UnixFileMode anyExec =
             UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries))
+        try
         {
-            var candidate = Path.Combine(dir, "setsid");
-            try
-            {
-                // Executability, not mere existence: a non-executable setsid
-                // must degrade to pgroup=false, not fail EVERY spawn with a
-                // Win32Exception blaming the payload.
-                if (File.Exists(candidate) && (File.GetUnixFileMode(candidate) & anyExec) != 0)
-                    return candidate;
-            }
-            catch (Exception) { /* unreadable candidate — keep walking PATH */ }
+            // Executability, not mere existence: a non-executable candidate
+            // must fall to the next rung, not fail EVERY spawn with a
+            // Win32Exception blaming the payload.
+            return File.Exists(candidate) && (File.GetUnixFileMode(candidate) & anyExec) != 0;
         }
-        return null;
+        catch (Exception) { return false; /* unreadable candidate — keep walking */ }
     }
 
     /// Liveness for the thing the kill targets — the GROUP when `pgroup`,

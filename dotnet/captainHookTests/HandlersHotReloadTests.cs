@@ -113,7 +113,7 @@ public class HandlersHotReloadTests : IDisposable
     {
         // THE no-churn guarantee: reconciling with a byte-identical entry must
         // leave the warm child running — same pid, never killed.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         using var captured = new CapturedLog();
         var dispatcher = new Dispatcher(BuildRegistry(ResidentEntry("echo", EchoServer, ["UserPromptSubmit"])),
                                         TimeSpan.FromSeconds(5));
@@ -137,7 +137,7 @@ public class HandlersHotReloadTests : IDisposable
     [Fact]
     public async Task Reconcile_AddedEntry_SpawnsAndServes_ExistingUntouched()
     {
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var dispatcher = new Dispatcher(BuildRegistry(ResidentEntry("a", EchoServer, ["UserPromptSubmit"])),
                                         TimeSpan.FromSeconds(5));
         try
@@ -168,7 +168,7 @@ public class HandlersHotReloadTests : IDisposable
     [Fact]
     public async Task Reconcile_RemovedEntry_KillsChild_NoLongerDispatches()
     {
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var dispatcher = new Dispatcher(BuildRegistry(
             ResidentEntry("a", EchoServer, ["UserPromptSubmit"]),
             ResidentEntry("b", EchoServer, ["UserPromptSubmit"])), TimeSpan.FromSeconds(5));
@@ -193,7 +193,7 @@ public class HandlersHotReloadTests : IDisposable
     {
         // A differing fingerprint (extra argv) replaces the worker: the old
         // child is killed, a fresh one spawns behind it and serves.
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var dispatcher = new Dispatcher(BuildRegistry(ResidentEntry("a", EchoServer, ["UserPromptSubmit"])),
                                         TimeSpan.FromSeconds(5));
         try
@@ -226,7 +226,7 @@ public class HandlersHotReloadTests : IDisposable
         // it to the REPLACEMENT and spuriously restart the just-warmed new
         // child. The globally-monotonic epoch makes the retired signal stale.
         // Proof: the replacement worker never restarts (Generation stays 1).
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         using var captured = new CapturedLog();
         var midfile = Path.Combine(_tmp.Path, "mid.flag");
         // Handshake, then on the FIRST envelope: signal mid-conversation and
@@ -279,7 +279,7 @@ public class HandlersHotReloadTests : IDisposable
     {
         // Malformed/absent ⇒ a fresh registry with ZERO exec handlers ⇒ every
         // resident becomes a removal. This is the malformed-reload contract.
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var dispatcher = new Dispatcher(BuildRegistry(
             ResidentEntry("a", EchoServer, ["UserPromptSubmit"]),
             ResidentEntry("b", EchoServer, ["Stop"])), TimeSpan.FromSeconds(5));
@@ -304,7 +304,7 @@ public class HandlersHotReloadTests : IDisposable
         // The fingerprint EXCLUDES the event, so an entry moving from [UPS] to
         // [UPS, Stop] keeps the UPS child warm and merely ADDS a Stop child —
         // no churn on the survivor.
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var dispatcher = new Dispatcher(BuildRegistry(ResidentEntry("a", EchoServer, ["UserPromptSubmit"])),
                                         TimeSpan.FromSeconds(5));
         try
@@ -328,7 +328,7 @@ public class HandlersHotReloadTests : IDisposable
         // A reconcile racing (or following) a drain must not resurrect a live
         // child: TrackSwap refuses admission once torn down, so a just-added
         // worker's IEagerStart never spawns.
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var dispatcher = new Dispatcher(BuildRegistry(ResidentEntry("a", EchoServer, ["UserPromptSubmit"])),
                                         TimeSpan.FromSeconds(5));
         await FirstPongAsync(dispatcher);
@@ -379,7 +379,7 @@ public class HandlersHotReloadTests : IDisposable
     {
         // handlers-observability (ADR-0010 d8): the /handlers read model reads
         // resident child state via Dispatcher.Snapshot → IResidentObservable.
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var dispatcher = new Dispatcher(BuildRegistry(ResidentEntry("echo", EchoServer, ["UserPromptSubmit"])),
                                         TimeSpan.FromSeconds(5));
         try
@@ -462,7 +462,7 @@ public class HandlersHotReloadTests : IDisposable
     [Fact]
     public async Task StatGate_MalformedEdit_KillsAllResidents_Loud()
     {
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         var path = Path.Combine(_tmp.Path, "h.json");
         File.WriteAllText(path, HandlersJson(ResidentJson("a", EchoServer, "UserPromptSubmit")));
         Touch(path, 1);
@@ -521,7 +521,7 @@ public class HandlersHotReloadTests : IDisposable
         // next hook. Add a resident (the survivor's warm child never moves),
         // then remove it (its child dies, no orphan) — all through the shim
         // wire, with the reconcile driven by the per-dispatch stat-gate.
-        if (ProcessGroup.SetsidPath is null) return;
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         using var captured = new CapturedLog();
         var path = Path.Combine(_tmp.Path, "handlers.json");
         File.WriteAllText(path, HandlersJson(ResidentJson("a", EchoServer, "UserPromptSubmit")));

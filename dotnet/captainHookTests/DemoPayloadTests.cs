@@ -94,7 +94,7 @@ public class DemoPayloadTests : IDisposable
     [Fact]
     public async Task Daemon_RunsBothDemoPayloads_RetrieverInjects_MemoryPersists()
     {
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
 
         // Seed a note the retriever can find, keyed on a word the PreToolUse
         // envelope will carry.

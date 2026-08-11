@@ -562,7 +562,7 @@ public class ResidentExecHandlerTests : IDisposable
         // entry, eagerly spawned at daemon warm-up, answers two REAL hook
         // dispatches from the SAME warm child; the drain kills it and the
         // child record goes with it.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         using var captured = new CapturedLog();
         var handlersPath = Path.Combine(_tmp.Path, "handlers.json");
         File.WriteAllText(handlersPath, JsonSerializer.Serialize(new
@@ -749,7 +749,7 @@ public class ResidentExecHandlerTests : IDisposable
         // The degrade end-to-end: no daemon, a resident echo server runs
         // spawn→serve-one→die. The hook is answered AND the child is dead
         // when CollapsedAsync returns — the whole N3-no-orphan promise.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         using var captured = new CapturedLog();
         var (exit, stdout, trail) = await CollapsedAsync(captured,
             HandlersJson("memo", EchoServer, ["UserPromptSubmit"]));
@@ -770,7 +770,7 @@ public class ResidentExecHandlerTests : IDisposable
         // fail-closed resident PreToolUse child that readies and allows must
         // produce that verdict (not a blanket stub-deny) — and still die
         // cleanly.
-        if (ProcessGroup.SetsidPath is null) return;   // xunit 2.x: no dynamic skip
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip — no prefix, no group
         using var captured = new CapturedLog();
         var gate =
             """

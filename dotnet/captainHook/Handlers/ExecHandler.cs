@@ -83,10 +83,11 @@ public sealed class ExecHandler(
     public string Name => name;
     public FailMode OnFailure => onFailure;
 
-    /// Whether spawns get their own process group (setsid found on PATH) —
-    /// decided once per process; the degraded case is flagged per-spawn.
-    /// Internal: shared with ResidentExecHandler (one spawn discipline).
-    internal static readonly bool Pgrouped = ProcessGroup.SetsidPath is not null;
+    /// Whether spawns get their own process group (a spawn prefix resolved —
+    /// co-located bosun, else setsid from PATH) — decided once per process;
+    /// the degraded case is flagged per-spawn. Internal: shared with
+    /// ResidentExecHandler (one spawn discipline).
+    internal static readonly bool Pgrouped = ProcessGroup.Prefix.Pgroup;
 
     /// SIGTERM's window to work before SIGKILL. Small enough to fit inside
     /// the daemon drain's child phase; large enough for a signal-handling
@@ -166,8 +167,9 @@ public sealed class ExecHandler(
         var spawnData = new Dictionary<string, object>
         {
             ["handler"] = name, ["pid"] = proc.Id, ["command"] = command, ["mode"] = "oneshot",
+            ["spawner"] = ProcessGroup.Prefix.Name,   // ADR-0014 d2: which rung won
         };
-        if (!Pgrouped) spawnData["pgroup"] = false;   // setsid absent — tree-walk kills only
+        if (!Pgrouped) spawnData["pgroup"] = false;   // no wrapper — tree-walk kills only
         if (resolvedCwd is not null) spawnData["cwd"] = resolvedCwd;
         if (cwdFallback) spawnData["cwdFallback"] = true;   // configured cwd missing — fell through
         Log.Info("exec", "exec.spawn", F(e, ctx, data: spawnData));
@@ -488,26 +490,37 @@ public sealed class ExecHandler(
     }
 
     /// Shared spawn shape for BOTH exec modes (one spawn discipline): the
-    /// setsid prefix is the kill discipline's spawn half — it execs the
-    /// payload IN PLACE (the fork child is never a group leader), so
+    /// resolved spawn prefix is the kill discipline's spawn half — it execs
+    /// the payload IN PLACE (the fork child is never a group leader), so
     /// Process.Id is the payload's pid AND its pgid, and kill(-pid) reaches
     /// every grandchild (ProcessGroup). One trade: a missing command no
-    /// longer throws Win32Exception at Start (setsid itself starts fine) —
-    /// it surfaces as exit 127 with setsid's stderr naming the command. All
-    /// three pipes redirected; env stripped to the allowlist.
+    /// longer throws Win32Exception at Start (the wrapper itself starts
+    /// fine) — it surfaces as a nonzero exit with the wrapper's stderr naming
+    /// the command (bosun pins 127 not-found / 126 not-executable as its own
+    /// contract; setsid's is whatever util-linux chose). All three pipes
+    /// redirected; env stripped to the allowlist.
+    /// `prefix` defaults to the process's resolved rung; production never
+    /// passes it. Tests do — the deploy rung (bosun) is not the rung a test
+    /// tree resolves to, and its argv contract must be pinned anyway.
     internal static ProcessStartInfo BuildPsi(string command, IReadOnlyList<string>? args,
                                               IReadOnlyDictionary<string, string>? env,
-                                              IReadOnlyList<string>? passEnv)
+                                              IReadOnlyList<string>? passEnv,
+                                              ProcessGroup.SpawnPrefix? prefix = null)
     {
+        prefix ??= ProcessGroup.Prefix;
         var psi = new ProcessStartInfo
         {
-            FileName = Pgrouped ? ProcessGroup.SetsidPath! : command,
+            FileName = prefix.Exe ?? command,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        if (Pgrouped) psi.ArgumentList.Add(command);
+        if (prefix.Exe is not null)
+        {
+            foreach (var a in prefix.PreArgs) psi.ArgumentList.Add(a);   // bosun's mandatory `--`
+            psi.ArgumentList.Add(command);
+        }
         foreach (var a in args ?? []) psi.ArgumentList.Add(a);
         ApplyEnvAllowlist(psi, env, passEnv);
         return psi;

@@ -111,11 +111,14 @@ reports).
 
 **Nice-to-haves:**
 
-- **macOS: `brew install util-linux`** (provides `setsid`). Without it,
-  payload kill discipline degrades from process-group kills to a tree walk —
-  everything still gets killed except a payload's *re-parented* background
-  children (a script that does `something &` then exits). Flagged loudly per
-  spawn (`pgroup=false` in the trail) either way.
+- **A staged deploy** (`/deploy`), which installs the
+  [bosun](https://github.com/LoganBresnahan/bosun) spawn wrapper beside the
+  binaries. Payloads are spawned through it so each becomes its own process
+  group and a kill reaches *re-parented* background children (a script that
+  does `something &` then exits). Running from a dev tree instead falls back
+  to `setsid(1)` from PATH — fine on Linux, absent on stock macOS, where the
+  discipline then degrades to a process-tree walk. Loud per spawn either way
+  (`spawner=` and `pgroup=false` in the trail). ADR-0014.
 - **A `$XDG_RUNTIME_DIR`** (standard on systemd Linux): rendezvous files land
   on per-user tmpfs. Absent (macOS default), they fall back to
   `~/.captainHook/` — fine, just not RAM-backed.

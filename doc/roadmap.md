@@ -11,6 +11,63 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
+- [ ] **18. Own the spawn seam: bosun** — the exec-handler kill discipline stops
+  renting `setsid(1)` from the host's package set. Per **ADR-0014** (accepted
+  2026-08-11, out of the ADR-0013 language analysis — which measured the Go
+  rewrite's premise and collapsed to "the only cross-OS defect a native
+  component uniquely fixes is the spawn seam"; the owner withdrew that ADR's
+  Windows decision the same day, so targets stay Linux + macOS + containers):
+  `bosun` — ~130 lines of Zig in its own MIT repo — becomes the spawn prefix,
+  ending the stock-macOS `pgroup=false` baseline (ADR-0012 N2's ⚠) and the
+  dependency on the host having util-linux at all.
+  Slices landed: `bosun-resolution-seam` (2026-08-11; d1/d2 — `ProcessGroup`
+  grows a `SpawnPrefix` record and a `Resolve(baseDir, PATH)` that picks
+  co-located bosun → PATH setsid → degrade, replacing the bare setsid probe;
+  the ARGV differs per rung (bosun requires a literal `--` before the command,
+  setsid takes it bare) so `BuildPsi` assembles from the prefix and takes an
+  optional prefix for test injection — the deploy rung is never the rung a
+  test tree resolves; the winner rides every `exec.spawn` as
+  `spawner=bosun|setsid|none` in BOTH modes, the degrade keeping its existing
+  `pgroup=false`. The 22 `SetsidPath is null` guards became rung-explicit.
+  11 tests (`SpawnPrefixTests`): rung order — co-located bosun beats an
+  available setsid, which is the whole decision — non-executable
+  fall-through, PATH scan order, both-absent degrade-not-throw, null inputs,
+  live-prefix self-consistency, per-rung argv literals, and the `--` contract
+  driven through a REAL in-place exec against a wrapper that enforces it
+  (pid == pgid asserted), so a dropped terminator fails in the suite rather
+  than on a live deploy. Suite 626 → 637 green twice.)
+  `deploy-fetch-and-stage` (2026-08-11; d3/d4 — bosun is the FOURTH deploy
+  artifact, staged and swapped with the other three and rolled back by the
+  same `bin.prev`. `/deploy` § 1a fetches the PINNED release asset (tag +
+  target) and verifies it against the published `SHA256SUMS` before staging —
+  never "latest", because an unpinned binary would change deploy bytes behind
+  unchanged source and build determinism cannot tolerate that; native ⇒ no
+  MVID ⇒ invisible to content identity by the `captainShim` rule, so a
+  bosun-only swap doesn't roll the socket identity and takes effect on the
+  next spawn. Verification treats a missing co-located bosun as a STAGING
+  DEFECT (the first rung must win on a live deploy) and reads `spawner=bosun`
+  off the trail. Pin: **bosun v0.1.0**, cut 2026-08-11 from its own CI (zig
+  test → smoke suite → four cross-compiled targets → `SHA256SUMS`); the four
+  digests are recorded IN the deploy skill, not merely fetched beside the
+  binary, so the pin means *these bytes* rather than "whatever that tag serves
+  now". Fetch + verify + run driven for real: checksum OK, 28 KB static ELF.
+  **Decisive drive** (2026-08-11): the real v0.1.0 binary staged co-located
+  with the dev engine, then a collapsed hook through the REAL resolver and
+  dispatcher — trail `spawner=bosun`, no `pgroup=false`, and the payload
+  reported `pid=125115 pgid=125115`, i.e. exec-in-place with its own group.)
+  `docs` (2026-08-11; platform.md § Process groups — the fork→exec window no
+  managed runtime exposes, exec-in-place pid identity, bosun's macOS
+  `setsid()`, the ⚠ retired and the per-OS summary gaining a process-groups
+  row; `doc/flow/exec-payloads.md` § The spawn prefix (rung ladder + argv +
+  why a wrapper at all); ADR-0010 d6 amendment note; README's
+  `brew install util-linux` nice-to-have replaced by the staged-deploy story
+  ADR-0014 rejected it for.)
+  Remaining: run `/deploy` to put the first rung live and confirm
+  `spawner=bosun` on a real dispatch. d5 (`--pdeathsig`) stays DEFERRED —
+  it fires on the parent's forking THREAD exiting, and the engine spawns from
+  pooled threads, so it would kill healthy payloads; revisit when a dedicated
+  long-lived spawn thread exists or orphan pressure exceeds `doctor`.
+
 - [x] **17. Dogfood findings: queued-ask fast-fail + payload reentrancy** —
   the first LLM-backed payload (orient-brief, field report
   `doc/dogfood/2026-07-21-llm-payload-and-a-find.md`) surfaced two engine

@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Deploy captAInHook to the live hook installation (~/.captainHook/bin) and verify the daemon warm path end-to-end. Stages ALL THREE artifacts (native captainShim + apphost captainHook engine + the committed ui/ GUI assets) and swaps them in together, checks/fixes the settings.json hook commands, fires a test hook, confirms spawn + warm answer + no wire skew in the trail, checks the GUI shell serves, and reaps daemons of superseded identities. Run after substantive changes when you want your real Claude Code session riding the new build; requires the suite green twice first.
+description: Deploy captAInHook to the live hook installation (~/.captainHook/bin) and verify the daemon warm path end-to-end. Stages ALL FOUR artifacts (native captainShim + single-file captainHook engine + the committed ui/ GUI assets + the pinned bosun spawn wrapper) and swaps them in together, checks/fixes the settings.json hook commands, fires a test hook, confirms spawn + warm answer + no wire skew + the bosun spawn rung in the trail, checks the GUI shell serves, and reaps daemons of superseded identities. Run after substantive changes when you want your real Claude Code session riding the new build; requires the suite green twice first.
 ---
 
 # /deploy — ship the current build to the live hooks
@@ -15,14 +15,59 @@ touches `~/.captainHook/bin` and `~/.claude/settings.json`.
 2. Ship bar: suite green **twice** (run it; don't trust memory).
 3. Native AOT toolchain present (`clang --version`) — doc/platform.md.
 
-## 1. Stage the artifacts, swap together (ADR-0004 d7 amendment: N6; ADR-0008 d2)
+## 1. Stage the artifacts, swap together (ADR-0004 d7 amendment: N6; ADR-0008 d2; ADR-0014 d3)
 
-The deployment is THREE artifacts that move as one. The two executables are
-wire-coupled — a partial copy of THOSE is the skew the guard exists for. The
-`ui/` dir is NOT wire-coupled (no MVID/skew hazard; the daemon serves it as
-opaque bytes) but it stages and swaps in the same motion so a deploy is one
-atomic thing and `bin.prev` rolls all three back together. Stage into a
-sibling dir, then swap:
+The deployment is FOUR artifacts that move as one. The two managed executables
+are wire-coupled — a partial copy of THOSE is the skew the guard exists for.
+The `ui/` dir and `bosun` are NOT wire-coupled (neither carries an MVID, so
+both are invisible to content identity — bosun by the same rule as the native
+shim, doc/platform.md § Native AOT) but they stage and swap in the same motion
+so a deploy is one atomic thing and `bin.prev` rolls all four back together.
+
+### 1a. Fetch bosun — pinned tag, verified checksum (ADR-0014 d4)
+
+`bosun` is the spawn prefix for every exec-handler payload: it execs the
+payload in place as a session leader, so `kill(-pgid)` reaches reparented
+grandchildren. It replaces the `setsid(1)` PATH probe, which stock macOS does
+not satisfy. **Never fetch "latest"** — an unpinned binary would change deploy
+bytes behind unchanged source, which build determinism cannot tolerate.
+
+**THE PIN — bump deliberately, tag and digests together.** The digests live
+HERE, in the repo, not only in the release: verifying a download against a
+manifest fetched from the same release proves only that the download
+completed. This is the record that says *these exact bytes*.
+
+```
+bosun v0.1.0   (released 2026-08-11, https://github.com/LoganBresnahan/bosun)
+  f0076e2c9039e5348b6ad9052fbc7fe27b53a1040e8f0c17a40dfb90f9a668f8  bosun-aarch64-linux
+  4617e989c5befba9487362ccb9be6fa7a58fddb6d51c830c06c10bd1ad230320  bosun-aarch64-macos
+  b8d5b70f6f9df5cfa0b35baf0145fe776d161f52f22149fd6838a99a178bfa1f  bosun-x86_64-linux
+  fe726bee7f0c12d43894144ac2904914c3ef7720bb2a3f9f3fb6fbc3f3065a04  bosun-x86_64-macos
+```
+
+```sh
+BOSUN_TAG=v0.1.0
+BOSUN_TARGET=x86_64-linux            # this host; also aarch64-linux, {x86_64,aarch64}-macos
+BOSUN_SHA=b8d5b70f6f9df5cfa0b35baf0145fe776d161f52f22149fd6838a99a178bfa1f
+BOSUN_REPO=https://github.com/LoganBresnahan/bosun
+BOSUN_DL=/tmp/bosun-$BOSUN_TAG
+
+mkdir -p $BOSUN_DL && cd $BOSUN_DL
+curl -fsSLO $BOSUN_REPO/releases/download/$BOSUN_TAG/bosun-$BOSUN_TARGET
+echo "$BOSUN_SHA  bosun-$BOSUN_TARGET" | sha256sum -c -    # MUST print OK
+cd -
+```
+
+A failed checksum aborts the deploy — do not stage an unverified binary; a
+mismatch means either the pin is stale (someone re-cut the tag) or the bytes
+are not the ones this repo was tested against. The download is cached per tag,
+so a re-deploy at the same pin re-verifies local bytes with no network round
+trip (delete `$BOSUN_DL` to force a refetch).
+
+To bump: read the new release's `SHA256SUMS`, replace the block above wholesale
+in the same commit that states why, and re-run the deploy verification.
+
+### 1b. Stage into a sibling dir, then swap
 
 ```sh
 STAGE=~/.captainHook/bin.new
@@ -36,6 +81,7 @@ dotnet publish dotnet/captainHook/captainHook.csproj -c Release -r linux-x64 --s
 dotnet publish dotnet/captainShim/captainShim.csproj -c Release -r linux-x64 -o /tmp/shim-stage
 cp /tmp/shim-stage/captainShim $STAGE/
 cp -r ui $STAGE/ui        # the COMMITTED GUI assets (web/ builds them; repo root ui/)
+install -m 0755 $BOSUN_DL/bosun-$BOSUN_TARGET $STAGE/bosun   # the VERIFIED wrapper, named bare
 # swap: keep exactly one previous build for rollback
 rm -rf ~/.captainHook/bin.prev
 [ -d ~/.captainHook/bin ] && mv ~/.captainHook/bin ~/.captainHook/bin.prev
@@ -49,6 +95,17 @@ The four loose app DLLs must ALSO be present (`captainHook.dll`,
 `captainHookWire.dll`, `captainHookActors.dll`, `FSharp.Core.dll`) — identity
 and the skew guard read them; their absence means the exclusion target didn't
 run and the shim will read permanent skew.
+`~/.captainHook/bin/bosun` must exist and be executable — the engine resolves
+its spawn prefix by co-location (`AppContext.BaseDirectory`), so **on a live
+deploy the bosun rung must win**. Its absence is a STAGING DEFECT, not a
+degrade to accept: the engine silently falls back to `setsid(1)` from PATH
+(fine on this Linux box, absent on macOS) and the trail says `spawner=setsid`.
+Cheap proof it is the right binary for this host:
+
+```sh
+~/.captainHook/bin/bosun --help >/dev/null && echo "bosun runs"   # exit 0
+```
+
 `~/.captainHook/bin/ui/index.html` must exist — the daemon serves `GET /ui`
 from this dir (absent ⇒ the GUI 404s; hooks are unaffected). If `web/` sources
 changed this session, the committed `ui/` must have been rebuilt in that commit
@@ -85,6 +142,22 @@ together; redo step 1 whole. If it logs `shim.fallback` twice, the daemon
 didn't come up — read the trail for `daemon.*` events before touching
 anything.
 
+Then the spawn rung, if a payload is registered (ADR-0014 d2). Fire an event
+that `~/.captainHook/handlers.json` actually serves — `pre-tool-use` when a
+gate is installed, else `session-start`:
+
+```sh
+printf '{"tool_name":"Bash","tool_input":{"command":"true"}}' \
+  | ~/.captainHook/bin/captainShim hook pre-tool-use >/dev/null
+grep '"evt":"exec.spawn"' ~/.captainHook/logs/captainHook.jsonl | tail -1
+```
+
+The last `exec.spawn` must carry `"spawner":"bosun"` and NO `"pgroup":false`.
+`spawner=setsid` means the co-located rung lost — step 1b didn't stage, or
+staged unreadable; fix the staging (hooks keep working either way, on the
+weaker kill discipline). No `exec.spawn` at all just means no payload serves
+that event — then step 1's `bosun --help` check is the binding one.
+
 Then the GUI shell (ADR-0008 d2 — the warm daemon from hook 2 is serving):
 
 ```sh
@@ -112,11 +185,13 @@ leaves healthy daemons and every `.lock` file alone. Safe to run any time.
 
 ```
 DEPLOYED — captAInHook @ <sha> → ~/.captainHook/bin  (identity <ver>)
-  artifacts       captainShim <bytes> (native) + captainHook engine + ui/ (<n> files), swapped together
+  artifacts       captainShim <bytes> (native) + captainHook engine + ui/ (<n> files) + bosun <tag>, swapped together
+  bosun pin       <tag> / <target> — SHA256SUMS verified OK
   settings.json   <already correct | fixed from engine/dll form>
   cold hook       <ms> delegated + spawned
   warm hook       <ms> answered by daemon pid <pid>
   skew guard      clean (zero shim.wireSkew in the deploy window)
+  spawn rung      spawner=bosun <| setsid — STAGING DEFECT | no payload fired>
   gui shell       /ui serves <200 | ABSENT — staging missed ui/>
   reaped          <superseded daemons killed, or none>
   rollback        mv bin → bin.bad, mv bin.prev → bin  (same hook command)

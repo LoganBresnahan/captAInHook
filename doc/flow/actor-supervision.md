@@ -228,7 +228,7 @@ disposed on the spot.
 |---|---|
 | `Instance` (mailbox+epoch+`Aborted`), `ActorRef` (Post/Ask/`AskTracked`/Swap/Generation/IsDead; abort completed on Swap + MarkDead), `SupMsg` (ChildExit/ChildWedged), `ChildEntry`, `Supervisor` (+ clock ctor, `ReportWedge`, `SubscribeEscalated`, `Remove` — runtime child retirement for the ADR-0010 hot-reload reconcile) | `dotnet/captainHookActors/Supervision.fs` |
 | the teardown seam: `TrackSwap`, the escalation subscription, `DisposeHandlersAsync`, events `handler.teardown` / `handler.teardownError` | `dotnet/captainHook/Core/Dispatcher.cs` |
-| kill mechanics: setsid spawn prefix, `TermThenKillAsync` (TERM→grace→KILL, group-wide) | `dotnet/captainHook/Handlers/ProcessGroup.cs`, `ExecHandler.cs` |
+| kill mechanics: the resolved spawn prefix (bosun → setsid → none, ADR-0014), `TermThenKillAsync` (TERM→grace→KILL, group-wide) | `dotnet/captainHook/Handlers/ProcessGroup.cs`, `ExecHandler.cs` |
 | `WorkMsg` DU (with receipt flag), `AskStatus` (incl. `Abandoned`), `AskOutcome`, `Worker<'Req,'Reply>` (Supervised/AskAsync/AskClassifiedAsync — reply/abort/window race, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `CounterMsg` DU, worker loop, `Counter` facade | `dotnet/captainHookActors/Counter.fs` |
 | `AuditWriter` bounded actor | `dotnet/captainHookActors/HotPath.fs` |

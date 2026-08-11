@@ -22,7 +22,7 @@ changes bump `v`. The `dispatchId` echo is optional-must-match for oneshot,
 ## Oneshot: spawn per dispatch
 
 ```
- dispatch ──► spawn (setsid) ──► envelope → stdin, close ──► answer|exit RACE
+ dispatch ──► spawn (prefix) ──► envelope → stdin, close ──► answer|exit RACE
                                                               │
         answer parsed ⇒ effect now, reaper owns the afterlife │ EOF+exit0 ⇒ Noop
         (reply-then-linger)                                   │ exit≠0 ⇒ fail mode
@@ -66,10 +66,40 @@ cross-generation memory, by the fresh-state doctrine). One instance per
 (event, entry): an entry on N events runs N independent children
 (`handlers.residentFanout` says so; externalize shared state).
 
+## The spawn prefix: which wrapper makes the group
+
+Every payload — both modes — is spawned *through a wrapper* that makes the
+child a session leader and then execs the payload IN PLACE (same pid, so
+`Process.Id` is both the payload's pid and its pgid). The wrapper is
+structurally necessary: `setsid(2)` must run inside the child between fork
+and exec, a window no managed runtime exposes and FFI cannot reach (P/Invoke
+would set the attribute on the *daemon*).
+
+`ProcessGroup.Resolve(baseDir, PATH)` picks one of three rungs, once per
+process, and the winner rides every `exec.spawn` line as `spawner=`:
+
+```
+  1. bosun    co-located in the deploy dir (AppContext.BaseDirectory)
+              the artifact we ship + pin (ADR-0014); works on macOS;
+              argv: bosun -- <command> [args...]      ← the `--` is MANDATORY
+  2. setsid   from PATH — util-linux, so absent on stock macOS
+              argv: setsid <command> [args...]
+  3. none     no wrapper: direct exec, pgroup=false, tree-walk kills only
+              (the reparented-grandchild hole is open — loud per spawn)
+```
+
+Rung 1 must win on a live deploy; `/deploy` treats a missing co-located
+`bosun` as a staging defect, not an acceptable degrade. A dev tree normally
+resolves rung 2 — which is why the bosun argv contract is pinned by tests
+(`SpawnPrefixTests`) rather than by whichever rung the machine happens to
+have. bosun is native ⇒ carries no MVID ⇒ invisible to content identity (the
+`captainShim` rule), so a bosun-only swap does not roll the socket identity
+and takes effect on the next *spawn*.
+
 ## Teardown & records
 
-Kill paths take the process GROUP (setsid at spawn; TERM→2s grace→KILL);
-graceful oneshot conclusions release it. Resident children die at: budget
+Kill paths take the process GROUP (the spawn prefix made it; TERM→2s
+grace→KILL); graceful oneshot conclusions release it. Resident children die at: budget
 overrun, protocol failure, readiness failure, instance eviction (supervised
 restart), escalation, daemon drain (the N6 child phase), idle-exit, and
 DisposeAsync — never survive their daemon. Each resident child writes
@@ -150,12 +180,13 @@ exit never restarts a retired worker), logged `actor.remove`.
 | envelope/answer codec, `TryParseReady`, echo extraction | `dotnet/captainHook/Core/ExecWire.cs` |
 | oneshot adapter (answer/exit race, reply-then-linger, echo-if-present) | `dotnet/captainHook/Handlers/ExecHandler.cs` |
 | resident runtime (state machine, lock-step, mandatory echo, eager start) | `dotnet/captainHook/Handlers/ResidentExecHandler.cs` |
-| kill mechanics (setsid probe, group TERM→grace→KILL, group-aware liveness) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
+| kill mechanics (group TERM→grace→KILL, group-aware liveness) + the spawn-prefix rungs (`SpawnPrefix`, `Resolve`, `Prefix`) | `dotnet/captainHook/Handlers/ProcessGroup.cs`; argv assembled in `ExecHandler.BuildPsi` |
 | child records + sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
 | admission seam (`IEagerStart`, `TrackSwap`, `DisposeHandlersAsync`) | `dotnet/captainHook/Core/Dispatcher.cs` |
 | hot-reload seam (`Reconcile`, `AssignIds`, `ExecFingerprint`, volatile `_runners`, `ReloadingHandlers`, `Supervisor.Remove`) | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | doctor-orphans (report-only double-guard) + observability (child state + expected-vs-registered) | `Core/Doctor.cs` (`SweepOrphans`), `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot`), `Api/ApiReadModel.cs` + `Api/ApiDtos.cs`, `web/src/SupervisionPanel.tsx` |
 | registration (tri-state file, warns, resident degrade, per-dispatch reconcile) | `dotnet/captainHook/Core/ExecHandlersFile.cs`, `Core/HookRun.cs` |
 | trail events | `exec.spawn/ready/notReady/answered/exit/stderr/kill/protocolError/recordError`, `handlers.malformed/entrySkipped/slowShape/fieldIgnored/budgetBeyondHarness/budgetBeyondDrain/readinessBeyondBudget/residentFanout/residentDegraded/collapsedTeardownTimeout/reload`, `handler.teardown(-Error)`, `daemon.drainChildren/drainCut/drainChildrenTimeout`, `actor.remove`, `doctor.orphan` |
-| pinned by | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. the daemon E2E), `HandlersHotReloadTests` (reconcile diff + stat-gate + `Supervisor.Remove` + child-state Snapshot), `DoctorOrphansTests`, `ApiReadEndpointsTests` (expected-vs-registered) + the `SupervisionPanel` e2e |
-| decisions | `doc/adr/0010-exec-handlers.md` (d1–d9 + amendments); platform facts in `doc/platform.md` § Process groups |
+| pinned by | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `SpawnPrefixTests` (rung order, degrade, per-rung argv, the bosun `--` contract against a real in-place exec), `ResidentExecHandlerTests` (incl. the daemon E2E), `HandlersHotReloadTests` (reconcile diff + stat-gate + `Supervisor.Remove` + child-state Snapshot), `DoctorOrphansTests`, `ApiReadEndpointsTests` (expected-vs-registered) + the `SupervisionPanel` e2e |
+| decisions | `doc/adr/0010-exec-handlers.md` (d1–d9 + amendments); the spawn prefix in `doc/adr/0014-bosun-spawn-wrapper.md` (d1–d5); platform facts in `doc/platform.md` § Process groups |
+| the wrapper itself | <https://github.com/LoganBresnahan/bosun> — pinned by tag + `SHA256SUMS` in `.claude/skills/deploy/SKILL.md` § 1a |

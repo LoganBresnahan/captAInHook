@@ -172,6 +172,7 @@ public sealed class ResidentExecHandler(
             {
                 ["handler"] = name, ["pid"] = pid, ["command"] = command,
                 ["mode"] = "resident", ["event"] = eventType,
+                ["spawner"] = ProcessGroup.Prefix.Name,   // ADR-0014 d2: which rung won
             };
             if (!ExecHandler.Pgrouped) spawnData["pgroup"] = false;
             if (resolvedCwd is not null) spawnData["cwd"] = resolvedCwd;

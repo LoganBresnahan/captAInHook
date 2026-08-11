@@ -230,6 +230,13 @@ its lessons are imported wholesale (§ Pattern lineage).
      pgid == pid — and killed via libc `kill(-pid)` TERM→2s→KILL; setsid
      absent degrades to the /proc tree walk, flagged per-spawn
      (doc/platform.md § Process groups).)*
+     *(**Amended 2026-08-11 by [ADR-0014](0014-bosun-spawn-wrapper.md)**: the
+     spawn half no longer rents `setsid(1)`. `ProcessGroup.Resolve` picks
+     co-located **bosun** — the wrapper we own and ship, present on macOS —
+     before falling back to `setsid(1)` from PATH and then to the same
+     degrade; the winning rung rides `exec.spawn` as `spawner=`. The kill
+     half, the pid/pgid identity, and every semantic above are unchanged:
+     bosun also execs in place.)*
    - Escalated workers fast-fail per fail mode, unchanged.
 
 7. **Latency doctrine is loud guidance, not a hard gate.** Config may put any
@@ -605,7 +612,7 @@ doctor-orphans + observability):
 | envelope/answer codec, `TryParseReady`, dispatchId-echo extraction | `dotnet/captainHook/Core/ExecWire.cs` |
 | oneshot adapter (answer/exit race, reply-then-linger, echo-if-present-must-match) | `dotnet/captainHook/Handlers/ExecHandler.cs` |
 | resident runtime (`ChildState` machine, three-way readiness race, lock-step + mandatory echo, `IEagerStart`, fail-mode-while-warming) | `dotnet/captainHook/Handlers/ResidentExecHandler.cs` |
-| kill mechanics (setsid probe, group TERM→grace→KILL, group-aware liveness) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
+| kill mechanics (group TERM→grace→KILL, group-aware liveness) + spawn-prefix rungs (ADR-0014: `SpawnPrefix`/`Resolve`/`Prefix`, argv in `ExecHandler.BuildPsi`) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
 | child pid/identity records + once-per-process sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
 | doctor-orphans (report-only; double-guard: pid+starttime identity, live-owner check) | `dotnet/captainHook/Core/Doctor.cs` (`SweepOrphans`, `IsCaptainHookDaemon`), `Program.cs` (doctor verb) |
 | observability (child state + expected-vs-registered) | `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot` correlation, `HandlerStatus`), `Handlers/ResidentExecHandler.cs`, `Api/ApiReadModel.cs` (`Handlers()` join), `Api/ApiDtos.cs` (`HandlerDto`/`HandlersDto`/`ExpectedHandlerDto`), `web/src/SupervisionPanel.tsx` |
@@ -618,4 +625,4 @@ doctor-orphans + observability):
 | collapsed degrade + demo payloads | `Core/HookRun.cs` (`collapsedEvent` filter + teardown-at-drain), `examples/payloads/` (retriever resident + memory oneshot + handlers.json) |
 | trail events (src `dispatcher`/`daemon`/`sup`/`doctor`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout`, `actor.remove`, `doctor.orphan` |
 | tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, CHANGE-mid-dispatch misattribution guard, resident-child-state Snapshot, the add-then-remove daemon E2E), `DoctorOrphansTests` (alive-orphan reported, healthy-owned ignored, stale/pid-reuse/corrupt swept), `ApiReadEndpointsTests` (child state null on coded, expected-vs-registered join), the `SupervisionPanel` e2e |
-| platform facts | `doc/platform.md` § Process groups (setsid, group signals, pgid persistence) |
+| platform facts | `doc/platform.md` § Process groups (spawn wrappers, group signals, pgid persistence) |
