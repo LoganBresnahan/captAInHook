@@ -257,10 +257,15 @@ a fresh daemon per test, fully isolated from the live `~/.captainHook` tree (tem
 `XDG_RUNTIME_DIR` / `CAPTAINHOOK_LOG` / harness dir / dispatch file), readiness by
 the 0600 `api.json` appearing (polled, not slept), teardown SIGTERM-by-PID →
 await true exit → SIGKILL; `global-setup.ts` builds the engine and stages the
-fresh `ui/`. The phase's named flakiness bit — the daemon's F#-actor warm starved
-under the browser's CPU load — and was fixed by waiting for each daemon's true
-exit (drainers don't pile up), a thread-pool floor, and one retry for the
-residual all-cores-pegged transient.
+fresh `ui/`. The phase's named flakiness bit twice, and the second bite was
+misdiagnosed for a month: waiting for each daemon's true exit (drainers don't
+pile up) and a thread-pool floor fixed a real warm starvation under the
+browser's CPU load, but the *residual* per-run flake was never CPU at all —
+measured 2026-08-11, it is **WSL2's wall clock stepping ±86s**
+(doc/platform.md § Wall-clock steps) expiring the fixture's `Date.now()`
+readiness deadline against a daemon that was healthy the whole time. The
+deadline is `performance.now()` now — house invariant 2, which the harness owes
+the engine — and the config's one retry stays for genuine contention.
 
 ## Ground truth
 

@@ -22,11 +22,12 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  // One retry even locally: the only observed flake is the daemon's handler
-  // warm stalling under a CPU spike (all cores pegged — no thread floor helps),
-  // a pure environmental transient a fresh daemon clears. A real product break
-  // fails both attempts; this only papers over contention, per the phase's
-  // named flakiness risk.
+  // One retry even locally, for environmental transients only: a real product
+  // break fails both attempts. The long-blamed "handler warm stall under a CPU
+  // spike" was MISDIAGNOSED — measured 2026-08-11, it was WSL2's wall clock
+  // stepping ±86s (doc/platform.md § Wall-clock steps) expiring the fixture's
+  // `Date.now()` readiness deadline against a healthy daemon; the deadline is
+  // monotonic now. The retry stays for genuine contention under load.
   retries: process.env.CI ? 2 : 1,
   reporter: [["list"]],
   timeout: 30_000,

@@ -186,7 +186,13 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
 
   let ready: { port: number; token: string };
   try {
-    const deadline = Date.now() + 40_000;   // headroom for a warm stall under load
+    // MONOTONIC deadline (house invariant 2, which the harness owes the engine):
+    // WSL2's wall clock steps — measured here, repeatedly, at ±86.4s while the
+    // monotonic clock advanced 101ms (doc/platform.md § Wall-clock steps). A
+    // `Date.now()` deadline therefore "expired" mid-startup on a perfectly
+    // healthy daemon, which is the whole of the readiness flake this suite used
+    // to blame on a thread-pool stall. `performance.now()` cannot step.
+    const deadline = performance.now() + 40_000;
     for (;;) {
       if (spawnErr !== null)
         throw new Error(`daemon spawn failed: ${(spawnErr as Error).message}`);
@@ -202,7 +208,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
         }
       } catch { /* dir/file not there yet */ }
       if (found) { ready = found; break; }
-      if (Date.now() > deadline) {
+      if (performance.now() > deadline) {
         let rv = "(runtime dir missing)";
         try { rv = readdirSync(join(runtimeDir, "captainHook")).join(", "); } catch { /* none */ }
         throw new Error(

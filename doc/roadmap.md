@@ -51,7 +51,19 @@ run live*. The framework underneath is what exists today.
   documents the loop and what to look for in a snap. Extraction contract met:
   the 14 existing specs stay green UNTOUCHED (one random per-run flake, proven
   pre-existing by running the un-extracted fixture on the same machine —
-  the daemon-warm transient `playwright.config.ts`'s single retry exists for).
+  a transient then still blamed on daemon warm — **run down and fixed the same
+  day**: it was never the daemon. Sampling `CLOCK_REALTIME` against the
+  monotonic clock caught **WSL2 stepping the wall clock +86.4s while monotonic
+  advanced 101ms**, then back; strace of a "stalled" daemon showed an 86.30s
+  gap with zero syscalls and every thread parked, and one probe measured a
+  NEGATIVE start-to-ready. The fixture's readiness deadline was `Date.now()`-
+  based, so a forward step expired 40s against a healthy daemon — the harness
+  violating house invariant 2 while the engine honors it everywhere
+  (`DateTime.UtcNow` survives only in log timestamps and the opt-in
+  `ColdStartProbe` boot delta). Deadline now `performance.now()`; e2e green
+  three runs straight with zero flakes, from 1 flake in every run before.
+  Recorded in doc/platform.md § Wall-clock steps, with the misdiagnosis
+  corrected in `playwright.config.ts` and the GUI flow doc).
   Baselines captured in both themes and read: they show exactly the defects
   the ADR opens with — the handlers table clipped at its card edge, a dead
   left column, and the live trace 3400px down the page. dotnet suite 642 green
