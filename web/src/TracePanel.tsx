@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store.ts";
 import { dispatchHue, clockTime, traceMatches } from "./format.ts";
 import type { TraceEntry } from "./store.ts";
@@ -27,7 +27,19 @@ function chipStyle(id: string): React.CSSProperties {
   return { background: `hsl(${hue} 70% 55% / 0.18)`, borderColor: `hsl(${hue} 70% 55% / 0.55)` };
 }
 
-function Row({ entry, onPickDispatch }: { entry: TraceEntry; onPickDispatch: (id: string) => void }) {
+// One row. MEMOIZED because the list is append-heavy: a single new line
+// re-renders the <ol>, and without this every one of TRACE_CAP existing rows
+// re-runs its render for nothing. `onPickDispatch` is a useState setter, which
+// React guarantees is stable, so the memo actually holds (ADR-0015's rejected
+// alternative: a virtualization dependency — memo + content-visibility carries
+// the cap, measured, and costs no dependency).
+//
+// Every cell is ALWAYS rendered, empty when the field is absent: the row is a
+// CSS grid, and an omitted cell would slide every later column left, which is
+// exactly the ragged alignment this slice exists to fix.
+const Row = memo(function Row(
+  { entry, onPickDispatch }: { entry: TraceEntry; onPickDispatch: (id: string) => void },
+) {
   if (entry.kind === "gap")
     return <li className="trace-divider gap" data-trace="gap">— {entry.dropped} event(s) dropped (slow consumer); a reconnect recovers them —</li>;
   if (entry.kind === "reset")
@@ -43,16 +55,18 @@ function Row({ entry, onPickDispatch }: { entry: TraceEntry; onPickDispatch: (id
       <span className={`t-level lvl-${l.level ?? "info"}`}>{l.level ?? ""}</span>
       <span className="t-comp">{l.comp ?? ""}</span>
       <span className="t-evt">{l.evt ?? ""}</span>
-      {did && (
-        <button className="t-did" style={chipStyle(did)} onClick={() => onPickDispatch(did)} title="filter to this dispatch">
-          {did}
-        </button>
-      )}
-      {typeof l.durMs === "number" && <span className="t-dur">{l.durMs}ms</span>}
+      <span className="t-did-cell">
+        {did && (
+          <button className="t-did" style={chipStyle(did)} onClick={() => onPickDispatch(did)} title="filter to this dispatch">
+            {did}
+          </button>
+        )}
+      </span>
+      <span className="t-dur">{typeof l.durMs === "number" ? `${l.durMs}ms` : ""}</span>
       <span className="t-msg">{l.msg ?? ""}</span>
     </li>
   );
-}
+});
 
 export function TracePanel() {
   const view = useStore((s) => s.view);
@@ -108,9 +122,16 @@ export function TracePanel() {
         {filter !== "" && <button onClick={() => setFilter("")}>clear</button>}
         {!following && <button onClick={() => setFollowing(true)}>jump to latest ↓</button>}
       </div>
-      {truncated > 0 && (
-        <p className="muted trace-trunc">showing the last {trace.length.toLocaleString()} lines ({truncated.toLocaleString()} older dropped)</p>
-      )}
+      <p className="trace-meta">
+        <span className="muted">
+          {shown.length.toLocaleString()}
+          {filter !== "" && ` of ${trace.length.toLocaleString()}`} line
+          {shown.length === 1 ? "" : "s"}
+        </span>
+        {truncated > 0 && (
+          <span className="muted trace-trunc">· {truncated.toLocaleString()} older dropped (client cap)</span>
+        )}
+      </p>
       <ol className="trace-list" ref={scrollRef} onScroll={onScroll} data-trace-count={shown.length}>
         {shown.length === 0 ? (
           <li className="muted trace-empty">

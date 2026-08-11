@@ -83,6 +83,28 @@ island and the SSE client build against: `SseFrame` mirrors the server's SSE
 grammar, `PolicyVerdict` mirrors the closed `PolicyWriteOutcome`, and the slice
 shape maps 1:1 onto the screen table.
 
+## The trace fills the frame, and holds TRACE_CAP without a virtualizer
+
+The landing view is a scroll region, not a document (ADR-0015 slice 3): the
+shell is `100vh`, the view region a definite-height flex column, and the mount
+divs between them are `display: contents` — scaffold for `createRoot`, not
+layout. The trace card takes the remaining height and its `<ol>` scrolls inside
+itself, which is why the filter and the stream badge are always on screen
+without `position: sticky`. Rows are a **CSS grid** with every cell always
+rendered (empty when a field is absent), so columns land on the same track
+edges instead of sliding left when a line has no `durMs`.
+
+Holding `TRACE_CAP` = 2000 rows is `React.memo` on the row plus
+`content-visibility: auto` — ADR-0015 rejected a virtualization dependency and
+`web/scripts/perf.mjs` is the measurement that keeps that honest (run it after
+touching `TracePanel` or the trace CSS). On the maintainer's box, at the cap:
+**zero** long tasks while 200 lines stream in, filter keystroke → filtered
+render **p50 33ms**, and the heaviest operation — clearing the filter, which
+re-renders every row — **88ms with `content-visibility` vs 135ms without**.
+Append → visible measures **200ms**, but that is the *server's* trail stat-poll
+beat (`TrailTail.cs`, 200ms default), not rendering; the script says so rather
+than flattering the client.
+
 ## The token handoff — fragment, scrubbed, tab-scoped (d3)
 
 A browser can't read the 0600 `api.json`, so it must be *handed* the token, and
@@ -313,6 +335,7 @@ the engine — and the config's one retry stays for genuine contention.
 | frontend unit pins | `web/src/{store,sse,policy,format,handlers}.test.ts` (`node --test`, zero deps) |
 | sandbox daemon (spawn, isolation, readiness, drain, build+stage) | `web/e2e/daemon.ts` (`startDaemon`, `DaemonHandle.stop`, `buildAndStage`) — one module, three consumers |
 | E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,nav,panels,trace,policy,handlers}.spec.ts`; `gotoView` (the ONE nav helper every spec navigates through) |
-| screenshot loop (preview + snap + seed) | `web/scripts/{preview,snap,seed}.mjs` (`npm run ui:preview`, `npm run snap`) → `web/.screens/`; the loop itself in `.claude/skills/ui-loop/SKILL.md` |
+| screenshot loop (preview + snap + seed) | `web/scripts/{preview,snap,seed}.mjs` (`npm run ui:preview`, `npm run snap`) → `web/.screens/`; the loop itself in `.claude/skills/ui-loop/SKILL.md`. `build()`/`stageUi()` are separate on purpose — `--no-build` skips COMPILING, never staging, or a watch-mode snap shoots the previous build |
+| trace perf harness (the measurement behind rejecting virtualization) | `web/scripts/perf.mjs` (`npm run perf`) — long tasks at the cap, filter latency, the content-visibility A/B |
 | decision record | `doc/adr/0008-management-gui.md`; the SSE resume-cursor contract `doc/adr/0009-trail-rotation.md`; the handlers editor + trust surface `doc/adr/0011-hook-trust-model.md` |
 | the API this is a client of | [management-api.md](management-api.md) · the policy it edits | [dispatch-policy.md](dispatch-policy.md) · the dispatch it observes | [hook-dispatch.md](hook-dispatch.md) |

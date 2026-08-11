@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
-import { buildAndStage, startDaemon, webDir } from "../e2e/daemon.ts";
+import { build, stageUi, startDaemon, webDir } from "../e2e/daemon.ts";
 import { seedFiles, seedTrail } from "./seed.mjs";
 
 // snap — the eyes of the GUI loop (ADR-0015 d5). Starts a seeded, isolated
@@ -33,8 +33,11 @@ const themes = flag("themes", "light,dark").split(",").filter(Boolean);
 
 if (!noBuild) {
   console.log("snap: building engine + ui (pass --no-build to skip)…");
-  buildAndStage();
+  build();
 }
+// ALWAYS stage, even under --no-build: `npm run dev` writes ui/ on every edit
+// and stages nothing, so skipping this would screenshot the previous build.
+stageUi();
 
 if (existsSync(outDir) && !keep) rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });

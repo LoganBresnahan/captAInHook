@@ -12,6 +12,7 @@
     "e2e": "playwright test",
     "ui:preview": "node scripts/preview.mjs",
     "snap": "node scripts/snap.mjs",
+    "perf": "node scripts/perf.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

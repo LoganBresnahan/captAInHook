@@ -28,7 +28,34 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
-  Slices landed: `tokens-and-sidebar` (2026-08-11; the risk slice, one atomic
+  Slices landed: `trace-landing` (2026-08-11; the landing view stops being a
+  document and becomes a FRAME: shell `100vh`, the view region a definite-height
+  flex column, the `createRoot` mount divs `display: contents` so they leave the
+  box tree entirely (four empty divs would otherwise share the height and break
+  the flex chain), and the trace card takes the rest with its `<ol>` scrolling
+  inside itself — which is why the filter and stream badge are always on screen
+  with no `position: sticky` anywhere. Rows became a CSS grid with every cell
+  ALWAYS rendered (empty when the field is absent), so a line without `durMs`
+  no longer slides every later column left. Perf per the ADR's rejected
+  alternative (no virtualization dep): `React.memo` on the row + a stable
+  useState-setter callback, plus `content-visibility: auto` with an intrinsic
+  size. **Measured, not asserted** — `web/scripts/perf.mjs` (`npm run perf`,
+  committed as the standing evidence) drives a REAL seeded daemon to
+  TRACE_CAP=2000: zero long tasks while 200 lines stream in at the cap, filter
+  keystroke → filtered render p50 33ms, and the heaviest operation — clearing
+  the filter, re-rendering every row — 88ms WITH content-visibility vs 135ms
+  without. Append→visible is 200ms and the script says plainly that this is the
+  SERVER's trail stat-poll beat (TrailTail.cs), not rendering. Two measurement
+  traps found and documented in the harness: a rAF scroll loop reports ~16.7ms
+  whatever the work (capped) and scrolling a container invalidates no layout, so
+  both scroll probes read "fine" even when nothing is; and the first cut of the
+  harness reported a NEGATIVE duration — the wall clock again — so every timing
+  is `performance.now()`. Also fixed a real defect in slice 1's loop that using
+  it exposed: `--no-build` skipped STAGING as well as compiling, so the
+  documented `npm run dev` + `snap --no-build` loop silently screenshotted the
+  previous build; `buildAndStage` split into `build()` + `stageUi()` and both
+  scripts always stage. 16 e2e + 48 units green; dotnet 642 green twice.)
+  `tokens-and-sidebar` (2026-08-11; the risk slice, one atomic
   commit. A store `view` slice + `VIEWS`/`VIEW_LABELS` is the WHOLE of
   navigation — no router (ADR-0015 d1): the console rail writes `view`, every
   screen island returns null unless `view` names it, and the gate sits AFTER

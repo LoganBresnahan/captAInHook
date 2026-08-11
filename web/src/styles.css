@@ -135,15 +135,26 @@ code {
 .shell {
   display: grid;
   grid-template-columns: var(--rail-w) minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;               /* the viewport IS the frame; regions scroll inside it */
 }
 
+/* The view region is a definite-height flex column so a screen can ask to FILL
+   it (the trace does) instead of every screen being a document that grows. The
+   mount divs between here and each island are `display: contents` — they are
+   scaffold for createRoot, not layout, and leaving them in the box tree would
+   break the flex chain (and let four empty divs share the height). */
 .view-region {
   min-width: 0;                /* let mono content scroll instead of pushing the rail */
+  min-height: 0;
   padding: var(--s-5) var(--s-6);
   max-width: var(--measure);
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  overflow-y: auto;            /* screens that are documents scroll here */
 }
+.view-region > div { display: contents; }
 
 /* ---- the console rail (nav island) ---- */
 
@@ -394,8 +405,26 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 
 /* ============================ live trace ============================ */
 
+/* The trace FILLS the region: head and meta keep their natural height, the list
+   takes the rest and scrolls inside itself — so the filter and the stream badge
+   are always on screen (the sticky-filter requirement, met structurally rather
+   than with position: sticky) and the page itself never scrolls. */
+.card.trace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .trace-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 .trace-head h2 { margin: 0; }
+.trace-meta {
+  margin: var(--s-2) 0 0;
+  font-size: var(--fs-xs);
+  display: flex;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+}
 .trace-filter { flex: 1; min-width: 200px; }
 .stream-badge {
   font-size: var(--fs-xs);
@@ -413,8 +442,10 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   list-style: none;
   margin: var(--s-3) 0 0;
   padding: 0;
-  max-height: 460px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   border: 1px solid var(--border);
@@ -425,15 +456,39 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   padding: var(--s-1) var(--s-3);
   border-bottom: 1px solid var(--border);
 }
-.trace-row { display: flex; gap: var(--s-2); align-items: baseline; white-space: nowrap; }
+/* Columns are a GRID, not a flex run: every row lands on the same track edges,
+   so the eye can scan a column instead of re-finding it per line. Cells are
+   always present (empty when the field is absent) — see Row.
+   `content-visibility: auto` lets the browser skip layout+paint for rows
+   scrolled out of view, which is what makes TRACE_CAP=2000 rows cheap without
+   a virtualization dependency; `contain-intrinsic-size` supplies the height
+   placeholder so the scrollbar stays honest. */
+.trace-row {
+  display: grid;
+  grid-template-columns:
+    4.8rem                        /* time  */
+    2.8rem                        /* level */
+    3.8rem                        /* comp  */
+    minmax(8rem, max-content)     /* event */
+    5.2rem                        /* dispatch chip */
+    3.8rem                        /* duration */
+    minmax(0, 1fr);               /* message */
+  gap: 0 var(--s-2);
+  align-items: baseline;
+  white-space: nowrap;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 22px;
+}
 .trace-row:hover { background: var(--surface-2); }
-.trace-row.unparsed { white-space: normal; color: var(--text-dim); }
+.trace-row.unparsed { display: block; white-space: normal; color: var(--text-dim); }
 .t-time { color: var(--text-faint); }
-.t-level { min-width: 38px; color: var(--text-dim); }
+.t-level { color: var(--text-dim); }
 .lvl-warn { color: var(--warn); }
 .lvl-error { color: var(--bad); font-weight: 600; }
-.t-comp { color: var(--text-dim); min-width: 48px; }
-.t-evt { color: var(--accent); }
+.t-comp { color: var(--text-dim); }
+.t-evt { color: var(--accent); overflow: hidden; text-overflow: ellipsis; }
+.t-did-cell { min-width: 0; }
+.t-dur { text-align: right; }
 .t-did {
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);

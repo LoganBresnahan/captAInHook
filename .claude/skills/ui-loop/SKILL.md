@@ -33,14 +33,16 @@ npm run dev                  # terminal A: vite build --watch → ../ui/
 npm run snap -- --no-build   # terminal B: re-shoot against the watched bundle
 ```
 
-`--no-build` skips the dotnet + npm build (a few seconds each); drop it after
+`--no-build` skips the dotnet + npm build (a few seconds each) but never the
+staging copy — the daemon serves `ui/` from beside its binary, so a snap that
+skipped staging would quietly shoot the previous build. Drop the flag after
 touching C# or when in doubt.
 
 ### Options
 
 | flag | effect |
 | --- | --- |
-| `--no-build` | skip engine + frontend build; use what's already staged |
+| `--no-build` | skip COMPILING the engine + frontend; the staging copy still runs, so a watch-mode `ui/` is always what you shoot |
 | `--tag <name>` | prefix filenames (`--tag before` → `before-trace-dark.png`) |
 | `--views a,b` | only these views (default: every `[data-nav]`, or `all` pre-sidebar) |
 | `--themes light` | only these color schemes (default `light,dark`) |
@@ -54,6 +56,20 @@ npm run snap -- --tag before
 # …make the change…
 npm run snap -- --no-build --keep --tag after
 ```
+
+## Measuring, not guessing
+
+```sh
+npm run perf                 # the trace view at TRACE_CAP, against a real daemon
+```
+
+`scripts/perf.mjs` reports long tasks while lines stream in at the cap, filter
+keystroke latency, and the `content-visibility` A/B on the heaviest operation.
+Run it after touching `TracePanel` or the trace CSS — ADR-0015 rejected a
+virtualization dependency, and this is the evidence that keeps that call honest.
+Two traps it documents: a `requestAnimationFrame` scroll loop measures nothing
+(it is capped at ~16.7ms whatever the work), and every timing must be
+`performance.now()` — this machine's wall clock steps (doc/platform.md).
 
 ## Driving it by hand
 
@@ -99,6 +115,7 @@ work on white). A design miss found in the snap is fixed inside the same slice
 | seed data | `web/scripts/seed.mjs` |
 | persistent preview | `web/scripts/preview.mjs` (`npm run ui:preview`) |
 | screenshots | `web/scripts/snap.mjs` (`npm run snap`) → `web/.screens/` (gitignored) |
+| perf harness | `web/scripts/perf.mjs` (`npm run perf`) — the trace view at TRACE_CAP |
 | e2e suite this shares its daemon with | `web/e2e/*.spec.ts` (`npm run e2e`) |
 | decision record | [doc/adr/0015-gui-overhaul.md](../../../doc/adr/0015-gui-overhaul.md) d5 |
 | GUI mechanics | [doc/flow/management-gui.md](../../../doc/flow/management-gui.md) |

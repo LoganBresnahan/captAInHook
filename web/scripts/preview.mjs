@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { buildAndStage, startDaemon } from "../e2e/daemon.ts";
+import { build, stageUi, startDaemon } from "../e2e/daemon.ts";
 import { seedFiles, seedTrail, burstTrail } from "./seed.mjs";
 
 // preview — ONE persistent sandboxed daemon for the GUI dev loop (ADR-0015 d5).
@@ -24,8 +24,10 @@ const port = portArg >= 0 ? Number(argv[portArg + 1]) : undefined;
 
 if (!noBuild) {
   console.log("preview: building engine + ui (pass --no-build to skip)…");
-  buildAndStage();
+  build();
 }
+// ALWAYS stage — see snap.mjs: --no-build skips COMPILING, never staging.
+stageUi();
 
 const daemon = await startDaemon({ port, idleMs: 24 * 60 * 60 * 1000 });
 const seeded = seedFiles(daemon);

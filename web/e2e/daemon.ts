@@ -86,22 +86,35 @@ export function freePort(): Promise<number> {
   });
 }
 
-/** Build the engine, build the frontend, and stage the fresh ui/ beside the
- * engine binary — the daemon serves /ui from AppContext.BaseDirectory, so this
- * is what makes a run test the bundle just built rather than stale committed
- * bytes. Idempotent and incremental; shared by global-setup and the scripts. */
-export function buildAndStage(): void {
+/** Compile the engine and the frontend. Idempotent and incremental (fast when
+ * up to date). Skipped by `--no-build` in the scripts — staging is NOT. */
+export function build(): void {
   const run = (cmd: string, args: string[], cwd: string) =>
     execFileSync(cmd, args, { cwd, stdio: "inherit" });
 
   run("dotnet", ["build", engineProj, "-c", "Debug", "--nologo", "-v", "q"], repoRoot);
   run("npm", ["run", "build"], webDir);
+}
 
+/** Copy the repo's `ui/` beside the engine binary — the daemon serves /ui from
+ * AppContext.BaseDirectory, so this is the step that decides whether a run sees
+ * the bundle you just built or stale bytes. ALWAYS run it before starting a
+ * daemon you intend to look at: `npm run dev` (vite build --watch) writes
+ * `ui/` continuously and stages nothing, so a snap that skipped this would
+ * quietly screenshot the previous build — measured, and the reason build and
+ * stage are separate functions. */
+export function stageUi(): void {
   const staged = join(engineBin, "ui");
   if (existsSync(staged)) rmSync(staged, { recursive: true, force: true });
   cpSync(join(repoRoot, "ui"), staged, { recursive: true });
   if (!existsSync(join(staged, "index.html")))
-    throw new Error(`buildAndStage: ui/ not staged at ${staged}`);
+    throw new Error(`stageUi: ui/ not staged at ${staged}`);
+}
+
+/** Build, then stage — what a from-scratch run (global-setup) wants. */
+export function buildAndStage(): void {
+  build();
+  stageUi();
 }
 
 /** Spawn one isolated daemon and wait until it is answering. Readiness is
