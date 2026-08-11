@@ -237,11 +237,22 @@ NOT wire-coupled (no MVID/skew hazard; the daemon serves it as opaque bytes), so
 a missing `ui/` degrades to a 404 GUI, never a broken hook; `bin.prev` rolls all
 three back together. Deploy never runs npm.
 
+**The screenshot loop** (ADR-0015 d5) is the eyes on that rebuild: `npm run snap`
+starts a seeded sandbox daemon, drives every view × light/dark headless, and
+writes PNGs into the gitignored `web/.screens/` for a human — or an agent — to
+READ before a change is committed; `npm run ui:preview` holds ONE such daemon
+open (printing its `/ui#t=` URL, taking `trail`/`hook`/`burst` commands on
+stdin) for hand-driving. Both consume the same sandbox module as the e2e
+fixture, so what the tests see and what the camera sees cannot drift. The
+`ui-loop` skill documents the loop itself.
+
 ## E2E — the whole GUI against a real daemon
 
 `web/e2e/` (`@playwright/test`, `npm run e2e`) drives the daemon's own
 same-origin `/ui` end to end — the DOM + accessibility tree is the agent-legible
-surface the ADR chose over TUI scraping. The reasoning is the **daemon fixture**:
+surface the ADR chose over TUI scraping. The reasoning is the **daemon sandbox**
+(`e2e/daemon.ts`, extracted from the fixture by ADR-0015 d5 and shared with the
+preview + snap scripts; `fixtures.ts` is now just the Playwright binding):
 a fresh daemon per test, fully isolated from the live `~/.captainHook` tree (temp
 `XDG_RUNTIME_DIR` / `CAPTAINHOOK_LOG` / harness dir / dispatch file), readiness by
 the 0600 `api.json` appearing (polled, not slept), teardown SIGTERM-by-PID →
@@ -274,6 +285,8 @@ residual all-cores-pegged transient.
 | deploy staging (third artifact) | `.claude/skills/deploy/SKILL.md` (§1 `cp -r ui`, §3 `/ui` shell check) |
 | engine-side pins | `ApiUiRouteHttpTests`, `UiResolveGuardTests`, `UiShellGateTests` (route + guard + inert shell), `ApiSchemaTests` (codegen drift), `UiVerbTests` (verb + fragment + shim refusal) — `dotnet/captainHookTests/{ApiUiRouteTests,ApiSchemaTests,UiVerbTests}.cs` |
 | frontend unit pins | `web/src/{store,sse,policy,format,handlers}.test.ts` (`node --test`, zero deps) |
-| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (isolated handlers.json + `fireHook`), `web/e2e/{shell,session,panels,trace,policy,handlers}.spec.ts` |
+| sandbox daemon (spawn, isolation, readiness, drain, build+stage) | `web/e2e/daemon.ts` (`startDaemon`, `DaemonHandle.stop`, `buildAndStage`) — one module, three consumers |
+| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,panels,trace,policy,handlers}.spec.ts` |
+| screenshot loop (preview + snap + seed) | `web/scripts/{preview,snap,seed}.mjs` (`npm run ui:preview`, `npm run snap`) → `web/.screens/`; the loop itself in `.claude/skills/ui-loop/SKILL.md` |
 | decision record | `doc/adr/0008-management-gui.md`; the SSE resume-cursor contract `doc/adr/0009-trail-rotation.md`; the handlers editor + trust surface `doc/adr/0011-hook-trust-model.md` |
 | the API this is a client of | [management-api.md](management-api.md) · the policy it edits | [dispatch-policy.md](dispatch-policy.md) · the dispatch it observes | [hook-dispatch.md](hook-dispatch.md) |

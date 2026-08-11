@@ -10,6 +10,8 @@
     "build": "npm run gen && tsc -b && vite build",
     "test": "node --test src/*.test.ts",
     "e2e": "playwright test",
+    "ui:preview": "node scripts/preview.mjs",
+    "snap": "node scripts/snap.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

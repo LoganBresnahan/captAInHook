@@ -28,6 +28,34 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
+  Slices landed: `screenshot-loop` (2026-08-11; the eyes, landed first. The
+  e2e fixture's daemon sandbox — spawn, env isolation, api.json readiness,
+  drain-by-PID, reclaim — extracted verbatim to `web/e2e/daemon.ts` and now
+  shared by THREE consumers: the Playwright fixture (`fixtures.ts` is just the
+  binding), `scripts/preview.mjs` (ONE persistent seeded daemon printing its
+  `/ui#t=` URL, with `trail`/`hook`/`burst`/`url`/`quit` on stdin), and
+  `scripts/snap.mjs` (every view × light/dark → gitignored `web/.screens/`).
+  What the tests see and what the camera sees therefore cannot drift. View
+  discovery is dynamic — `[data-nav]` items if present, else the one-page
+  shell as view `all` — so the script starts finding views the moment slice 2
+  lands, unchanged. `scripts/seed.mjs` fills the sandbox (and ONLY the
+  sandbox — payload scripts are written into it, never pointed at
+  `examples/payloads/`, which read/write the operator's home) with three
+  handlers, a policy exercising every criterion shape, a varied trail, and two
+  real fired hooks. The first baseline capture paid for itself twice: the
+  seeded payloads' answers were caught violating the exec wire grammar
+  (`inject` takes `text`, `decide` takes `verdict`), and the trace screenshot
+  came back EMPTY — an SSE subscription anchors at the END of the trail
+  (ADR-0007 d5), so the seed had to split into `seedFiles` (before start) and
+  `seedTrail` (after the page is live, per context). The `ui-loop` skill
+  documents the loop and what to look for in a snap. Extraction contract met:
+  the 14 existing specs stay green UNTOUCHED (one random per-run flake, proven
+  pre-existing by running the un-extracted fixture on the same machine —
+  the daemon-warm transient `playwright.config.ts`'s single retry exists for).
+  Baselines captured in both themes and read: they show exactly the defects
+  the ADR opens with — the handlers table clipped at its card edge, a dead
+  left column, and the live trace 3400px down the page. dotnet suite 642 green
+  twice.)
 
 - [x] **18. Own the spawn seam: bosun** — the exec-handler kill discipline stops
   renting `setsid(1)` from the host's package set. Per **ADR-0014** (accepted
