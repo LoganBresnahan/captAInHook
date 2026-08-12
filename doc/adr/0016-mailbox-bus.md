@@ -119,6 +119,35 @@ shared edit log. The bus must not know or care what backs a member:
    here, mail — never becomes a template language). `ts` is display-only.
    `inReplyTo` is *reserved, unread* in v1 (decision 9).
 
+   *As built (2026-08-12, slice `mail-envelope-parser`) — what the block above
+   leaves unmarked.* The sketch shows every field present; the parser settles
+   which of them a sender may omit, and the direction of each call is the
+   envelope's failure mode (warned-and-skipped, so too tight silently drops
+   real mail while too loose delivers what nobody can render):
+   * **Required:** `v` (the number 1), `id`, `ts`, `from.agent`,
+     `from.harness`, `to`, `kind`, `topic`, `body`. `body` may be the empty
+     string — a message whose whole content is its topic is terse, not
+     invalid — but every other required string must be non-blank.
+   * **`from.session` is OPTIONAL.** A write-only member (hookless harness,
+     cron-shaped observer — decision 5) has no session to name, and requiring
+     one would make the bus's cheapest membership tier unrepresentable.
+   * **`priority` and `ttlDeliveries` are OPTIONAL, with defaults that fail
+     safe:** `ambient` and `3`. A forgotten field can then never buy the
+     mid-turn budget nor mean "forever". An *unknown* priority stays malformed
+     rather than being silently downgraded — a sender asking for a seam class
+     we do not have is a bug worth seeing. `ttlDeliveries` must be an integer
+     ≥ 1: zero is a message that can never be delivered, i.e. a typo.
+   * **`ts` is required, its FORMAT unvalidated.** The store is the
+     inter-agent influence record (decision 13) and an undated line weakens
+     it; `mail send` always stamps it, so requiring it costs nothing. Nothing
+     may ever parse or compare it — TTL is delivery-counted (decision 3) and
+     the wall clock stays display-only (house invariant 2).
+   * **`prev` is a KNOWN field of the line**, absent when sent and written by
+     the store (decision 11). A strict parser that had never heard of it would
+     read every chained line as malformed the moment chaining lands. The slice
+     reserves the NAME only; the encoding — genesis convention, hex form, what
+     exactly is hashed — remains phase 2's durable-format decision.
+
 3. **TTL counts delivery opportunities, not wall time.** `ttlDeliveries: N`
    means "drop after being passed over at N seams for this recipient." A
    wall-clock TTL rots while the recipient idles overnight and is the spirit

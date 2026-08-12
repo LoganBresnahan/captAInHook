@@ -1123,8 +1123,10 @@ run live*. The framework underneath is what exists today.
   under src `policy`, not `api`: a 422/412 changed no rules, the ledger records
   what was in force rather than what was attempted, and one src filter now
   shows a document's whole life. The full 64-hex hash prefix-joins the
-  `GET /policy` ETag (same input, different surface). +10 units incl. the
-  end-to-end write⇄reload same-hash pin. **Phase 1 complete.**)
+  `GET /policy` ETag (same input, different surface). +12 units incl. the
+  end-to-end write⇄reload same-hash pin and, from the `/shipshape` pass, the
+  three no-bytes/no-emit edges the first cut proved only at the `Resolve`
+  layer. **Phase 1 complete.**)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

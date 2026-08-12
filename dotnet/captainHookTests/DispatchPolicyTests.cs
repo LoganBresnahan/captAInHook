@@ -749,6 +749,51 @@ public class PolicyContentHashTests : IDisposable
     }
 
     [Fact]
+    public void PresentButUnreadable_StampsNothing()
+    {
+        // The third no-bytes case, and the one that is present rather than
+        // missing: a file we cannot READ is Malformed (never a silent grant —
+        // ADR-0006 d4) and must still stamp nothing, because we never saw the
+        // document. Same chmod idiom as the tri-state suite.
+        // Best-effort in the same shape as UnreadableFile_IsMalformed_NotAbsent:
+        // skipped where the process reads it regardless (root, permissive FS),
+        // which never silently passes — the asserts run only when the permission
+        // actually bites.
+        Write(Policy, T0);
+        try { File.SetUnixFileMode(_path, UnixFileMode.None); }
+        catch { return; }   // platform without Unix modes — nothing to assert
+
+        var stillReadable = true;
+        try { File.ReadAllText(_path); } catch { stillReadable = false; }
+        if (stillReadable) return;
+
+        Assert.IsType<PolicyResolution.Malformed>(PolicyResolution.Resolve(_path, out var content));
+        Assert.Null(content);
+    }
+
+    [Fact]
+    public void ReloadToMalformed_StillCarriesTheHash()
+    {
+        // A broken edit poisons the door (deny everything) — and THAT document
+        // is what was in force. An audit reconstructing time T has to be able to
+        // identify it, so the malformed state stamps like any other.
+        using var captured = new CapturedLog();
+
+        Write(Policy, T0);
+        var rp = new ReloadingPolicy(_path);
+        _ = rp.Current;
+
+        const string broken = "{ not json";
+        Write(broken, T0.AddSeconds(1));
+        Assert.IsType<PolicyResolution.Malformed>(rp.Current);
+
+        var reload = Assert.Single(captured.Events.ToArray(), e => e.Evt == "policy.reload");
+        Assert.Equal("Malformed", reload.Fields.Data!["state"]);
+        Assert.Equal(PolicyContent.Of(broken).Hash, reload.Fields.Data["hash"]);
+        Assert.Equal(PolicyContent.Of(broken).Bytes, reload.Fields.Data["bytes"]);
+    }
+
+    [Fact]
     public void BomAndBomless_StampIdentically()
     {
         // THE agreement edge. The loader reads with File.ReadAllText (strips a

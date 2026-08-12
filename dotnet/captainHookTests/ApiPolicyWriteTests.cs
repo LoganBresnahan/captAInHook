@@ -618,6 +618,15 @@ public class PolicyWriteLedgerTests
             Assert.IsType<PolicyWriteOutcome.Mismatch>(
                 writer.Write(Encoding.UTF8.GetBytes(Policy), ifMatch: "\"deadbeef\""));
 
+            // The 500 arm too — the one where a VALID document passed every check
+            // and the install still did not happen. A directory at the target
+            // makes the rename fail; the file is untouched, so the ledger must
+            // stay silent for the same reason the other two do.
+            var blocked = Path.Combine(dir, "blocked.json");
+            Directory.CreateDirectory(blocked);
+            Assert.IsType<PolicyWriteOutcome.Failed>(
+                new ApiPolicyWriter(blocked).Write(Encoding.UTF8.GetBytes(Policy), ifMatch: null));
+
             Assert.DoesNotContain(captured.Events.ToArray(), e => e.Evt == "policy.write");
         }
         finally { Directory.Delete(dir, recursive: true); }
