@@ -634,18 +634,35 @@ public class MailStoreTornTailTests
 
     /// The tail scan must not depend on a read window: a line longer than
     /// whatever chunk the appender reads still hashes whole, or every long-body
-    /// message would silently break the chain.
+    /// message would silently break the chain. (100KB: within MaxLineBytes,
+    /// beyond the 8KB and 32KB windows, so the growth loop is exercised.)
     [Fact]
     public void AVeryLongPreviousLine_IsHashedWhole()
     {
         using var tmp = new MailStoreTempDir();
         var store = tmp.Store();
 
-        var first = MailFixtures.AppendOk(store, MailFixtures.Envelope(id: "m-01", body: new string('x', 300_000)));
+        var first = MailFixtures.AppendOk(store, MailFixtures.Envelope(id: "m-01", body: new string('x', 100_000)));
         var second = MailFixtures.AppendOk(store, MailFixtures.Envelope(id: "m-02"));
 
         Assert.Equal(MailFixtures.Sha256Hex(first.Line), second.Prev);
         Assert.Empty(store.VerifyChain());
+    }
+
+    /// Phase 2's named carry-in, closed at the write: a line that would not
+    /// fit a windowed reader (MaxLineBytes, terminator included) is REFUSED —
+    /// never truncated, never written-then-undeliverable.
+    [Fact]
+    public void Append_RefusesALinePastMaxLineBytes()
+    {
+        using var tmp = new MailStoreTempDir();
+
+        var result = tmp.Store().Append(
+            MailFixtures.Envelope(body: new string('x', MailStore.MaxLineBytes)));
+
+        var failed = Assert.IsType<MailAppend.Failed>(result);
+        Assert.Contains("caps a line", failed.Error);
+        Assert.False(File.Exists(tmp.FilePath));
     }
 }
 

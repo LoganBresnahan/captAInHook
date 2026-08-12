@@ -171,6 +171,15 @@ shared edit log. The bus must not know or care what backs a member:
    not "was acted on." This is the loop-termination guard for decision 5's
    Stop seam: a reconcile turn re-blocks only on genuinely new inbound.
 
+   *As built (2026-08-12, `mail-cursor` slice): the cursor grew beyond this
+   sketch. A bare offset cannot express out-of-file-order delivery (urgent
+   delivered past held ambient) without losing the held line or doubling the
+   delivered one, so `offset` is the read FRONTIER and a `held` exception
+   list (offset + id + seenAt) carries passed-over mail before it; `head`
+   (the chain's first-line hash) rides beside `gen` as the chain-native
+   rotation check; the advance runs under a per-cursor flock with a
+   deliveries-counter staleness guard. Details in the roadmap slice entry.*
+
 5. **Three seam classes; `priority` names the class the sender requests; the
    planner degrades to what the recipient's harness declares.**
 

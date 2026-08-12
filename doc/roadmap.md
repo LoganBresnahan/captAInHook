@@ -1177,6 +1177,60 @@ run live*. The framework underneath is what exists today.
   delivered. 42 store tests; suite 766 → 771 green twice. **Phase 2
   complete — the on-disk chain format is settled; real data may now be
   written.**)
+  `mail-cursor` (2026-08-12; phase 3's hard half — d3/d4/d6/d13's
+  per-(role, session) delivery cursor, built fable per the plan's
+  hard-reasoning row, **independent skeptic pass run same day** (a fresh
+  fable agent with no stake in the design). THE SHAPE, settled beyond the
+  ADR's sketch and annotated as-built at d4: a bare offset cannot express
+  out-of-file-order delivery — a mid-turn seam delivering urgent past held
+  ambient forces a single offset to either lose the held line or double the
+  delivered one, the exact "too early loses mail, too late double-injects"
+  trap — so the cursor is a read FRONTIER plus `held`, a bounded exception
+  list before it (offset + id + seenAt), delivered mail being structurally
+  ABSENT rather than flagged; plus `head`, the chain's first-line hash, as
+  the chain-native rotation check beside `gen` (phase 2 settled that every
+  generation restarts at genesis, so rotation IS a head change; gen stays 1
+  until d13's rotation machinery exists). THE TTL CLOCK: `deliveries`
+  increments once per Advance — an envelope stamped seenAt at its first
+  pass-over expires when deliveries − seenAt + 1 ≥ ttl ("passed over at N
+  opportunities", exact at ttl=1 and 2, pinned), reads-without-advances age
+  nothing, and no wall clock appears anywhere (asserted on the bytes).
+  RE-ANCHOR: absent anchors at 0 (store-and-forward — offline mail reaching
+  the next holder of the role IS the feature); malformed / foreign gen /
+  changed head / offset past frontier / offset off every line boundary /
+  held entry the file contradicts each re-anchor loudly preserving the
+  monotonic deliveries counter, the frontier never enters an unterminated
+  tail (TrailCursor's half-written-line rule one layer up), and cursor
+  filenames percent-encode (role, session) so a hostile role cannot escape
+  the mail dir. The phase-2 carry-in CLOSED at the write: `MaxLineBytes`
+  (128KiB, TrailCursor's window precedent) enforced in Append. **The
+  skeptic's attack earned three real fixes**: (1) the staleness guard — the
+  If-Match-shaped deliveries check that refuses a stale view — was an
+  unlocked check-then-rename, so two concurrent digests for one (role,
+  session) could both pass it and double-inject: Advance now runs the guard
+  under a per-cursor flock (the store's own "flock is a CORRECTNESS
+  requirement" reasoning, one layer up; `MailStore.TryLock` shared), making
+  it the authoritative at-most-once backstop, pinned by a held-lock
+  bounded-fail test; (2) a PARSEABLE cursor with duplicate held offsets
+  passed every check, double-rendered the envelope in one digest, and made
+  Advance THROW through its never-throw contract — duplicate held offsets
+  are now malformed (duplicate held IDS stay legal: the store does not dedup
+  ids), a held entry addressed to another role re-anchors, and Advance's
+  whole body is failure-as-value; (3) `head` was taken from lines[0] even
+  when the first line was an unterminated tail, so a store born from an
+  in-flight first append would later fire a tamper-flavored "different
+  chain" false alarm — head now comes from complete lines only, pinned by a
+  torn-only-store test. Stated-in-pass rather than fixed (each a sentence in
+  the header + a pin): a re-anchor RESURRECTS expired mail with a fresh TTL
+  (the seenAt stamps die with the held list; d13's redelivery cost includes
+  it — expiry is a one-way door only while the cursor lives), the TTL unit
+  is ADVANCES not seams-where-deliverable (a chatty urgent turn burns held
+  ambient TTL — managing that is pinned as phase 4's planner obligation),
+  `mail.expire` now lands AFTER the rename so the ledger states a fact, and
+  `session_id: ""` normalizes to the sessionless cursor instead of sharing
+  its file. 31 cursor tests + 44 store; suite 771 → 804 green twice (one
+  unidentified single-test failure in one full run did not recur across two
+  subsequent full runs + 15 mail-subset runs — watch for recurrence).
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

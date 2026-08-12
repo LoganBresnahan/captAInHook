@@ -61,13 +61,13 @@ namespace CaptainHook.Mail;
 // last line, compute the same `prev`, and fork the chain. Multi-process
 // `mail send` (phase 3) needs it anyway.
 //
-// A named carry-in for phase 3 (the mail-cursor slice): the store accepts a
-// line of ANY length — a windowed hash would silently break the chain on the
-// first long body — but d4 gives the delivery cursor TrailCursor semantics,
-// whose oversized-line skip DROPS lines over its read window. The cursor must
-// size its window above anything `mail send` accepts, or the send verb must
-// cap the body; one of the two lands with the cursor, else big mail is
-// written durably and never delivered.
+// The oversized-line question (phase 2's named carry-in) is CLOSED AT THE
+// WRITE: `MaxLineBytes` caps what Append will store, so no writer — the send
+// verb included — can produce a line a windowed reader would drop. The chain
+// still hashes any length it FINDS (a windowed hash would break on bytes some
+// other writer forced in), and the cursor's reader is windowless anyway; the
+// cap exists so every future windowed reader is guaranteed a fit, instead of
+// mail being written durably and never delivered.
 
 /// The result of one append — a closed set on the `PolicyResolution` precedent,
 /// so a caller must handle both cases. NEVER a throw: an append reaches here
@@ -129,6 +129,13 @@ public sealed class MailStore(string dir)
     /// The `prev` of the first line in the chain: 64 zeros. A SHA-256 is never
     /// all-zero in practice, so the sentinel is unambiguous.
     public const string Genesis = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    /// The most bytes one line (terminator included) may occupy on disk —
+    /// TrailCursor's 128KiB read-window precedent, adopted as the mail
+    /// format's hard cap so a line always fits a windowed reader. Enforced at
+    /// Append; a body that renders past it is REFUSED, never truncated (a
+    /// truncated body would be the store rewriting what a sender said).
+    public const int MaxLineBytes = 128 * 1024;
 
     /// How long an append waits for the lock before giving up. Generous
     /// (appends are milliseconds and mail volume is a human/agent cadence), but
@@ -199,6 +206,12 @@ public sealed class MailStore(string dir)
                     "refusing to append a line the strict parser would reject: "
                     + string.Join("; ", violations));
 
+            var lineBytes = Encoding.UTF8.GetByteCount(line);
+            if (lineBytes + 1 > MaxLineBytes)
+                return new MailAppend.Failed(
+                    $"refusing to append a {lineBytes}-byte line: the format caps a line "
+                    + $"(with terminator) at {MaxLineBytes} bytes so it always fits a windowed reader");
+
             // The file is created through a CREATING mode so UnixCreateMode
             // actually applies (PosixTrail's create-first idiom), then opened
             // for append. Both happen under the lock, so the two-step is not a
@@ -246,7 +259,7 @@ public sealed class MailStore(string dir)
                 },
             });
 
-            return new MailAppend.Appended(offset, Encoding.UTF8.GetByteCount(line), prev, line);
+            return new MailAppend.Appended(offset, lineBytes, prev, line);
         }
         catch (Exception ex)   // a directory at the path, permissions, a full disk
         {
@@ -441,7 +454,13 @@ public sealed class MailStore(string dir)
     /// Stopwatch, never the wall clock (house invariant 2: a WSL2 clock step
     /// would otherwise expire the wait instantly, the exact bug platform.md
     /// § Wall-clock steps records).
-    private FileStream? AcquireLock(int waitMs, out string? error)
+    private FileStream? AcquireLock(int waitMs, out string? error) =>
+        TryLock(LockPath, waitMs, out error);
+
+    /// Shared with MailCursors: a cursor advance is the same read-then-write
+    /// shape as the chained append, and needs the same serialization for the
+    /// same reason.
+    internal static FileStream? TryLock(string lockPath, int waitMs, out string? error)
     {
         error = null;
         var sw = Stopwatch.StartNew();
@@ -450,7 +469,7 @@ public sealed class MailStore(string dir)
         {
             try
             {
-                return new FileStream(LockPath, new FileStreamOptions
+                return new FileStream(lockPath, new FileStreamOptions
                 {
                     Mode = FileMode.OpenOrCreate,
                     Access = FileAccess.ReadWrite,
@@ -462,11 +481,14 @@ public sealed class MailStore(string dir)
 
             if (sw.ElapsedMilliseconds >= waitMs)
             {
-                error = $"mail store lock '{LockPath}' is held by another writer (waited {waitMs}ms)";
+                error = $"lock '{lockPath}' is held by another writer (waited {waitMs}ms)";
                 Log.Warn("mail", "mail.lockBusy", new LogFields
                 {
                     Msg = error,
-                    Data = new Dictionary<string, object> { ["waitedMs"] = sw.ElapsedMilliseconds },
+                    Data = new Dictionary<string, object>
+                    {
+                        ["path"] = lockPath, ["waitedMs"] = sw.ElapsedMilliseconds,
+                    },
                 });
                 return null;
             }
