@@ -1127,6 +1127,56 @@ run live*. The framework underneath is what exists today.
   end-to-end write⇄reload same-hash pin and, from the `/shipshape` pass, the
   three no-bytes/no-emit edges the first cut proved only at the `Resolve`
   layer. **Phase 1 complete.**)
+  `mail-store-chained-append` (2026-08-12; phase 2 — d11's durable store:
+  flock-serialized chained append + `Read` + `VerifyChain`, built opus
+  tests-first (37 pins), **fable skeptic pass run 2026-08-12** — the
+  chain-under-concurrency attack AND the format sign-off the plan demanded.
+  **Format SIGNED OFF as durable**: genesis = 64 zeros (an absent `prev`
+  cannot distinguish "first line" from "head deleted"); `prev` =
+  lowercase-hex SHA-256 of the previous line's EXACT bytes excluding its LF
+  (the terminator is framing, not content — a torn line hashes by the same
+  rule as every other); torn tails TERMINATED never repaired, the terminator
+  riding the next append's single write so a crash mid-append reduces to the
+  case already handled; and — the `gen` question the sign-off had to answer,
+  settled in-pass before any real byte exists — **ROTATION STARTS A NEW
+  CHAIN**: every generation is an independent self-verifiable file, a
+  cross-file `prev` refused (it would make a file unverifiable in isolation,
+  and d13 archives/prunes generations independently), with the honest cost
+  stated that deleting a whole archived generation is chain-invisible —
+  cross-generation continuity belongs to the cursor's `gen`, never to `prev`.
+  **Three real finds, all fixed in-pass.** (1) `Append` could write a line
+  its OWN strict parser rejects — an in-process envelope value (ttl 0, an
+  out-of-range enum cast, a blank `to`) rendered without complaint and landed
+  on disk where every future reader warns-and-skips it: mail silently lost
+  behind a successful-looking append, the exact too-loose failure the
+  envelope slice's direction-of-failure note warned about. Append now
+  validates the EXACT rendered bytes through `TryParseLine` and refuses with
+  the violations, nothing written — every line the store writes re-parses
+  clean, enforced rather than assumed. (2) `VerifyChain` read an IN-FLIGHT
+  append as corruption — readers deliberately never take the lock, so a
+  verify racing a concurrent send can catch the tail mid-write(2); the
+  unterminated-tail fault now says what it can be (interrupted write or
+  append in flight, terminated and chained over by the next append) instead
+  of crying tamper, pinned in both directions (suffix present unterminated,
+  gone once terminated). (3) The `mail.torn` warn reported the NEW line's
+  offset under the name `offset` in a warn about the TORN line; `TailLink`
+  now reports the torn line's own start. Survived attack unbroken: the flock
+  protocol (`FileShare.None` = LOCK_EX, kernel-released on any death incl.
+  SIGKILL; lock file never unlinked per the DaemonRendezvous fresh-inode
+  rule; bounded monotonic wait per invariant 2), both crash windows (die
+  holding the lock / die mid-write — the single-payload write means every
+  partial completion reduces to a torn tail), one-corruption-one-fault (the
+  expected link is computed from actual bytes, no cascade),
+  sender-supplied-`prev` forge-resistance, whole-line hashing under window
+  growth (a 300KB line hashes whole), and the empty-line /
+  consecutive-newline edges traced coherent between `TailLink` and `Read`.
+  Named carry-in pinned to the `mail-cursor` slice: the store accepts lines
+  of ANY length but d4's TrailCursor semantics DROP oversized lines — the
+  cursor must size its window above anything `mail send` accepts or the send
+  verb must cap the body, else big mail is written durably and never
+  delivered. 42 store tests; suite 766 → 771 green twice. **Phase 2
+  complete — the on-disk chain format is settled; real data may now be
+  written.**)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
