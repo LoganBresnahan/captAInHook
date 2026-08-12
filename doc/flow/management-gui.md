@@ -105,6 +105,50 @@ Append → visible measures **200ms**, but that is the *server's* trail stat-pol
 beat (`TrailTail.cs`, 200ms default), not rendering; the script says so rather
 than flattering the client.
 
+## Status leads with one number; Harnesses answers one question (ADR-0015 slice 7)
+
+Both read views were flat before slice 7, in the same way: everything rendered
+at one weight, so nothing was the point.
+
+**Status has two registers.** Identity and pid are a text STRIP — a content
+hash is something an operator reads and compares against a deploy, not a metric
+that moves, and giving it tile chrome made seven boxes of equal importance (the
+seventh of which wrapped alone onto its own row). The tiles carry only what
+CHANGES: `served` leads at `--fs-2xl`, and the others — in flight, background,
+open streams — sit at the normal weight beside it. Exactly one lead tile per
+view. Each tile owns a **note** stating what the number means right now
+(`idle`, `none pending`), and for supervision, what it COSTS: an escalated
+worker's note is *"asks fail fast — see Handlers"* (ADR-0004 d5), because the
+count alone does not tell an operator what it bought them. A toned value always
+ships a glyph (`⚠`/`✕`) as well as the color — color is never the only channel
+carrying a state — and the tile grid stretches so a row's notes share a
+baseline instead of ending ragged.
+
+**Harnesses is a matrix, not a count.** The chips read `Stop (0)` with the
+actual verbs hidden in a hover title, which answered a question nobody has —
+nobody wants to know how MANY effects an event permits, they want to know
+whether the one they are about to write lands there. Events are now rows,
+declared verbs are columns, and a cell says yes or no. The columns are DERIVED
+from the spec's own declarations (`verbColumns`), never hardcoded: ADR-0003's
+rule is that capabilities are declared in data, and a fixed column list would
+render a future verb as a silent blank — the harness permitting something the
+matrix denies. A permitted cell is marked with a glyph tinted in the **accent**,
+deliberately not the reserved ok/warn/bad palette: "this verb is permitted" is a
+capability, not a health state, and borrowing the health colors here would
+cheapen them where they do mean something, one view over on Status. Every cell's
+yes/no also exists as `.sr-only` text, so the matrix is not a grid of glyphs to a
+screen reader. An event declaring nothing gets one spanning cell saying *no loop
+effects* — an all-blank row reads as missing data rather than as a deliberate
+"nothing lands here".
+
+`verbsLabel` and `effectLandsOn` are **shared with the gallery** rather than
+re-spelled, so the two views cannot come to disagree about what an empty list
+means. The helper distinguishes three cases the old inline code collapsed into
+two: verbs declared, declared EMPTY (the harness says nothing lands here), and
+NOT DECLARED — the last is unknown, not none, and claiming "no loop effects"
+for it would be the same false accusation `effectLandsOn` already refuses to
+make about an unrecognized event.
+
 ## Authoring is a curated gallery, not a script-writing verb (ADR-0015 d3)
 
 The GUI can install a handler ENTRY; it cannot write the executable that entry
@@ -394,9 +438,12 @@ the engine — and the config's one retry stays for genuine contention.
 | policy write client (ETag lifecycle) + the rule builder's round trip | `web/src/policy.ts` (`submitPolicy`; `parsePolicyRows`, `serializePolicyRows`, `sameMeaning`, `PolicyRow`/`PolicyRows`) |
 | rule builder UI (rows, order, raw toggle + raw-draft adoption, raw-lock) | `web/src/PolicyPanel.tsx` (`RuleBuilder`, `data-rule-*`, `data-policy-mode`, `data-policy-locked`, `data-draft-unrepresentable`) |
 | handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
-| template gallery (cards, script view, save instructions, pre-fill) | `web/src/TemplateGallery.tsx`, `web/src/templates.ts` (`TEMPLATES`, `templateEntry`, `suggestedCommand`, `eventVerbs`, `effectLandsOn`), `web/src/templateScripts.ts` (the ONLY `?raw` importer) — starters in `examples/payloads/starter-*.sh` |
+| template gallery (cards, script view, save instructions, pre-fill) | `web/src/TemplateGallery.tsx`, `web/src/templates.ts` (`TEMPLATES`, `templateEntry`, `suggestedCommand`), `web/src/templateScripts.ts` (the ONLY `?raw` importer) — starters in `examples/payloads/starter-*.sh` |
+| capability helpers SHARED by the gallery and the matrix | `web/src/templates.ts` (`eventVerbs`, `effectLandsOn`, `verbsLabel`, `verbColumns`, `VerbMap`) — one phrasing of declared / declared-empty / not-declared |
+| the harness effect matrix (events × declared verbs) | `web/src/HarnessesPanel.tsx` (`EffectMatrix`, `data-effect-matrix`, `data-verb-column`, `data-cell`, `data-on`, `data-no-effects`) — columns derived from the spec, accent (not status) for permitted |
 | handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal` — focus trap + Esc + focus restore, `VerbatimEntry`, `WiringHints`) |
-| the supervision summary (registrations / escalated / restarts / resident children) | `web/src/StatusPanel.tsx` (`Supervision`, `data-supervision`) — restarts is DERIVED as Σ(generation − 1) |
+| the supervision summary (registrations / escalated / restarts / resident children) | `web/src/StatusPanel.tsx` (`Supervision`, `data-supervision`) — restarts is DERIVED as Σ(generation − 1); each tile's note states the CONSEQUENCE, not just the count |
+| status hierarchy: reference strip vs live tiles | `web/src/StatusPanel.tsx` (`Tile`, `data-identity-strip`, `data-status-field`, `data-tiles`, `.tile.lead` — one lead per view, `.tone-mark` so color is never alone) |
 | shared read hook (fetch-on-live, 401⇒session-dead) | `web/src/api.ts` (`useApiJson`) |
 | pure display logic | `web/src/format.ts` (`dispatchHue`, `uptime`, `clockTime`, `traceMatches`) |
 | islands + mount table | `web/src/{App,StatusPanel,HandlersPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx`, `main.tsx`, `index.html` (rail + one view region) |

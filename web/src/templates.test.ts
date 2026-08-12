@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   TEMPLATES, suggestedCommand, templateEntry, eventVerbs, effectLandsOn,
+  verbsLabel, verbColumns,
 } from "./templates.ts";
 import type { HarnessesDto } from "./api.gen.ts";
 
@@ -132,6 +133,48 @@ test("effectLandsOn: noop always lands, and an UNKNOWN event is not accused", ()
   assert.equal(effectLandsOn(verbs, "Stop", "noop"), true, "noop changes nothing, so it is always fine");
   assert.equal(effectLandsOn(verbs, "SomeFutureEvent", "decide"), true,
     "the registry is data and may lag the daemon — warn on what we know, not on what we do not");
+});
+
+// The shared render helper (slice 7): the gallery's per-event line and the
+// Harnesses matrix both read capability through these, so the two views cannot
+// come to disagree about what an empty list — or an unknown event — means.
+
+test("verbsLabel: declared verbs, declared-empty, and NOT declared are three different sentences", () => {
+  const verbs = { PreToolUse: ["decide", "inject"], Stop: [] };
+  assert.equal(verbsLabel(verbs, "PreToolUse"), "decide inject");
+  assert.equal(verbsLabel(verbs, "Stop"), "no loop effects",
+    "the harness declares that nothing lands here — that is a fact about Stop");
+  assert.equal(verbsLabel(verbs, "SomeFutureEvent"), "not declared here",
+    "an event the registry never mentions is UNKNOWN, not empty — claiming 'no loop effects' " +
+    "would be the same false accusation effectLandsOn refuses to make");
+});
+
+test("verbColumns: the union of declared verbs, in first-declared order, deduped", () => {
+  const columns = verbColumns({
+    SessionStart: ["inject"],
+    PreToolUse: ["decide", "inject"],
+    PostToolUse: ["inject", "replace"],
+    Stop: [],
+  });
+  assert.deepEqual(columns, ["inject", "decide", "replace"]);
+});
+
+test("verbColumns: a verb this build has never heard of still gets a column", () => {
+  // ADR-0003's rule is that capabilities are DECLARED IN DATA. A hardcoded
+  // column list would render a future verb as a silent blank — the harness
+  // would permit something the matrix says it does not.
+  assert.deepEqual(verbColumns({ SomeEvent: ["teleport"] }), ["teleport"]);
+  assert.deepEqual(verbColumns({}), [], "no declarations ⇒ no matrix to draw");
+  assert.deepEqual(verbColumns({ Stop: [], SessionEnd: [] }), [],
+    "a harness whose every event declares nothing has no columns either");
+});
+
+test("effectLandsOn answers about verbs the gallery has no template for", () => {
+  // The matrix asks per COLUMN, so it asks about `replace` — which no starter
+  // uses. The predicate is shared, so it has to answer for any verb string.
+  const verbs = { PostToolUse: ["inject", "replace"], PreToolUse: ["decide", "inject"] };
+  assert.equal(effectLandsOn(verbs, "PostToolUse", "replace"), true);
+  assert.equal(effectLandsOn(verbs, "PreToolUse", "replace"), false);
 });
 
 test("every shipped template's effect lands on every event it suggests", () => {

@@ -3,6 +3,7 @@ import { useStore } from "./store.ts";
 import type { ExecEntry } from "./handlers.ts";
 import {
   TEMPLATES, type Template, templateEntry, suggestedCommand, eventVerbs, effectLandsOn,
+  verbsLabel,
 } from "./templates.ts";
 import { TEMPLATE_SCRIPTS } from "./templateScripts.ts";
 
@@ -35,10 +36,7 @@ export function TemplateGallery({ onUse }: { onUse: (entry: ExecEntry) => void }
               {t.entry.events.map((ev) => (
                 <span key={ev} className="event-cap" data-template-event={ev}>
                   {ev}
-                  <span className="muted">
-                    {" · "}
-                    {(verbs[ev] ?? []).length > 0 ? (verbs[ev] ?? []).join(" ") : "no loop effects"}
-                  </span>
+                  <span className="muted">{" · "}{verbsLabel(verbs, ev)}</span>
                 </span>
               ))}
               <span className="muted">{t.entry.mode}</span>

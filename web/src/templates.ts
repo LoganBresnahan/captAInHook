@@ -147,20 +147,53 @@ export function templateEntry(
   };
 }
 
+/** The per-event effect capabilities of one harness: `{event: [verbs]}`. */
+export type VerbMap = Record<string, string[]>;
+
 /** The effect verbs a harness permits per event — data the client has always
  * fetched and nothing displayed until ADR-0015 d3. An event with an EMPTY list
  * accepts no loop effects at all (Stop, SessionEnd): a payload there can still
  * do work, it just cannot change the turn. */
-export function eventVerbs(harnesses: HarnessesDto | null, harness = "claude-code"): Record<string, string[]> {
+export function eventVerbs(harnesses: HarnessesDto | null, harness = "claude-code"): VerbMap {
   const spec = harnesses?.harnesses.find((h) => h.name === harness) ?? harnesses?.harnesses[0];
   return spec?.events ?? {};
 }
 
-/** Does this template's effect actually land on this event? Used to warn in the
- * gallery rather than to forbid: the harness registry is data, a user may know
- * something we do not, and the daemon is the authority either way. */
-export function effectLandsOn(verbs: Record<string, string[]>, event: string, effect: Template["effect"]): boolean {
+/** Does this effect actually land on this event? Used to WARN rather than to
+ * forbid: the harness registry is data, a user may know something we do not,
+ * and the daemon is the authority either way. `effect` is a plain string — the
+ * matrix asks about verbs the gallery has no template for (`replace`), and a
+ * harness may one day declare one nobody here has heard of. */
+export function effectLandsOn(verbs: VerbMap, event: string, effect: string): boolean {
   if (effect === "noop") return true;               // always permitted; it changes nothing
   const allowed = verbs[event];
   return allowed === undefined || allowed.includes(effect);
+}
+
+/** How an event's capability READS — the one rendering shared by the gallery's
+ * template cards and the Harnesses matrix (slice 7 shares it rather than
+ * spelling the phrasing twice, so the two views can never disagree about what
+ * an empty list means).
+ *
+ * The three cases are genuinely different and the wording says so: verbs
+ * declared, declared EMPTY (the harness says "nothing lands here" — Stop,
+ * SessionEnd), and not declared at all. The last is not "none": an event the
+ * registry has never heard of is unknown, and claiming it accepts nothing would
+ * be the same false accusation `effectLandsOn` deliberately refuses to make. */
+export function verbsLabel(verbs: VerbMap, event: string): string {
+  const declared = verbs[event];
+  if (declared === undefined) return "not declared here";
+  return declared.length > 0 ? declared.join(" ") : "no loop effects";
+}
+
+/** Every verb this harness declares anywhere, in first-declared order — the
+ * COLUMNS of the effect matrix. Derived from the data, never a hardcoded list:
+ * ADR-0003's house pattern is that capabilities are declared in data, so a
+ * harness that permits a verb this build has never heard of gets a column for
+ * free instead of rendering as a silent blank. */
+export function verbColumns(verbs: VerbMap): string[] {
+  const seen: string[] = [];
+  for (const declared of Object.values(verbs))
+    for (const verb of declared) if (!seen.includes(verb)) seen.push(verb);
+  return seen;
 }

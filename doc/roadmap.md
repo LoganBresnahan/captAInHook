@@ -28,7 +28,41 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
-  Slices landed: `policy-rule-builder` **COMPLETE — build + skeptic pass**
+  Slices landed: `status-harness-polish` (2026-08-11; slice 7 — the two read
+  views were flat in the same way: everything at one weight, so nothing was the
+  point. **Status gains a hierarchy rather than more tiles.** Identity and pid
+  become a text STRIP — a content hash is read and compared against a deploy,
+  not a metric that moves, and tile chrome made seven equal boxes whose seventh
+  wrapped alone onto its own row; the tiles now carry only what CHANGES, with
+  `served` leading at a new `--fs-2xl` and in flight / background / open streams
+  beside it. Every tile owns a NOTE saying what the number means now (`idle`,
+  `none pending`) and, for supervision, what it COSTS — an escalated worker
+  reads "asks fail fast — see Handlers" (ADR-0004 d5), because a count does not
+  tell an operator what it bought them. A toned value ships a glyph as well as
+  the color (color is never the only channel carrying a state), and the grid
+  stretches so a row's notes share a baseline. **Harnesses becomes a real
+  MATRIX**: the chips read `Stop (0)` — a count, with the verbs themselves
+  hidden in a hover title — which answered a question nobody has; events are now
+  rows, declared verbs are columns, and a cell says yes or no. Columns are
+  DERIVED from the spec (`verbColumns`), never hardcoded, per ADR-0003's
+  declare-in-data rule: a fixed list would render a future verb as a silent
+  blank, the harness permitting what the matrix denies. Permitted cells take the
+  ACCENT, deliberately not the reserved ok/warn/bad palette — permission is a
+  capability, not a health state, and borrowing health colors here would cheapen
+  them one view over; every cell's yes/no also exists as `.sr-only` text, and an
+  event declaring nothing gets one spanning "no loop effects" cell rather than an
+  all-blank row that reads as missing data. `verbsLabel`/`effectLandsOn` are
+  SHARED with the gallery per the ADR rather than re-spelled, which surfaced a
+  real inconsistency in the old inline code: it collapsed three cases into two,
+  claiming "no loop effects" for an event the registry never declared —
+  the same false accusation `effectLandsOn` already refuses to make. Now
+  declared / declared-empty / not-declared are three sentences.
+  Three design misses the snap read caught and fixed IN-slice: ragged tile
+  heights (`align-items: start` let each size to content), a lead tile spanning
+  two columns so the number floated in dead space, and an over-long note that
+  wrapped and made its tile the tallest. 98 units (from 94) + 28 e2e (from 27);
+  all four views snapped in both themes and read.)
+  `policy-rule-builder` **COMPLETE — build + skeptic pass**
   (built 2026-08-12 on opus, tests first per the plan; the ADR's one
   adversarial-verify slice, its independent `fable` skeptic pass run
   2026-08-11 — builder ⇄ JSON attacked both directions, the raw-lock guard,

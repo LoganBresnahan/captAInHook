@@ -55,6 +55,7 @@
   --fs-md: 14px;
   --fs-lg: 15px;
   --fs-xl: 18px;
+  --fs-2xl: 26px;          /* the lead stat tile's value — the one number a view leads with */
   --lh-tight: 1.35;
   --lh: 1.5;
   --track-label: 0.06em;   /* the uppercase micro-label tracking */
@@ -271,33 +272,74 @@ h3 {
 }
 h4 { margin: 0 0 var(--s-2); font-size: var(--fs-md); }
 
-/* ============================ status metrics ============================ */
+/* ======================= status: identity + stat tiles =======================
 
-.metrics {
+   Two registers, deliberately unequal (slice 7). The identity strip is TEXT —
+   a content hash and a pid are things an operator reads and compares, not
+   metrics that move, and giving them tile chrome made the view read as seven
+   equally-important numbers. The tiles below carry only what changes, and the
+   lead tile carries the one the view is FOR. */
+
+.identity-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  align-items: baseline;
+  margin: 0 0 var(--s-4);
+  font-size: var(--fs-sm);
+}
+.identity-line code { font-size: var(--fs-sm); }
+
+.panel-lede { margin: 0 0 var(--s-4); max-width: 70ch; font-size: var(--fs-sm); }
+
+.tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--s-4);
+  gap: var(--s-3);
   margin: 0;
+  /* Stretch, not start: tiles in a row share a height, so their notes sit on
+     one baseline instead of a ragged edge. */
 }
-.metrics > div {
+.tile {
   display: flex; flex-direction: column; gap: var(--s-1);
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
   padding: var(--s-3);
 }
-.metrics dt {
+.tile dt {
   color: var(--text-dim);
   font-size: var(--fs-2xs);
   text-transform: uppercase;
   letter-spacing: var(--track-label);
 }
-.metrics dd {
+.tile dd {
   margin: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-lg);
+  line-height: var(--lh-tight);
   overflow-wrap: anywhere;
 }
+/* The lead value stays MONO like every other number here. The usual advice —
+   proportional figures for a large standalone value, since tabular gives every
+   digit a '0' width and reads loose at display size — does not apply to a
+   monospace face, whose digits are uniform by construction. This is the house
+   direction winning on purpose: mono carries what the daemon produced, and a
+   served count is exactly that. */
+.tile.lead dd { font-size: var(--fs-2xl); }
+/* Bottom-aligned so the notes read as one row of context rather than floating
+   at whatever height each value happened to end at. */
+.tile-note {
+  margin: var(--s-1) 0 0;
+  padding-top: var(--s-1);
+  margin-top: auto;
+  color: var(--text-faint);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-tight);
+}
+/* A toned value always ships its glyph (.tone-mark) too — color is never the
+   only channel telling an operator something is wrong. */
+.tone-mark { font-family: var(--font-ui); }
 
 /* ============================ tables ============================ */
 
@@ -330,8 +372,42 @@ tr td:last-child, tr th:last-child { padding-right: 0; }
   border-radius: var(--r-2);
   padding: var(--s-3);
 }
-.harness-head { font-size: var(--fs-md); }
+.harness-head {
+  display: flex; align-items: baseline; gap: var(--s-2);
+  font-size: var(--fs-md);
+  margin-bottom: var(--s-3);
+}
 .events { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); }
+
+/* The effect matrix: events × the verbs the harness declares. A permitted cell
+   is marked with a glyph and tinted with the ACCENT — permission is a
+   capability, not a health state, so it deliberately does not borrow the
+   reserved ok/warn/bad palette that means something two views over. */
+.matrix { width: auto; min-width: min(100%, 520px); }
+.matrix th[scope="row"] {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+  border-bottom: none;
+  border-top: 1px solid var(--border);
+  padding: var(--s-2) var(--s-4) var(--s-2) 0;
+}
+.matrix thead th:not(:first-child) { text-align: center; }
+.matrix td { text-align: center; font-size: var(--fs-md); }
+.matrix td[data-on="true"] { color: var(--accent); }
+.matrix td[data-on="false"] { color: var(--text-faint); }
+.matrix td[data-no-effects] { text-align: left; font-family: var(--font-ui); font-size: var(--fs-sm); }
+
+/* Visually hidden, still read aloud: the yes/no of every cell exists as TEXT,
+   so the matrix is not a grid of glyphs to a screen reader. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 .event-cap {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
