@@ -73,6 +73,15 @@ never throw on bad *data* — but *tighter*: **unknown fields, an unknown or
 missing `version`, an `ask` decision, duplicate fields, and criteria-less rules
 are all MALFORMED** (the dialect never guesses).
 
+The never-throw contract has one non-obvious edge: `JsonDocument` *defers*
+string unescaping, so a lone-surrogate escape (`"\ud800"`) parses as a valid
+document and only fails at `GetString` — an `InvalidOperationException`, not a
+`JsonException`, which `Resolve` does not catch. Every string read in the
+parser therefore goes through `TryReadString`, which classifies "present but
+unreadable" as a violation instead of throwing. (Found by the ADR-0015 slice-6
+skeptic pass, 2026-08-11; pinned at all three layers — `TryParse`, `Resolve`,
+and `ApiPolicyWriter.Write` → 422.)
+
 ```json
 { "version": 1, "default": "allow",
   "rules": [

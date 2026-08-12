@@ -134,6 +134,76 @@ test.describe("policy rule builder", () => {
     });
   });
 
+  test("raw edits carry INTO the builder — the switch adopts them, never reverts to stale rows", async ({ page, daemon }) => {
+    // Skeptic-pass find (2026-08-11): switching raw → Rules used to revert to
+    // the pre-toggle rows, and Save then wrote those — the raw edits silently
+    // discarded into a write that looked intentional.
+    const island = page.locator('[data-island="policy"]');
+    await island.locator("[data-rule-add]").click();
+    await island.locator('[data-rule-field="handler"][data-rule-index="0"]').fill("alpha");
+
+    await island.locator('[data-policy-mode="raw"]').click();
+    const shown = await island.locator("textarea").inputValue();
+    await island.locator("textarea").fill(shown.replace('"alpha"', '"beta"'));
+    await island.locator('[data-policy-mode="builder"]').click();
+
+    // The builder shows the raw edit, and Save writes it.
+    await expect(island.locator('[data-rule-field="handler"][data-rule-index="0"]')).toHaveValue("beta");
+    await island.getByRole("button", { name: "Save policy" }).click();
+    await expect(island.locator('[data-verdict="written"]')).toBeVisible();
+    const onDisk = JSON.parse(readFileSync(daemon.dispatchPath, "utf8"));
+    expect(onDisk.rules).toEqual([{ handler: "beta", decision: "deny" }]);
+  });
+
+  test("an unrepresentable raw draft REFUSES the switch to Rules — nothing reverts, nothing is lost", async ({ page }) => {
+    const island = page.locator('[data-island="policy"]');
+    await island.locator('[data-policy-mode="raw"]').click();
+    await island.locator("textarea").fill('{"version":1,"pause":true,"rules":[]}');
+    await island.locator('[data-policy-mode="builder"]').click();
+
+    // Still raw, the draft intact, the refusal explained.
+    await expect(island.locator("[data-draft-unrepresentable]")).toBeVisible();
+    await expect(island.locator("[data-rule-builder]")).toHaveCount(0);
+    await expect(island.locator("textarea")).toHaveValue(/"pause"/);
+
+    // Fixing the draft lets the switch proceed, carrying the fixed content.
+    await island.locator("textarea").fill('{"version":1,"rules":[{"handler":"fixed","decision":"deny"}]}');
+    await island.locator('[data-policy-mode="builder"]').click();
+    await expect(island.locator("[data-rule-builder]")).toBeVisible();
+    await expect(island.locator('[data-rule-field="handler"][data-rule-index="0"]')).toHaveValue("fixed");
+  });
+
+  test("a conflicting edit on disk 412s — nothing written — and the retry with the adopted tag overwrites deliberately", async ({ page, daemon }) => {
+    // The 412 path end to end, against the REAL content-hash ETag (the unit
+    // pins drive a scripted server; this drives the daemon's own TryCurrentEtag).
+    const island = page.locator('[data-island="policy"]');
+    await island.locator('[data-policy-mode="raw"]').click();
+
+    // First save creates the file and adopts its ETag (pin 2).
+    await island.locator("textarea").fill('{"version":1,"default":"allow","rules":[]}');
+    await island.getByRole("button", { name: "Save policy" }).click();
+    await expect(island.locator('[data-verdict="written"]')).toBeVisible();
+
+    // The conflict: the file changes on disk AFTER our tag was adopted.
+    const theirs = '{"version":1,"default":"deny","rules":[]}\n';
+    writeFileSync(daemon.dispatchPath, theirs);
+
+    const mine = JSON.stringify(
+      { version: 1, default: "allow", rules: [{ handler: "mine", decision: "deny" }] }, null, 2);
+    await island.locator("textarea").fill(mine);
+    await island.getByRole("button", { name: "Save policy" }).click();
+
+    // 412: the mismatch is surfaced and NOTHING was written over theirs.
+    await expect(island.locator('[data-verdict="mismatch"]')).toBeVisible();
+    expect(readFileSync(daemon.dispatchPath, "utf8")).toBe(theirs);
+
+    // Retry: the adopted `current` makes this a deliberate overwrite (pin 3).
+    await island.getByRole("button", { name: "Save policy" }).click();
+    await expect(island.locator('[data-verdict="written"]')).toBeVisible();
+    const onDisk = JSON.parse(readFileSync(daemon.dispatchPath, "utf8"));
+    expect(onDisk.rules).toEqual([{ handler: "mine", decision: "deny" }]);
+  });
+
   test("RAW-LOCK: a malformed file disables the builder rather than rewriting it", async ({ page, daemon }) => {
     writeFileSync(daemon.dispatchPath, '{"version":1,"pause":true,"rules":[]}\n');
     await page.reload();

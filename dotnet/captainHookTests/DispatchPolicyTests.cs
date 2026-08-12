@@ -85,6 +85,8 @@ public class DispatchPolicyParseTests
     [InlineData("""{ "default": "allow" }""", "version")]                // missing version
     [InlineData("""{ "version": 2 }""", "version")]                     // wrong version number
     [InlineData("""{ "version": 1.5 }""", "version")]                   // non-integer version
+    [InlineData("""{ "version": 1.0 }""", "version")]                   // decimal-form 1 — TryGetInt32 refuses the '.'
+    [InlineData("""{ "version": 1e0 }""", "version")]                   // scientific-form 1, same refusal
     [InlineData("""{ "version": "1" }""", "version")]                   // version wrong type
     [InlineData("""{ "version": 1, "surprise": true }""", "surprise")]  // unknown top-level field
     [InlineData("""{ "version": 1, "default": "maybe" }""", "default")] // bad default decision
@@ -179,11 +181,25 @@ public class DispatchPolicyParseTests
     [InlineData("""{ "version": 1, "rules": [ { "event": "", "decision": "deny" } ] }""")]      // empty
     [InlineData("""{ "version": 1, "rules": [ { "handler": "  ", "decision": "deny" } ] }""")]  // whitespace
     [InlineData("""{ "version": 1, "rules": [ { "session": 7, "decision": "deny" } ] }""")]     // wrong type
+    [InlineData("""{ "version": 1, "rules": [ { "session": "\ud800", "decision": "deny" } ] }""")]  // lone-surrogate escape: parses, but GetString would throw
     public void BadCriterionValue_IsRejected(string json)
     {
         var p = Parse(json, out var errors);
         Assert.Null(p);
         Assert.Contains(errors, e => e.Contains("non-empty string"));
+    }
+
+    [Fact]
+    public void LoneSurrogateDecision_IsRejected_NeverThrown()
+    {
+        // JsonDocument defers unescaping, so this string is only discovered to be
+        // unreadable at GetString — TryParse must classify, not throw (the skeptic
+        // pass caught Resolve crashing on exactly this, 2026-08-11).
+        var p = Parse(
+            """{ "version": 1, "rules": [ { "event": "Stop", "decision": "\udc00" } ] }""",
+            out var errors);
+        Assert.Null(p);
+        Assert.Contains(errors, e => e.Contains("decision"));
     }
 
     [Fact]
@@ -449,6 +465,7 @@ public class PolicyResolutionTests : IDisposable
     [InlineData("[1, 2, 3]")]                           // JSON, but not an object
     [InlineData("""{ "default": "allow" }""")]         // valid JSON, missing version -> schema-invalid
     [InlineData("""{ "version": 1, "rules": [ { "decision": "deny" } ] }""")]  // criteria-less rule
+    [InlineData("""{ "version": 1, "rules": [ { "session": "\ud800", "decision": "deny" } ] }""")]  // lone-surrogate escape — invalid JSON to System.Text.Json
     public void PresentButUnparseable_IsMalformed_NoopsEverythingLoudly(string content)
     {
         var res = ResolveWith(content);

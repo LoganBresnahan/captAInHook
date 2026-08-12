@@ -55,6 +55,19 @@ test("412 surfaces the server's current tag for adoption — the retry is delibe
   assert.deepEqual(r.verdict, { kind: "mismatch", current: '"theirs"' });
 });
 
+test("412 with a null current (the file vanished under us) adopts null — the retry is a deliberate, unprotected create", async () => {
+  // Server contract: Mismatch(current: null) when the file the client believed
+  // it was editing is gone. Adopting null means the retry sends NO If-Match —
+  // correct, because a create has nothing left to protect, and the user has
+  // SEEN the conflict (skeptic-pass pin, 2026-08-11).
+  const r = await submitPolicy(
+    () => Promise.resolve(json(412, { error: "etag_mismatch", current: null })),
+    "{}",
+    '"mine"',
+  );
+  assert.deepEqual(r.verdict, { kind: "mismatch", current: null });
+});
+
 test("422 carries the daemon's own violations, verbatim", async () => {
   const r = await submitPolicy(
     () => Promise.resolve(json(422, { error: "invalid_policy", violations: ["rules[0]: unknown event"] })),
@@ -201,6 +214,10 @@ test("RAW-LOCK: anything the builder cannot rebuild faithfully is refused", asyn
     ["an unknown field inside a rule", '{"version":1,"rules":[{"event":"Stop","decision":"deny","note":"why"}]}'],
     ["a non-string criterion", '{"version":1,"rules":[{"event":1,"decision":"deny"}]}'],
     ["an empty-string criterion", '{"version":1,"rules":[{"event":"","decision":"deny"}]}'],
+    ["a whitespace-only criterion (the daemon rejects it too — IsNullOrWhiteSpace)",
+      '{"version":1,"rules":[{"event":" ","decision":"deny"}]}'],
+    ["a lone-surrogate criterion (unreadable to the daemon's JSON reader)",
+      '{"version":1,"rules":[{"session":"\\ud800","decision":"deny"}]}'],
     ["a decision we do not know", '{"version":1,"rules":[{"event":"Stop","decision":"ask"}]}'],
     ["a default we do not know", '{"version":1,"default":"maybe","rules":[]}'],
     ["a missing decision", '{"version":1,"rules":[{"event":"Stop"}]}'],

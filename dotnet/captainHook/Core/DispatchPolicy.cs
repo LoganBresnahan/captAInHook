@@ -171,25 +171,27 @@ public sealed record DispatchPolicy(
             into.Add(new PolicyRule(ev, handler, project, session, decision));
     }
 
-    /// A criterion field: absent => null (fine); present must be a non-empty
-    /// string, else an error. An empty/whitespace criterion matches nothing
-    /// meaningful, so strict-never-guess rejects it.
+    /// A criterion field: absent => null (fine); present must be a non-empty,
+    /// READABLE string, else an error. An empty/whitespace criterion matches
+    /// nothing meaningful, so strict-never-guess rejects it; an unreadable one
+    /// (see TryReadString) is rejected the same way.
     private static string? Crit(JsonElement rule, string field, int idx, List<string> errs)
     {
         if (!rule.TryGetProperty(field, out var v)) return null;
-        if (v.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(v.GetString()))
+        var s = v.ValueKind == JsonValueKind.String ? TryReadString(v) : null;
+        if (string.IsNullOrWhiteSpace(s))
         {
             errs.Add($"rules[{idx}].{field} must be a non-empty string");
             return null;
         }
-        return v.GetString();
+        return s;
     }
 
     private static bool TryDecision(JsonElement e, out PolicyDecision d)
     {
         d = PolicyDecision.Allow;
         if (e.ValueKind != JsonValueKind.String) return false;
-        switch (e.GetString())
+        switch (TryReadString(e))
         {
             case "allow": d = PolicyDecision.Allow; return true;
             case "deny": d = PolicyDecision.Deny; return true;
@@ -197,10 +199,26 @@ public sealed record DispatchPolicy(
         }
     }
 
+    /// JsonDocument DEFERS string unescaping: a lone-surrogate escape ("\ud800")
+    /// parses as a syntactically fine document and then throws
+    /// InvalidOperationException at GetString — not JsonException at Parse — so
+    /// without this guard it would escape TryParse's never-throw-on-DATA
+    /// contract and crash PolicyResolution.Resolve on the dispatch hot path
+    /// (which catches only JsonException). Null means "present but unreadable";
+    /// every caller treats that as a violation. (ADR-0015 slice-6 skeptic pass,
+    /// 2026-08-11.)
+    private static string? TryReadString(JsonElement e)
+    {
+        try { return e.GetString(); }
+        catch (InvalidOperationException) { return null; }
+    }
+
     /// Quote strings, raw-render everything else — so an error message reads
     /// `got "maybe"` for a bad string but `got 2` / `got true` for a bad type.
+    /// An unreadable string falls back to its raw escaped text (GetRawText
+    /// never unescapes, so it cannot throw).
     private static string RawText(JsonElement e) =>
-        e.ValueKind == JsonValueKind.String ? $"\"{e.GetString()}\"" : e.GetRawText();
+        e.ValueKind == JsonValueKind.String && TryReadString(e) is { } s ? $"\"{s}\"" : e.GetRawText();
 
     private static readonly IReadOnlySet<string> NoExclusions = new HashSet<string>();
 

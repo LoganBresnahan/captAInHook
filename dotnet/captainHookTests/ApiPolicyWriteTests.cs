@@ -91,6 +91,27 @@ public class ApiPolicyWriteTests
     }
 
     [Fact]
+    public void Write_LoneSurrogateEscape_Invalid_Never500()
+    {
+        var dir = FreshDir();
+        var path = Path.Combine(dir, "dispatch.json");
+        try
+        {
+            // "\ud800" is valid UTF-8 BYTES (the escape is ASCII) and parses as a
+            // document — the unreadable string only surfaces at GetString inside
+            // TryParse. Must land as a 422-shaped Invalid, not escape Write as an
+            // InvalidOperationException → opaque 500 (skeptic pass, 2026-08-11).
+            var outcome = new ApiPolicyWriter(path).Write(
+                Utf8("""{ "version": 1, "rules": [ { "session": "\ud800", "decision": "deny" } ] }"""), null);
+
+            var inv = Assert.IsType<PolicyWriteOutcome.Invalid>(outcome);
+            Assert.Contains(inv.Violations, v => v.Contains("session"));
+            Assert.False(File.Exists(path));   // nothing written
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public void Write_InvalidUtf8_Invalid()
     {
         var dir = FreshDir();

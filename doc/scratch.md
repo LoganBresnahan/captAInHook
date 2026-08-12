@@ -177,3 +177,18 @@ spawn a wire-speaking child**, so most of this is *already available* and the
       a token-free `/ui` and hand the credential over a one-time, expiring
       redirect (or local ws pairing) instead of the URL. Comment lives at
       `UiVerb.DefaultLauncher`.
+
+## Deferred-unescape hazard in the sibling parsers
+
+- [ ] **`GetString()` on lazily-unescaped JsonElements can throw
+      `InvalidOperationException`** (found by the ADR-0015 slice-6 skeptic pass,
+      2026-08-11). A lone-surrogate escape (`"\ud800"`) parses as a valid
+      document and only fails at read — `JsonDocument` defers unescaping — so a
+      `catch (JsonException)` does not cover it. `DispatchPolicy` is FIXED
+      (`TryReadString`, pinned at TryParse/Resolve/ApiPolicyWriter). The same
+      pattern survives in `Core/Harness.cs` (user harness overrides read from
+      disk), `Core/ExecHandlersFile.cs` (user- AND API-written handlers.json —
+      a hostile PUT body is a 500, and a hand-edit could crash the loader), and
+      `Core/ExecWire.cs` (payload stdout — external data). Sweep them onto the
+      same helper when next touching each file; the handlers.json one is the
+      most exposed (API surface).

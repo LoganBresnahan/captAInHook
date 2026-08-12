@@ -28,11 +28,41 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
-  Slices landed: `policy-rule-builder` **part 1 of 2 — BUILD ONLY** (2026-08-12;
-  the ADR's one adversarial-verify slice, and the skeptic pass is NOT yet run:
-  an independent `fable` session must still attack builder ⇄ JSON in both
-  directions, the raw-lock guard, and the 412 path before this slice is called
-  done). Built on opus, tests first per the plan. The hazard is silent
+  Slices landed: `policy-rule-builder` **COMPLETE — build + skeptic pass**
+  (built 2026-08-12 on opus, tests first per the plan; the ADR's one
+  adversarial-verify slice, its independent `fable` skeptic pass run
+  2026-08-11 — builder ⇄ JSON attacked both directions, the raw-lock guard,
+  and the 412 path. **Two real finds, both fixed in-pass.** (1) A DAEMON
+  contract breach the round-trip guard could never see: `JsonDocument` defers
+  string unescaping, so a lone-surrogate escape (`"\ud800"`) in a criterion
+  parses as a valid document and throws `InvalidOperationException` at
+  `GetString` — not `JsonException` at `Parse` — escaping
+  `PolicyResolution.Resolve`'s documented never-throws contract on the
+  dispatch hot path, and reaching `ApiPolicyWriter.Write` as an opaque 500
+  instead of a 422; fixed with `TryReadString` at every string-read site in
+  `DispatchPolicy` and pinned at all three layers (TryParse violation, Resolve
+  ⇒ Malformed, Write ⇒ Invalid). The same deferred-unescape pattern in
+  `Harness.cs`/`ExecHandlersFile.cs`/`ExecWire.cs` is recorded in scratch as a
+  follow-up sweep. (2) The raw → Rules switch SILENTLY DISCARDED raw edits:
+  it reverted to the pre-toggle rows and Save then wrote those — draft-level
+  silent destruction wearing an intentional-looking write; the switch now
+  ADOPTS the raw draft into rows, or refuses with a
+  `data-draft-unrepresentable` notice leaving the text exactly as typed.
+  Tightened in-pass: the client criterion check now mirrors the daemon
+  exactly (whitespace-only and lone-surrogate criteria lock to raw —
+  `IsNullOrWhiteSpace` + a `\p{Surrogate}` well-formedness probe), and the
+  gate assumption "the builder only ever sees daemon-accepted text" was
+  EMPIRICALLY verified: version `1.0`/`1e0` (which `JSON.parse` collapses to
+  1) are malformed daemon-side, now pinned. Survived attack unbroken: the
+  round-trip meaning guard, duplicate-key reasoning, `__proto__`/`constructor`
+  keys (locked), first-save-create with null etag, and 412 `current: null`
+  (file deleted ⇒ retry is a deliberate unprotected create, now unit-pinned).
+  Coverage the pass added: the 412 path driven END TO END for the first time —
+  real daemon, real content-hash ETag: conflicting disk edit ⇒ mismatch with
+  nothing written, retry with the adopted tag overwrites deliberately — plus
+  e2e pins for raw-edits-carry-into-builder and the refused switch. Units 94
+  (from 91), e2e 27 (from 24), dotnet 648 green twice; policy view snapped
+  both themes and read.) The hazard is silent
   destruction — a builder that drops a field it did not understand leaves the
   page looking right while the daemon enforces something the user never wrote,
   invisible to every screenshot and every green e2e — so representability is

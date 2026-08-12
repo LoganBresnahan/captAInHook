@@ -121,7 +121,13 @@ export function parsePolicyRows(raw: string | null): PolicyRows | null {
     for (const c of CRITERIA) {
       const v = rule[c];
       if (v === undefined) continue;
-      if (typeof v !== "string" || v === "") return null;   // the daemon refuses both
+      // Mirror the daemon exactly: it refuses non-strings, empty AND
+      // whitespace-only criteria (IsNullOrWhiteSpace), and a lone-surrogate
+      // escape (unreadable to System.Text.Json). In /u mode \p{Surrogate}
+      // matches only UNPAIRED surrogates — a well-formed pair is one
+      // non-surrogate code point — so this is an isWellFormed check without
+      // the ES2024 lib. (Skeptic-pass tightening, 2026-08-11.)
+      if (typeof v !== "string" || v.trim() === "" || /\p{Surrogate}/u.test(v)) return null;
       row[c] = v;
       criteria++;
     }

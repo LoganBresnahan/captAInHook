@@ -250,6 +250,17 @@ but a file containing them is malformed *server-side*, and malformed always
 locks to raw. The daemon's parser remains the only validator of what is legal;
 these functions decide only what the builder can faithfully represent.
 
+The toggle is faithful in BOTH directions (skeptic-pass fix, 2026-08-11):
+switching builder → raw carries the builder's exact output into the textarea,
+and switching raw → Rules **adopts** the raw draft into rows — or *refuses* the
+switch with a notice (`data-draft-unrepresentable`) when the draft is not
+representable, leaving the raw text exactly as typed. Before the fix, the
+switch silently reverted to the pre-toggle rows and Save then wrote those,
+discarding the raw edits into a write that looked intentional. The client
+parser also mirrors the daemon's criterion strictness exactly: whitespace-only
+criteria and lone-surrogate strings lock to raw, matching what the daemon
+rejects (`IsNullOrWhiteSpace`; an unreadable escape).
+
 ## The one write — the policy editor's ETag lifecycle (d1)
 
 `PolicyPanel` GETs `/policy`, seeds an editor from the raw file, and PUTs through
@@ -381,7 +392,7 @@ the engine — and the config's one retry stays for genuine contention.
 | the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `SseFrame`, `PolicyVerdict`, `TRACE_CAP`; navigation: `view`, `setView`, `VIEWS`, `VIEW_LABELS`) |
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`) |
 | policy write client (ETag lifecycle) + the rule builder's round trip | `web/src/policy.ts` (`submitPolicy`; `parsePolicyRows`, `serializePolicyRows`, `sameMeaning`, `PolicyRow`/`PolicyRows`) |
-| rule builder UI (rows, order, raw toggle, raw-lock) | `web/src/PolicyPanel.tsx` (`RuleBuilder`, `data-rule-*`, `data-policy-mode`, `data-policy-locked`) |
+| rule builder UI (rows, order, raw toggle + raw-draft adoption, raw-lock) | `web/src/PolicyPanel.tsx` (`RuleBuilder`, `data-rule-*`, `data-policy-mode`, `data-policy-locked`, `data-draft-unrepresentable`) |
 | handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
 | template gallery (cards, script view, save instructions, pre-fill) | `web/src/TemplateGallery.tsx`, `web/src/templates.ts` (`TEMPLATES`, `templateEntry`, `suggestedCommand`, `eventVerbs`, `effectLandsOn`), `web/src/templateScripts.ts` (the ONLY `?raw` importer) — starters in `examples/payloads/starter-*.sh` |
 | handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal` — focus trap + Esc + focus restore, `VerbatimEntry`, `WiringHints`) |

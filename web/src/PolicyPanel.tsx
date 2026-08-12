@@ -27,6 +27,7 @@ export function PolicyPanel() {
   const [draft, setDraft] = useState<string | null>(null);   // null = untouched, seed from load
   const [rowDraft, setRowDraft] = useState<PolicyRows | null>(null);  // the builder's draft
   const [wantRaw, setWantRaw] = useState(false);             // the user's toggle choice
+  const [draftBlocked, setDraftBlocked] = useState(false);   // a Rules switch was refused: the raw draft isn't representable
   const [saving, setSaving] = useState(false);
   // The If-Match discipline's local half: the tag the NEXT PUT will send.
   // Adopted from the load, then from every 200 (its ETag) and every 412 (its
@@ -83,6 +84,7 @@ export function PolicyPanel() {
             if (r.policy) setPolicy(r.policy);  // the echo IS the fresh read
             setDraft(null);                      // draft merged; reseed from truth
             setRowDraft(null);
+            setDraftBlocked(false);
           } else {
             // A 200 with no tag (server-contract breach): the write landed but
             // the next If-Match is unknown — re-seed via GET rather than hold
@@ -108,6 +110,7 @@ export function PolicyPanel() {
     setPolicy(dto);
     setDraft(null);
     setRowDraft(null);
+    setDraftBlocked(false);
     setVerdict(null);
   };
 
@@ -125,7 +128,22 @@ export function PolicyPanel() {
           aria-pressed={mode === "builder"}
           disabled={locked}
           title={locked ? "This file cannot be edited as rules — see the notice" : undefined}
-          onClick={() => setWantRaw(false)}
+          onClick={() => {
+            // The switch ADOPTS the raw draft into rows, or refuses. Without
+            // this, returning to Rules quietly reverted to the pre-toggle rows
+            // and Save then wrote those — the user's raw edits discarded into
+            // a write that looked intentional (skeptic-pass find, 2026-08-11).
+            if (mode === "raw" && draft !== null) {
+              const parsed = parsePolicyRows(draft);
+              if (parsed === null) { setDraftBlocked(true); return; }   // stay raw; say why
+              const shown = rowDraft ?? fileRows;
+              if (shown === null || serializePolicyRows(parsed) !== serializePolicyRows(shown))
+                setRowDraft(parsed);
+              setDraft(null);   // merged into rows; one draft at a time
+            }
+            setDraftBlocked(false);
+            setWantRaw(false);
+          }}
         >
           Rules
         </button>{" "}
@@ -151,6 +169,13 @@ export function PolicyPanel() {
             : <>This file uses something the rule builder cannot rebuild faithfully, so it is locked to raw. Nothing here will rewrite it — edit the JSON directly.</>}
         </p>
       )}
+      {draftBlocked && mode === "raw" && (
+        <p className="bad" data-draft-unrepresentable>
+          These raw edits are not something the rule builder can rebuild
+          faithfully, so the switch stayed on Raw — nothing was reverted. Fix
+          the JSON (or save it as-is) and try again.
+        </p>
+      )}
 
       {mode === "builder" && rows !== null ? (
         <RuleBuilder rows={rows} events={Object.keys(eventVerbs(harnesses))} onChange={editRows} />
@@ -161,7 +186,7 @@ export function PolicyPanel() {
           cols={72}
           spellCheck={false}
           value={text}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => { setDraft(e.target.value); setDraftBlocked(false); }}
         />
       )}
       <div>
@@ -169,7 +194,7 @@ export function PolicyPanel() {
           {saving ? "Saving…" : "Save policy"}
         </button>{" "}
         {(draft !== null || rowDraft !== null) && (
-          <button onClick={() => { setDraft(null); setRowDraft(null); }}>Discard draft</button>
+          <button onClick={() => { setDraft(null); setRowDraft(null); setDraftBlocked(false); }}>Discard draft</button>
         )}
       </div>
       {verdict?.kind === "written" && <p data-verdict="written">Saved — live on the next hook (hot reload).</p>}
