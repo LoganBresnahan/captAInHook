@@ -1047,6 +1047,37 @@ run live*. The framework underneath is what exists today.
 
 ## Later
 
+- [ ] **20. The mailbox bus — cross-harness agent communication** — the hub
+  reframe: N external agent loops (Claude Code + any hook-bearing harness),
+  one daemon as the store-and-forward bus. Mail is written by appending an
+  envelope to a durable disk store; it is *delivered* only at seams the
+  recipient's harness declares (turn-start inject / mid-turn urgent /
+  Stop-block reconcile), with per-(role, session) byte-offset cursors,
+  delivery-opportunity TTLs, and cursor-advance-on-inject as the Stop-loop
+  guard. Members span deterministic gates (key-redactor), write-only
+  observers (edit log), on-demand LLM watchers, and full peers — LLM-ness is
+  a payload detail the bus never sees. Zero core: two engine CLI verbs
+  (`mail send` / `mail digest`), payloads, and data; swarm activation is a
+  dispatch-policy flip, not a boot verb; ADR-0011's consent gate stays
+  per-executable. Ask/reply correlation explicitly deferred (envelope
+  reserves `inReplyTo`). Provenance/governance designed in, not bolted on:
+  delivery is a `mail.deliver` ledger event closing the cross-agent causality
+  chain, the mail store is hash-chained (trail chaining deferred with the
+  two-emitter lock cost named), policy reloads gain content hashes, and the
+  three stores get three lifetimes (cursors ephemeral / trail operational /
+  mail archival, all 0600). Design: **ADR-0016** (accepted 2026-08-12).
+  Build order: ADR-0016 § Implementation plan (2026-08-12; 11 slices → 6
+  phases; critical path mail-envelope-parser → mail-store-chained-append →
+  mail-cursor → mail-digest-handler → cursor-edge-adversarial-tests →
+  swarm-profile-and-flow-doc; adversarial verify on exactly five slices —
+  store, cursor, digest, the adversarial-test campaign, stop-seam; no
+  ultracode). Sequencing hazards named in the plan: the on-disk chain format
+  is durable (nothing writes real data before phase 2's verify settles it),
+  and dogfood lands strictly LAST — no live payloads on the maintainer's
+  session until the exactly-once tests and the Stop-loop pin are green.
+  First dogfood target: both agents' PostToolUse streams into one edit log
+  with stale-view warnings — the payload only the hub position makes
+  possible. Tick slices here as they land.
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
