@@ -1078,6 +1078,31 @@ run live*. The framework underneath is what exists today.
   First dogfood target: both agents' PostToolUse streams into one edit log
   with stale-view warnings — the payload only the hub position makes
   possible. Tick slices here as they land.
+  Slices landed: `mail-envelope-parser` (2026-08-12; phase 1 — d2's envelope as
+  a strict parser on the `DispatchPolicy.TryParse` precedent: every violation in
+  one pass, all-or-nothing accept, unknown AND duplicate fields malformed, never
+  a throw on bad DATA. The failure DIRECTION is the mirror of the policy
+  parser's and drove every judgment call — a malformed policy poisons the door
+  loudly, a malformed envelope is warned-and-skipped, so too-loose delivers what
+  nobody can render and too-tight silently drops real mail. Four calls the
+  ADR left to the slice: `session` inside `from` is OPTIONAL (a write-only
+  hookless member is a real membership class per d5 — requiring it would make
+  the bus's cheapest tier unrepresentable); `priority`/`ttlDeliveries` are
+  optional with defaults that fail SAFE (lowest-traffic seam class, bounded TTL
+  — a forgotten field can never buy the mid-turn budget nor mean "forever"),
+  while an unknown priority is still malformed rather than silently downgraded;
+  `ts` is REQUIRED but format-unvalidated (the store is the influence record
+  per d13, and nothing may ever parse or compare it — TTL is delivery-counted);
+  and `prev` (d11's chain link) is a KNOWN optional field, because the store
+  appends it and a strict parser that had never heard of it would read every
+  chained line as malformed the moment phase 2 lands — the NAME is reserved,
+  the encoding stays phase 2's durable-format decision. `TryParseLine` gives
+  the JSONL reader one thing to check: torn final lines, garbage, and two
+  values on a line land in `errors` beside schema faults, so one bad line can
+  never throw its way out of a digest run. The lone-surrogate guard from the
+  ADR-0015 skeptic pass is carried over — JsonDocument defers unescaping, so
+  `"\ud800"` parses fine and throws at GetString, which without the guard takes
+  down whichever reader is walking the store. 68 units.)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
