@@ -164,11 +164,24 @@ Then the GUI shell (ADR-0008 d2 — the warm daemon from hook 2 is serving):
 # port + token from the daemon's discovery file (0600, version-partitioned)
 API=$(ls "${XDG_RUNTIME_DIR:-$HOME/.captainHook}"/captainHook/captaind-*.api.json 2>/dev/null | head -1)
 PORT=$(grep -o '"port":[0-9]*' "$API" | cut -d: -f2)
-curl -sf "http://127.0.0.1:$PORT/ui" | grep -q '<div id="app">'   # shell serves, no token needed
+SHELL_HTML=$(curl -sf "http://127.0.0.1:$PORT/ui")               # shell serves, no token needed
+grep -q 'id="nav"' <<<"$SHELL_HTML" && echo "shell ok"           # the sidebar shell's first island mount
+# and its HASHED assets must serve too — a staged index.html whose assets are
+# missing renders a blank page while the shell check alone says "fine".
+for a in $(grep -o 'assets/index-[A-Za-z0-9]*\.\(js\|css\)' <<<"$SHELL_HTML"); do
+  echo "  $a → $(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/ui/$a")"
+done
 ```
 
 A 404 here means the `ui/` dir didn't stage (step 1's `cp -r ui`); hooks are
 unaffected either way — fix the staging, don't roll back for this alone.
+
+*(Marker updated 2026-08-11: ADR-0015 slice 2 replaced the single
+`<div id="app">` mount with the sidebar shell — rail + view region + one mount
+per island — so the old grep reported ABSENT on a perfectly healthy deploy.
+Caught on the first post-overhaul deploy. `id="nav"` is the structural marker
+now; the per-asset check is new, because "index.html serves" never proved the
+bundle beside it did.)*
 
 ## 4. Reap superseded daemons
 
