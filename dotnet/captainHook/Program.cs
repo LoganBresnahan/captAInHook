@@ -56,6 +56,11 @@ switch (inv.Mode)
         // token in the URL fragment. Stdout is fine here — not hook mode.
         return await UiVerb.RunAsync(Console.Out, Console.Error);
 
+    case Mode.MailSend:
+        // Human/CLI verb (ADR-0016 decision 7): one envelope on stdin onto
+        // the durable store. Stdout is fine here — not hook mode.
+        return CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error);
+
     case Mode.Doctor:
     {
         // Human command, not hook mode: the report goes to stdout on purpose.

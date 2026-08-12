@@ -1231,6 +1231,33 @@ run live*. The framework underneath is what exists today.
   its file. 31 cursor tests + 44 store; suite 771 → 804 green twice (one
   unidentified single-test failure in one full run did not recur across two
   subsequent full runs + 15 mail-subset runs — watch for recurrence).
+  `mail-send-verb` (2026-08-12; phase 3's cheap half, d7's universal write
+  path — `captainHook mail send`: one JSON envelope on stdin, phase 1's
+  strict parser, phase 2's chained append, one exit code; anything that can
+  run a process can put mail on the bus with no jq and no hand-rolled JSON
+  (the ADR's rejected shell-script alternative, inverted into the verb's
+  whole reason). `Mode.MailSend` joins the wire lib's argv contract (`mail
+  <subverb>`, the subverb riding EventName; the ENGINE judges it — unknown
+  subverbs are a loud usage error, `mail digest` reserved for phase 4) and
+  the shim's refusal list grows the verb (aot-boundary rule 11's discipline;
+  the boundary doc's generic "engine-only modes are refused loudly" needed
+  no edit). `ts` IS STAMPED at the verb when absent — d2's "every writer
+  goes through mail send, which stamps it"; wall-clock UTC, invariant 2's
+  display-timestamp carve-out — and the stamp REBUILDS the object copying
+  every property verbatim (unknown fields, duplicates, all of it), so
+  stamping can never launder a malformed envelope past the strict parser
+  (pinned: a duplicate `to` survives the rebuild and is refused); a sender's
+  own `ts` is kept verbatim, and a stamp that cannot be applied degrades to
+  the parser's own report rather than ever throwing. MailSend.Run takes
+  injected streams (the doctor/ui precedent) so the verb is driven entirely
+  in-suite; 9 tests including the end-to-end promise the cursor slice was
+  owed — send → store → chain verifies → cursor delivers — plus the argv
+  parse, the shim refusal, and the MaxLineBytes refusal surfacing on stderr.
+  Driven live through the real CLI against a scratch dir: stamped ts, frozen
+  defaults, genesis prev, 0700/0600 modes, garbage rejected loudly with
+  nothing written. Suite 804 → 813 green twice. **Phase 3 complete — mail
+  has a real write path and every recipient a position in it; next is phase
+  4, `mail-digest-handler`, the semantic core.**)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

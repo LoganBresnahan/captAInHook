@@ -25,6 +25,12 @@ public enum Mode
     /// token in the URL fragment (ADR-0008 decision 3). Engine-only; the shim
     /// refuses it like every other non-hook verb.
     Ui,
+    /// `mail <subverb>` — the mailbox bus CLI (ADR-0016 decision 7): `mail
+    /// send` appends one validated envelope to the durable store. The subverb
+    /// rides EventName; the engine validates it (unknown subverbs are a loud
+    /// usage error there, not a parse-time guess here). Engine-only; the shim
+    /// refuses it.
+    MailSend,
 }
 
 /// One parsed invocation: the mode plus the hook-dispatch arguments that shim
@@ -39,6 +45,8 @@ public sealed record Invocation(Mode Mode, string? EventName, string HarnessName
             return new(Mode.Doctor, null, "claude-code");
         if (args.Length > 0 && args[0] == "ui")
             return new(Mode.Ui, null, "claude-code");
+        if (args.Length > 0 && args[0] == "mail")
+            return new(Mode.MailSend, args.Length > 1 ? args[1] : null, "claude-code");
 
         string? eventName = null;
         var harnessName = "claude-code";
