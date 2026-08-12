@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using CaptainHook.Actors;
 using CaptainHook.Core;
 
 namespace CaptainHook.Api;
@@ -111,6 +112,31 @@ public sealed class ApiPolicyWriter
         {
             return new PolicyWriteOutcome.Failed(ex.Message);
         }
+
+        // The rule change is a first-class ledger event (ADR-0016 decision 12):
+        // the API is the one way to change policy without touching the file, so
+        // without this the ledger would show the daemon reloading a document
+        // nobody can attribute. Stamped over `text` — the BOM-stripped bytes we
+        // just installed — which is exactly what ReloadingPolicy's own
+        // `policy.reload` will hash when it picks the file up, so the two emits
+        // agree and the write and its reload join by hash.
+        //
+        // Emitted on the WRITTEN path only, and deliberately: a 422/412/500
+        // changed no rules, and the ledger records what was in force, not what
+        // was attempted. (An attempt log is an auth-surface question — ADR-0007's
+        // gate — not a policy-content one.) Logged under `policy` rather than
+        // `api` so one src filter shows a document's whole life: written here,
+        // reloaded there.
+        var stamp = PolicyContent.Of(text);
+        Log.Info("policy", "policy.write", new LogFields
+        {
+            Data = new Dictionary<string, object>
+            {
+                ["path"] = _path,
+                ["hash"] = stamp.Hash,
+                ["bytes"] = stamp.Bytes,
+            },
+        });
 
         return new PolicyWriteOutcome.Written(ApiReadModel.Etag(text));
     }

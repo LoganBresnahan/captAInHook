@@ -507,3 +507,119 @@ public class ApiPolicyWriteTests
         return Encoding.UTF8.GetString(answered.StdoutBytes);
     }
 }
+
+/// ADR-0016 decision 12 (policy-content-hash), the API half: a PUT that changes
+/// the rules is a first-class ledger event carrying the document's identity.
+/// The test that matters is AGREEMENT — the write and the daemon's own reload of
+/// that same file must stamp one document with one hash, or the ledger shows two
+/// documents where a human made one change.
+public class PolicyWriteLedgerTests
+{
+    private const string Policy =
+        """{"version":1,"default":"allow","rules":[{"event":"Stop","decision":"deny"}]}""";
+
+    private static string FreshDir()
+    {
+        var dir = Path.Combine("/tmp", "chk-polhash-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    [Fact]
+    public void Write_EmitsPolicyWrite_WithContentIdentity()
+    {
+        var dir = FreshDir();
+        try
+        {
+            using var captured = new CapturedLog();
+            var path = Path.Combine(dir, "dispatch.json");
+
+            Assert.IsType<PolicyWriteOutcome.Written>(
+                new ApiPolicyWriter(path).Write(Encoding.UTF8.GetBytes(Policy), ifMatch: null));
+
+            var ev = Assert.Single(captured.Events.ToArray(), e => e.Evt == "policy.write");
+            Assert.Equal("policy", ev.Src);   // one src filter shows a document's whole life
+            Assert.Equal(path, ev.Fields.Data!["path"]);
+            Assert.Equal(PolicyContent.Of(Policy).Hash, ev.Fields.Data["hash"]);
+            Assert.Equal(PolicyContent.Of(Policy).Bytes, ev.Fields.Data["bytes"]);
+
+            // The ETag and the ledger hash are different surfaces over the same
+            // input, so an operator can join them by prefix.
+            Assert.Equal($"\"{PolicyContent.Of(Policy).Hash[..32]}\"", ApiReadModel.Etag(Policy));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void WriteThenDaemonReload_ReportTheSameHash()
+    {
+        // End to end across BOTH emit sites: the API installs a document and the
+        // daemon's stat-gate picks it up. One change, one hash — which is the
+        // whole point of d12 (match a ledger hash against a known document).
+        var dir = FreshDir();
+        try
+        {
+            using var captured = new CapturedLog();
+            var path = Path.Combine(dir, "dispatch.json");
+            var rp = new ReloadingPolicy(path);          // absent at construction
+            Assert.IsType<PolicyResolution.Absent>(rp.Current);
+
+            Assert.IsType<PolicyWriteOutcome.Written>(
+                new ApiPolicyWriter(path).Write(Encoding.UTF8.GetBytes(Policy), ifMatch: null));
+            Assert.IsType<PolicyResolution.Loaded>(rp.Current);
+
+            var events = captured.Events.ToArray();
+            var write = Assert.Single(events, e => e.Evt == "policy.write");
+            var reload = Assert.Single(events, e => e.Evt == "policy.reload");
+            Assert.Equal(write.Fields.Data!["hash"], reload.Fields.Data!["hash"]);
+            Assert.Equal(write.Fields.Data["bytes"], reload.Fields.Data["bytes"]);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void BomPrefixedBody_StampsAsTheBomlessDocument()
+    {
+        // The writer strips the BOM before installing, so the bytes on disk (and
+        // therefore the daemon's reload hash) are BOM-free. Hashing the REQUEST
+        // bytes instead would make the same document arrive with two identities
+        // depending on the client's editor.
+        var dir = FreshDir();
+        try
+        {
+            using var captured = new CapturedLog();
+            var path = Path.Combine(dir, "dispatch.json");
+            var body = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetPreamble()
+                .Concat(Encoding.UTF8.GetBytes(Policy)).ToArray();
+
+            Assert.IsType<PolicyWriteOutcome.Written>(new ApiPolicyWriter(path).Write(body, ifMatch: null));
+
+            var ev = Assert.Single(captured.Events.ToArray(), e => e.Evt == "policy.write");
+            Assert.Equal(PolicyContent.Of(Policy).Hash, ev.Fields.Data!["hash"]);
+            Assert.Equal(PolicyContent.Of(Policy).Bytes, ev.Fields.Data["bytes"]);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void RejectedWrites_EmitNothing()
+    {
+        // The ledger records what was IN FORCE, not what was attempted: a 422 or
+        // a 412 changed no rules, and a phantom policy.write for one would put a
+        // document on the ledger that never existed on disk.
+        var dir = FreshDir();
+        try
+        {
+            using var captured = new CapturedLog();
+            var path = Path.Combine(dir, "dispatch.json");
+            var writer = new ApiPolicyWriter(path);
+
+            Assert.IsType<PolicyWriteOutcome.Invalid>(writer.Write(Encoding.UTF8.GetBytes("{ nope"), null));
+            Assert.IsType<PolicyWriteOutcome.Mismatch>(
+                writer.Write(Encoding.UTF8.GetBytes(Policy), ifMatch: "\"deadbeef\""));
+
+            Assert.DoesNotContain(captured.Events.ToArray(), e => e.Evt == "policy.write");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+}

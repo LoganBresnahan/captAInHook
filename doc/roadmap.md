@@ -1103,6 +1103,28 @@ run live*. The framework underneath is what exists today.
   ADR-0015 skeptic pass is carried over — JsonDocument defers unescaping, so
   `"\ud800"` parses fine and throws at GetString, which without the guard takes
   down whichever reader is walking the store. 68 units.)
+  `policy-content-hash` (2026-08-12; phase 1's batch-along, d12 — the trail saw
+  policy EFFECTS (`policy.reload`, `policy.skip`) but never policy CONTENT, so
+  "which rules were in force at time T" was unanswerable from the ledger alone.
+  `PolicyContent.Of` stamps SHA-256 + byte size onto the `policy.reload` emit
+  and onto a NEW `policy.write` from `ApiPolicyWriter`. The whole slice is one
+  AGREEMENT question, and three sub-decisions settle it: the stamp is over the
+  LOADER's view — the BOM-stripped text, which is what `File.ReadAllText`
+  returns and what the writer installs — so a document written through the API
+  hashes identically when the daemon reloads it (hashing raw file bytes would
+  give one document two identities and make one human edit look like two on the
+  ledger); hash+bytes are OMITTED, never zeroed, when there are no bytes to
+  name, since hashing `""` would put a real-looking empty document on the
+  ledger for a file that was never there; and a schema-MALFORMED file still
+  stamps, because it IS in force — as deny-everything (ADR-0006 d4) — and an
+  audit reconstructing time T needs to identify it. Stamped from the same read
+  that classifies, never a second one, so the hash can't name a document other
+  than the one now live. `policy.write` fires on the WRITTEN path only and logs
+  under src `policy`, not `api`: a 422/412 changed no rules, the ledger records
+  what was in force rather than what was attempted, and one src filter now
+  shows a document's whole life. The full 64-hex hash prefix-joins the
+  `GET /policy` ETag (same input, different surface). +10 units incl. the
+  end-to-end write⇄reload same-hash pin. **Phase 1 complete.**)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

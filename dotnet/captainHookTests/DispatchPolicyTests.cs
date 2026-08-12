@@ -670,3 +670,139 @@ public class PolicyHotReloadTests : IDisposable
         Assert.False(rp.Current.Evaluate("Bbbbbbbbbbb", null, null).Work);
     }
 }
+
+/// ADR-0016 decision 12 (policy-content-hash) — the policy DOCUMENT's identity
+/// on the ledger. The trail already carried policy EFFECTS; without content
+/// identity, "which rules were in force at time T" is unanswerable from the
+/// ledger alone. The sharp edge is AGREEMENT: the reload emit and the API write
+/// emit must hash the same view of the same document, or the two events that
+/// describe one change look like two different documents. (The API half of that
+/// pin lives in ApiPolicyWriteTests, which drives both sites end to end.)
+public class PolicyContentHashTests : IDisposable
+{
+    private readonly string _dir =
+        Path.Combine(Path.GetTempPath(), "captainhook-policy-hash-" + Guid.NewGuid().ToString("N"));
+    private readonly string _path;
+    private static readonly DateTime T0 = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private const string Policy = """{ "version": 1, "default": "deny" }""";
+
+    public PolicyContentHashTests()
+    {
+        Directory.CreateDirectory(_dir);
+        _path = Path.Combine(_dir, "dispatch.json");
+    }
+    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
+
+    private void Write(string json, DateTime mtime, bool bom = false)
+    {
+        File.WriteAllText(_path, json, new System.Text.UTF8Encoding(bom));
+        File.SetLastWriteTimeUtc(_path, mtime);
+    }
+
+    [Fact]
+    public void Of_IsSha256HexAndUtf8Length()
+    {
+        // Pin the scheme itself, not just self-consistency: a silent switch to
+        // another digest or to UTF-16 lengths would break every already-recorded
+        // ledger hash while every round-trip test kept passing.
+        var c = PolicyContent.Of("héllo");
+        Assert.Equal(64, c.Hash.Length);
+        Assert.Matches("^[0-9a-f]+$", c.Hash);
+        Assert.Equal(6, c.Bytes);   // é is two UTF-8 bytes
+        Assert.Equal(PolicyContent.Of("héllo"), c);
+        Assert.NotEqual(PolicyContent.Of("hello"), c);
+    }
+
+    [Fact]
+    public void LoadedFile_IsStamped()
+    {
+        Write(Policy, T0);
+        Assert.IsType<PolicyResolution.Loaded>(PolicyResolution.Resolve(_path, out var content));
+        Assert.Equal(PolicyContent.Of(Policy), content);
+    }
+
+    [Fact]
+    public void MalformedByScheme_IsStillStamped()
+    {
+        // A file that exists but does not parse IS in force — as "deny
+        // everything" (ADR-0006 d4). An audit reconstructing time T needs to
+        // identify the document that did that, so bytes read => bytes stamped.
+        const string broken = """{ "version": 1, "rules": [ { "decision": "deny" } ] }""";
+        Write(broken, T0);
+        Assert.IsType<PolicyResolution.Malformed>(PolicyResolution.Resolve(_path, out var content));
+        Assert.Equal(PolicyContent.Of(broken), content);
+    }
+
+    [Fact]
+    public void AbsentOrUnreadable_StampNothing()
+    {
+        // No bytes => no stamp. Hashing "" here would put a real-looking empty
+        // document on the ledger for a file that was never there.
+        Assert.IsType<PolicyResolution.Absent>(PolicyResolution.Resolve(_path, out var absent));
+        Assert.Null(absent);
+
+        var dirPath = Path.Combine(_dir, "as-a-dir");
+        Directory.CreateDirectory(dirPath);
+        Assert.IsType<PolicyResolution.Malformed>(PolicyResolution.Resolve(dirPath, out var dir));
+        Assert.Null(dir);
+    }
+
+    [Fact]
+    public void BomAndBomless_StampIdentically()
+    {
+        // THE agreement edge. The loader reads with File.ReadAllText (strips a
+        // leading U+FEFF) and the API writer strips the BOM before writing, so
+        // the stamp is over the loader's view — hash the raw file bytes instead
+        // and one document would carry two identities depending on who wrote it.
+        Write(Policy, T0, bom: true);
+        PolicyResolution.Resolve(_path, out var withBom);
+        Write(Policy, T0.AddSeconds(1), bom: false);
+        PolicyResolution.Resolve(_path, out var without);
+
+        Assert.NotNull(withBom);
+        Assert.Equal(without, withBom);
+        Assert.Equal(PolicyContent.Of(Policy), withBom);
+    }
+
+    [Fact]
+    public void ReloadEmit_CarriesHashAndBytes()
+    {
+        using var captured = new CapturedLog();
+
+        Write(Policy, T0);
+        var rp = new ReloadingPolicy(_path);
+        _ = rp.Current;                                   // construction-time load: no event
+        Assert.Empty(captured.Events);
+
+        const string edited = """{ "version": 1, "default": "allow" }""";
+        Write(edited, T0.AddSeconds(1));
+        _ = rp.Current;                                   // the stat-gate fires
+
+        var reload = Assert.Single(captured.Events.ToArray(), e => e.Evt == "policy.reload");
+        Assert.Equal("Loaded", reload.Fields.Data!["state"]);
+        Assert.Equal(PolicyContent.Of(edited).Hash, reload.Fields.Data["hash"]);
+        Assert.Equal(PolicyContent.Of(edited).Bytes, reload.Fields.Data["bytes"]);
+    }
+
+    [Fact]
+    public void ReloadToAbsent_OmitsHashAndBytes()
+    {
+        // Omitted, never zeroed: the JSONL renderer only writes what the
+        // dictionary holds, so a deleted policy leaves no phantom document on
+        // the ledger.
+        using var captured = new CapturedLog();
+
+        Write(Policy, T0);
+        var rp = new ReloadingPolicy(_path);
+        _ = rp.Current;
+
+        File.Delete(_path);
+        _ = rp.Current;
+
+        var reload = Assert.Single(captured.Events.ToArray(), e => e.Evt == "policy.reload");
+        Assert.Equal("Absent", reload.Fields.Data!["state"]);
+        Assert.False(reload.Fields.Data.ContainsKey("hash"));
+        Assert.False(reload.Fields.Data.ContainsKey("bytes"));
+    }
+}

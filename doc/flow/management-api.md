@@ -192,6 +192,17 @@ whole document, which is the invariant that matters to the hot path. A leading
 BOM is stripped so the writers and the daemon's loaders agree (all
 `File.ReadAllText`-strip it), keeping the ETag round-trip exact.
 
+**A policy write is a ledger event** (ADR-0016 d12). On the `Written` path only,
+`ApiPolicyWriter` emits `policy.write` (src `policy`, not `api` — one src filter
+then shows a document's whole life) carrying `path` + the installed document's
+`hash`/`bytes` via `PolicyContent.Of`. It hashes the same BOM-stripped text it
+just wrote, which is what the daemon's `ReloadingPolicy` will hash on the
+`policy.reload` that follows — one change, one hash, joinable across the two
+events. Rejected writes (422/412/500) emit **nothing**: they changed no rules,
+and the ledger records what was in force, not what was attempted (an attempt log
+is an auth-surface question, ADR-0007's gate). `PUT /handlers` has no equivalent
+yet — d12 scopes content hashing to policy documents.
+
 Three shared low-severity edges, probed by the 2026-07-19 adversarial pass and
 accepted by design (inherited verbatim from the proven policy writer): invalid
 UTF-8 *inside a string value* is refused by a writer though a hand-written file
@@ -222,7 +233,7 @@ where a hand edit would follow it.
 | auth decision (Host/Origin/Bearer, const-time compare) | `dotnet/captainHook/Api/ApiAuthGate.cs` |
 | discovery file (0600 at birth, version-partitioned, `Write`/`TryRead`) | `dotnet/captainHook/Api/ApiDiscovery.cs` |
 | read projection over live Core objects | `dotnet/captainHook/Api/ApiReadModel.cs` (+ `Etag`) |
-| write path (validate → If-Match → atomic temp+rename), `PolicyWriteOutcome` DU | `dotnet/captainHook/Api/ApiPolicyWriter.cs` |
+| write path (validate → If-Match → atomic temp+rename), `PolicyWriteOutcome` DU, the `policy.write` ledger emit | `dotnet/captainHook/Api/ApiPolicyWriter.cs` (identity via `PolicyContent.Of`, `Core/DispatchPolicy.cs`) |
 | handlers write path (same shape + the d3 skip-refusal), `HandlersWriteOutcome` DU | `dotnet/captainHook/Api/ApiHandlersWriter.cs` |
 | SSE tailer (`TrailCursor`, `TrailSubscription`, `SseEvent`, backpressure) | `dotnet/captainHook/Api/TrailTail.cs` |
 | response DTOs (camelCase, reflection STJ) + `ApiJson.WriteAsync` | `dotnet/captainHook/Api/ApiDtos.cs`, `ApiJson.cs` |
@@ -231,8 +242,8 @@ where a hand edit would follow it.
 | port resolution (`4665`, `CAPTAINHOOK_API_PORT`, `0` disables) | `ApiHost.ResolvePort`, threaded via `Program.cs` |
 | discovery path | `RendezvousPaths.ApiJsonPath` (`captainHookWire/Rendezvous.cs`) |
 | endpoints | `GET /api/v1/{status,policy,harnesses,handlers,events}`, `PUT /api/v1/{policy,handlers}`, else 404 |
-| log events | `api.listening`, `api.stopped`, `api.bindContended`, `api.bindBlocked`, `api.discoveryFailed`, `api.tailError`, `api.handlerError`, `api.loopCrashed`; `daemon.superseded` (src `api`/`daemon`) |
-| pinned by | `ApiHostTests`, `ApiHostInDaemonTests` (listener + hand-off + in-daemon); `ApiAuthGateTests`, `ApiAuthHttpTests` (auth, listener prefix-match); `ApiDiscoveryTests`, `ApiDiscoveryInDaemonTests` (0600, publish⟺holds-port); `ApiPortResolveTests`, `ApiRetryBindTests`, `ApiCutoverTests` (port singleton + two-daemon cutover); `ApiReadEndpointsTests` (read DTOs); `TrailCursorTests`, `TrailSubscriptionTests`, `SseBackpressureTests`, `SseIdleDeferTests`, `ApiSseHttpTests` (SSE edges, backpressure, idle-defer, wedged-Stop bound); `ApiPolicyWriteTests` (write mapping, atomicity probe, end-to-end deny-short-circuit); `ApiHandlersWriteTests` (handlers write mapping, d3 skip-refusal contrast, resolver-interleave atomicity, both-directions next-dispatch daemon E2E) |
+| log events | `api.listening`, `api.stopped`, `api.bindContended`, `api.bindBlocked`, `api.discoveryFailed`, `api.tailError`, `api.handlerError`, `api.loopCrashed`; `daemon.superseded` (src `api`/`daemon`); `policy.write` (src **`policy`** — pairs with `policy.reload`) |
+| pinned by | `ApiHostTests`, `ApiHostInDaemonTests` (listener + hand-off + in-daemon); `ApiAuthGateTests`, `ApiAuthHttpTests` (auth, listener prefix-match); `ApiDiscoveryTests`, `ApiDiscoveryInDaemonTests` (0600, publish⟺holds-port); `ApiPortResolveTests`, `ApiRetryBindTests`, `ApiCutoverTests` (port singleton + two-daemon cutover); `ApiReadEndpointsTests` (read DTOs); `TrailCursorTests`, `TrailSubscriptionTests`, `SseBackpressureTests`, `SseIdleDeferTests`, `ApiSseHttpTests` (SSE edges, backpressure, idle-defer, wedged-Stop bound); `ApiPolicyWriteTests` (write mapping, atomicity probe, end-to-end deny-short-circuit, `PolicyWriteLedgerTests` — the write⇄reload same-hash pin); `ApiHandlersWriteTests` (handlers write mapping, d3 skip-refusal contrast, resolver-interleave atomicity, both-directions next-dispatch daemon E2E) |
 | platform facts | `doc/platform.md` § Loopback TCP & managed `HttpListener` (co-bind, SO_REUSEADDR/TIME_WAIT pairwise, teardown-blocks-behind-wedged-write, Host prefix-match); § Runtime directories (0600 token, mtime resolution) |
 | decision record | `doc/adr/0007-management-api.md` (d7 carries the 2026-07-08 supersession amendment) |
 | the policy this API edits | [dispatch-policy.md](dispatch-policy.md) · the dispatch it observes | [hook-dispatch.md](hook-dispatch.md) |

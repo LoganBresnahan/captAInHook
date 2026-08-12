@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CaptainHook.Actors;
 
@@ -299,6 +301,34 @@ public sealed record DispatchPolicy(
                         ".captainHook", "dispatch.json");
 }
 
+/// The IDENTITY of a policy document, for the ledger (ADR-0016 decision 12).
+/// Governance today is preventive (the policy) + detective (the trail), but the
+/// trail sees policy EFFECTS (`policy.reload`, `policy.skip`) and never policy
+/// CONTENT — so "which rules were in force at time T" is unanswerable from the
+/// ledger alone. A content hash + byte size on every content-changing policy
+/// event closes that: hashes match against known documents, and drift is
+/// visible. Full snapshots are rejected for v1 (trail bloat; the hash suffices
+/// while policy documents are few and named).
+///
+/// Hashed over the LOADER'S view of the document — the BOM-stripped text, the
+/// same bytes ApiReadModel.Etag hashes — so the two emit sites agree by
+/// construction: PolicyResolution reads with File.ReadAllText (which strips a
+/// leading U+FEFF) and ApiPolicyWriter strips the BOM before writing, so a
+/// document written through the API stamps identically when the daemon reloads
+/// it. `Bytes` is that same view's UTF-8 length, NOT the on-disk file length —
+/// a BOM would otherwise make one write and its reload disagree by three.
+///
+/// The hash is the full 64-hex digest while ApiReadModel.Etag is its first 32
+/// chars, quoted: the ETag is an HTTP concurrency token and this is an audit
+/// identity, but they hash the same input, so a ledger hash and an ETag join by
+/// prefix when an operator needs to connect the two surfaces.
+public sealed record PolicyContent(string Hash, int Bytes)
+{
+    public static PolicyContent Of(string text) => new(
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text))),
+        Encoding.UTF8.GetByteCount(text));
+}
+
 /// The tri-state of resolving the dispatch-policy file (ADR-0006 decision 4).
 /// The classification IS the contract, and the two wrong directions are both
 /// costly, so each case is deliberate:
@@ -342,8 +372,19 @@ public abstract record PolicyResolution
     ///     verify.)
     /// Caveat: a deliberately-created FIFO/socket at the path could block the read
     /// (a pathological misconfiguration, out of scope — not a regular file).
-    public static PolicyResolution Resolve(string path)
+    public static PolicyResolution Resolve(string path) => Resolve(path, out _);
+
+    /// Resolve, also handing back the document's content stamp (ADR-0016 d12)
+    /// for the caller's ledger event. `content` is non-null EXACTLY when bytes
+    /// were read — so a MALFORMED-by-schema file still stamps (a file that is in
+    /// force as "deny everything" is content an audit wants identified), while
+    /// absent and present-but-unreadable stamp nothing, because there are no
+    /// bytes to name. Stamped from the SAME read that classifies, never a second
+    /// one: a re-read could hash a different document than the one now live.
+    public static PolicyResolution Resolve(string path, out PolicyContent? content)
     {
+        content = null;
+
         if (Directory.Exists(path))
             return new Malformed($"'{path}' is a directory, not a policy file");
         if (!File.Exists(path))
@@ -355,6 +396,8 @@ public abstract record PolicyResolution
         {
             return new Malformed($"cannot read '{path}': {ex.Message}");
         }
+
+        content = PolicyContent.Of(text);
 
         // An empty or whitespace-only file is NOT absent — the file is present
         // (intent to configure) but has no parseable content. JsonDocument.Parse
@@ -400,17 +443,21 @@ public sealed class ReloadingPolicy
 {
     private readonly string? _path;
     private PolicyResolution _current;
+    private PolicyContent? _content;
     private string _stamp;
 
     public ReloadingPolicy(string? policyPath)
     {
         _path = policyPath;
-        _current = Load(policyPath);
+        _current = Load(policyPath, out _content);
         _stamp = Stamp(policyPath);
     }
 
-    private static PolicyResolution Load(string? path) =>
-        path is null ? new PolicyResolution.Absent() : PolicyResolution.Resolve(path);
+    private static PolicyResolution Load(string? path, out PolicyContent? content)
+    {
+        content = null;
+        return path is null ? new PolicyResolution.Absent() : PolicyResolution.Resolve(path, out content);
+    }
 
     private static string Stamp(string? path)
     {
@@ -437,16 +484,25 @@ public sealed class ReloadingPolicy
             var s = Stamp(_path);
             if (s != _stamp)
             {
-                _current = Load(_path);
+                _current = Load(_path, out _content);
                 _stamp = s;
-                Log.Info("policy", "policy.reload", new LogFields
+                // The document's identity rides the reload event (ADR-0016 d12),
+                // so the ledger answers "which rules were in force at time T" and
+                // any drift is visible. hash/bytes are OMITTED, not zeroed, when
+                // there is no document to name (absent, a directory, unreadable)
+                // — an absent policy has no content, and stamping it with the
+                // hash of "" would read on the ledger as a real empty document.
+                var data = new Dictionary<string, object>
                 {
-                    Data = new Dictionary<string, object>
-                    {
-                        ["path"] = _path ?? "<none>",
-                        ["state"] = _current.GetType().Name,   // Absent | Malformed | Loaded
-                    },
-                });
+                    ["path"] = _path ?? "<none>",
+                    ["state"] = _current.GetType().Name,   // Absent | Malformed | Loaded
+                };
+                if (_content is { } c)
+                {
+                    data["hash"] = c.Hash;
+                    data["bytes"] = c.Bytes;
+                }
+                Log.Info("policy", "policy.reload", new LogFields { Data = data });
             }
             return _current;
         }

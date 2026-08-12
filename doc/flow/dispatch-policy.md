@@ -142,6 +142,18 @@ denied dispatch's `Trace` line rides stderr (collapsed) or the `HookResponse`
 trace (daemon) — never stdout, so a policy-skipped hook is byte-indistinguishable
 from an uneventful one *except by our trail* (invariant 1).
 
+`policy.reload` also carries the document's **identity** — `hash` (SHA-256, full
+64-hex) and `bytes` (ADR-0016 d12) — so the ledger answers *which rules were in
+force at time T*, not merely *that a reload happened*. `PolicyContent.Of` stamps
+the **loader's view**: the BOM-stripped text `File.ReadAllText` returns, which is
+exactly what `ApiPolicyWriter` installs and hashes on its own `policy.write`
+event, so a write and its reload report one hash for one change. `hash`/`bytes`
+are **omitted, never zeroed**, when there are no bytes to name (absent, a
+directory, an unreadable file) — hashing `""` would put a real-looking empty
+document on the ledger. A schema-MALFORMED file still stamps: it *is* in force,
+as deny-everything. The hash's first 32 chars are the `GET /policy` ETag's body
+(same input, different surface), so the two join by prefix.
+
 ## Ground truth
 
 | what | where |
@@ -149,13 +161,14 @@ from an uneventful one *except by our trail* (invariant 1).
 | `DispatchPolicy` (model, `TryParse`, `Evaluate`/`Matches`/`ProjectContains`, `ResolvePath`) | `dotnet/captainHook/Core/DispatchPolicy.cs` |
 | `PolicyDecision`, `PolicyRule`, `PolicyOutcome` | `dotnet/captainHook/Core/DispatchPolicy.cs` |
 | `PolicyResolution` (Absent/Malformed/Loaded, `Resolve`, `Evaluate`), `ReloadingPolicy` | `dotnet/captainHook/Core/DispatchPolicy.cs` |
+| `PolicyContent` (document identity: `Of`, hash + bytes over the loader's view) | `dotnet/captainHook/Core/DispatchPolicy.cs`; stamped by `PolicyResolution.Resolve(path, out content)` |
 | `PolicyGate`, `HookRun.PolicyGateFor` (the shared gate), `HookRun.DeniedStdout` | `dotnet/captainHook/Core/HookRun.cs` |
 | collapsed dispatch site (resolve once) | `HookRun.CollapsedAsync` (`policyPath`) |
 | daemon dispatch site (per-dispatch `ReloadingPolicy.Current`) | `DaemonHost.DispatchOneAsync`, threaded from `RunAsync` |
 | handler-level exclusion filter | `Dispatcher.DispatchAsync` (`excludedHandlers`) |
 | event-name canonicalization shared with ingest | `Harness.Canon` (`Core/Harness.cs`) |
 | policy file | `~/.captainHook/dispatch.json` (or `CAPTAINHOOK_DISPATCH_FILE`); absent ⇒ allow all |
-| log events | `policy.skip`, `policy.exclude`, `policy.malformed` (warn), `policy.reload` (src `policy`) |
-| pinned by | `DispatchPolicyTests.cs` (parse, matcher + path-prefix boundary, tri-state resolution, hot-reload poison/advance); `DispatcherTests.cs` (`HandlerExclusionTests`, `ExclusionSemanticsPins` — the N3 pins); `CliTests.cs` (`HookRunPolicyDenyTests` — byte-identity, malformed, exclusion, trail, default-deny pause); `DaemonHostTests.cs` (`DaemonPolicyTests` — daemon deny + collapsed no-drift cross-check) |
+| log events | `policy.skip`, `policy.exclude`, `policy.malformed` (warn), `policy.reload` (src `policy`, carries `hash`+`bytes`), `policy.write` (src `policy`, emitted by the API writer — [management-api.md](management-api.md)) |
+| pinned by | `DispatchPolicyTests.cs` (parse, matcher + path-prefix boundary, tri-state resolution, hot-reload poison/advance, `PolicyContentHashTests` — scheme, BOM agreement, omit-when-no-bytes); `ApiPolicyWriteTests.cs` (`PolicyWriteLedgerTests` — the write⇄reload same-hash pin); `DispatcherTests.cs` (`HandlerExclusionTests`, `ExclusionSemanticsPins` — the N3 pins); `CliTests.cs` (`HookRunPolicyDenyTests` — byte-identity, malformed, exclusion, trail, default-deny pause); `DaemonHostTests.cs` (`DaemonPolicyTests` — daemon deny + collapsed no-drift cross-check) |
 | decision record | `doc/adr/0006-dispatch-policy.md` (and ADR-0005 for the dialect's first speaker) |
 | dispatch flow this gates | [hook-dispatch.md](hook-dispatch.md) |
