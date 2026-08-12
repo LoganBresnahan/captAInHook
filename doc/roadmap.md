@@ -11,7 +11,7 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
-- [ ] **19. GUI overhaul — sidebar views, template-gallery authoring, the
+- [x] **19. GUI overhaul — sidebar views, template-gallery authoring, the
   screenshot loop** — the GUI works but has a visible defect (handlers table
   overflows its card), a broken one-page layout (trace buried, dead space),
   a cramped authoring surface, and a raw-JSON policy editor. Per **ADR-0015**
@@ -276,6 +276,30 @@ run live*. The framework underneath is what exists today.
   the ADR opens with — the handlers table clipped at its card edge, a dead
   left column, and the live trace 3400px down the page. dotnet suite 642 green
   twice.)
+  `docs-capstone` (2026-08-11; slice 8, the close. ADR-0015's Ground truth
+  back-filled decision→code, ADR-0008 given the amendment notes it lacked —
+  its header, its d1 screen table, and its d7 loop now say what ADR-0015
+  changed, so a reader landing on the older ADR is not silently misled (only
+  one inline table row had mentioned it). The verify was MECHANICAL rather
+  than a re-read: a throwaway checker parsed every Ground truth table in the
+  flow doc + both ADRs and asserted each named file exists and each backticked
+  symbol appears in that row's files — 140 file refs and 123 symbols across
+  the three, with the sole flag being ADR-0008's deliberately historical
+  `SupervisionPanel.tsx`, which its own row already annotates as renamed. The
+  weak spots of substring matching (`build`, `stageUi`, `VIEWS`) were then
+  hand-checked. **Item 19 complete: all 8 slices landed.**)
+  **Item complete 2026-08-11** — five sidebar views over the untouched island
+  architecture, a token system in both themes, the trace holding 2000 rows
+  with measured evidence instead of a virtualization dep, authoring by
+  template gallery with ADR-0011's script-write trigger deliberately UNFIRED,
+  a policy rule builder whose representability is decided by round trip and
+  which survived an independent skeptic pass, and — landed first, because it
+  is the eyes for the rest — the screenshot loop as a committed deliverable.
+  Final tally: 98 frontend units, 28 e2e, dotnet 648 green twice; all five
+  views snapped in both themes as the visual record. NOT deployed yet: the
+  live `~/.captainHook/bin` still runs the pre-overhaul build, so `/deploy`
+  is the next GUI-facing action whenever the maintainer wants the new shell
+  on their own daemon.
 
 - [x] **18. Own the spawn seam: bosun** — the exec-handler kill discipline stops
   renting `setsid(1)` from the host's package set. Per **ADR-0014** (accepted

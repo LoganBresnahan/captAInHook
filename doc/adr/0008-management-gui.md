@@ -1,8 +1,30 @@
 # ADR-0008 — Management GUI: an observability surface served same-origin by the daemon
 
-**Status:** Accepted
+**Status:** Accepted — **d1's presentation and d7's loop amended by
+[ADR-0015](0015-gui-overhaul.md)** (2026-08-11)
 **Date:** 2026-07-08 (accepted 2026-07-09; both open questions resolved — generated
 TS types (d6), full-reload dev loop (d7); trail rotation split out to ADR-0009)
+
+> **Amendment (2026-08-11, ADR-0015).** Two decisions here were amended by the
+> GUI overhaul; everything else in this ADR stands as written.
+>
+> - **d1's screen enumeration** — the five screens are now five **views** behind
+>   a sidebar, one at a time, Trace landing (ADR-0015 d1); the *Supervision*
+>   screen split, its table + editor becoming the full-width **Handlers** view
+>   and its daemon-wide summary moving to **Status** (ADR-0015 d6). The v1
+>   SCOPE claim is unchanged and still true: no control verbs, and no new data
+>   endpoint — the overhaul added not one API surface, and the gallery
+>   deliberately did NOT add the script-writing verb (ADR-0011's trigger stays
+>   unfired). `PUT /handlers` arrived separately with ADR-0011, not here.
+> - **d7's dev loop** — full-reload build-watch still, now with eyes: a
+>   committed screenshot harness (`web/scripts/{preview,snap}.mjs` over the
+>   shared `web/e2e/daemon.ts`) and the `ui-loop` skill (ADR-0015 d5). The
+>   reasoning that rejected a Vite dev server — the Origin gate 403s a second
+>   origin BY DESIGN (d1 above) — is exactly why the loop screenshots the
+>   daemon's own `/ui` instead.
+>
+> The island architecture (d8), the same-origin serving (d2), the token handoff
+> (d3), the SSE client contract (d4), and the codegen (d6) are untouched.
 
 ## Context
 
@@ -57,7 +79,10 @@ decides the whole shape:
 ## Decision
 
 1. **v1 scope: observe + edit policy, no control verbs — and NO new data
-   endpoints.** The screens map 1:1 onto endpoints that already exist:
+   endpoints.** The screens map 1:1 onto endpoints that already exist.
+   *(Amended by ADR-0015: these five screens are now five sidebar VIEWS, one at
+   a time, and Supervision split into Handlers + Status — see the header note.
+   The scope claim below is unchanged.)*
 
    | screen | source | interactivity |
    |---|---|---|
@@ -203,7 +228,12 @@ decides the whole shape:
 
 7. **The dev loop is same-origin by default, HMR is an opt-in escape hatch.**
    The agent-driven Playwright loop is a first-class goal, and it decides how
-   the frontend runs in development:
+   the frontend runs in development.
+   *(Extended by ADR-0015 d5: the loop gained a committed screenshot harness —
+   `preview.mjs`/`snap.mjs` over the shared sandbox — so the agent READS its own
+   output. The default below is unchanged and HMR is still not built; the
+   escape hatch stayed reserved through the whole overhaul, which is the
+   evidence it was the right call.)*
    - **Default — no auth hole:** the frontend `build --watch` writes into the
      `ui/` dir the daemon serves, so Playwright drives the *daemon's* same-origin
      `http://127.0.0.1:<port>/ui`. Loop = asset rebuild + full page reload

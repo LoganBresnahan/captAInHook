@@ -198,13 +198,30 @@ commit.
 
 ## Ground truth
 
-*To be back-filled as slices land, per house convention.*
+All 8 slices landed 2026-08-11 (roadmap item 19). Mechanics live in
+[doc/flow/management-gui.md](../flow/management-gui.md); this table is the
+decision→code index. Every file and symbol below was cross-checked against the
+tree in the closing slice.
 
-| decision | lives in |
+| decision | where it landed |
 |---|---|
-| d1 view slice + sidebar | pending slice 2 |
-| d2 tokens | pending slice 2 (`web/src/styles.css`) |
-| d3 gallery + refusal | pending slice 5 (`web/src/templates.ts`) |
-| d4 rule builder | pending slice 6 (`web/src/policy.ts`) |
-| d5 loop | pending slice 1 (`web/e2e/daemon.ts`, `web/scripts/`, `.claude/skills/ui-loop/`) |
-| d6 view split | pending slice 4 |
+| d1 view slice + sidebar, no router | `web/src/store.ts` (`view`, `setView`, `VIEWS`, `VIEW_LABELS`); `web/src/App.tsx` (`Nav`, `data-nav`, `aria-current`); each island's gate sits AFTER its hooks, so a hidden panel keeps polling — `web/src/{StatusPanel,HandlersPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx` |
+| d2 token system, both themes | `web/src/styles.css` `:root` + the `prefers-color-scheme: dark` block (color/type/space/radius/depth); the console rail is dark in BOTH themes by design |
+| d3 gallery + the REFUSED script-write verb | `web/src/TemplateGallery.tsx`, `web/src/templates.ts` (`TEMPLATES`, `templateEntry`, `suggestedCommand`), `web/src/templateScripts.ts` (the ONLY `?raw` importer); starters `examples/payloads/starter-{inject,decide,side-effect,llm}.sh`. The API gained no executable-write verb — ADR-0011's trigger stays unfired |
+| d3 per-event effect verbs surfaced | `web/src/templates.ts` (`eventVerbs`, `effectLandsOn`, `verbsLabel`, `verbColumns`, `VerbMap`) — shared by the gallery and the Harnesses matrix |
+| d4 rule builder + round-trip guard | `web/src/policy.ts` (`parsePolicyRows`, `serializePolicyRows`, `sameMeaning`, `PolicyRow`, `PolicyRows`); UI `web/src/PolicyPanel.tsx` (`RuleBuilder`, `data-policy-mode`, `data-policy-locked`, `data-draft-unrepresentable`) |
+| d5 the loop as a deliverable | `web/e2e/daemon.ts` (`startDaemon`, `build`, `stageUi`) — one module, three consumers: `web/e2e/fixtures.ts`, `web/scripts/preview.mjs`, `web/scripts/snap.mjs`; seed `web/scripts/seed.mjs`; the loop documented in `.claude/skills/ui-loop/SKILL.md` |
+| d6 the supervision card splits | `web/src/HandlersPanel.tsx` (was `SupervisionPanel.tsx`, `git mv`); the daemon-wide summary moved to `web/src/StatusPanel.tsx` (`Supervision`, `data-supervision`) |
+| slice 3 trace frame + perf evidence | `web/src/TracePanel.tsx` + the `.card.trace` rules in `styles.css`; the standing measurement `web/scripts/perf.mjs` (`npm run perf`) |
+| slice 4 modal a11y (N4 paid) | `web/src/HandlersEditor.tsx` (`ConfirmModal` — focus trap, Esc, focus restore) |
+| slice 7 status hierarchy + effect matrix | `web/src/StatusPanel.tsx` (`Tile`, `data-identity-strip`, `data-tiles`, `.tile.lead`); `web/src/HarnessesPanel.tsx` (`EffectMatrix`, `data-effect-matrix`, `data-cell`) |
+| pins | `web/src/{store,sse,policy,format,handlers,templates}.test.ts` (98 units, `node --test`, zero deps); `web/e2e/{shell,session,nav,panels,trace,policy,handlers}.spec.ts` (28 specs) + `gotoView` in `web/e2e/fixtures.ts` |
+
+Adversarial verify (the ONE slice the plan named, `policy-rule-builder`) ran as
+an independent `fable` session and found two real defects, both fixed in-pass: a
+lone-surrogate escape escaping `DispatchPolicy`'s never-throw-on-data contract
+(deferred `JsonDocument` unescaping — `TryReadString` now guards every string
+read, and the API returns 422 rather than an opaque 500), and a raw → Rules
+toggle that silently discarded the user's raw edits by reverting to the
+pre-toggle rows. Both are draft- and file-level instances of the same
+silent-destruction hazard the round-trip guard exists for.
