@@ -385,15 +385,14 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   resize: vertical;
   min-height: 320px;
 }
-[data-island="policy"] button {
+/* Only the SAVE button is primary. (A blanket `[data-island="policy"] button`
+   rule was fine when the island had one button; the rule builder gave it a mode
+   toggle, row actions and "+ rule", and painted them all as calls to action.) */
+[data-island="policy"] .btn-primary {
   margin-top: var(--s-3);
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-color: transparent;
-  font-weight: 600;
   padding: var(--s-2) var(--s-4);
 }
-[data-island="policy"] button:hover { filter: brightness(1.06); }
+[data-island="policy"] .btn-primary:hover { filter: brightness(1.06); }
 [data-verdict] { margin-top: var(--s-3); font-size: var(--fs-sm); }
 [data-verdict="written"] { color: var(--ok); }
 [data-verdict="invalid"], [data-verdict="failed"] { color: var(--bad); }
@@ -631,3 +630,22 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   overflow-x: auto;
   font-size: var(--fs-xs);
 }
+
+/* ============ policy rule builder (ADR-0015 d4) ============ */
+
+.policy-modes { display: flex; gap: var(--s-2); margin: var(--s-3) 0; }
+.policy-modes button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+.policy-default { display: block; margin: var(--s-3) 0; font-size: var(--fs-sm); }
+.policy-default select { display: inline-block; width: auto; margin-left: var(--s-2); }
+table.rules { margin-top: var(--s-2); }
+table.rules td { padding-right: var(--s-2); vertical-align: middle; }
+table.rules input, table.rules select { width: 100%; min-width: 7rem; }
+table.rules td.rule-actions { white-space: nowrap; width: 1%; }
+table.rules td.rule-actions button { padding: var(--s-1) var(--s-2); }
+.policy-hint { font-size: var(--fs-xs); max-width: 62ch; }
+[data-policy-locked] { margin: var(--s-3) 0; }

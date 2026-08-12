@@ -28,7 +28,40 @@ run live*. The framework underneath is what exists today.
   `tokens-and-sidebar`, whose nav change churns all 14 e2e specs in one
   atomic commit). API surface frozen throughout. Tick slices here as they
   land.
-  Slices landed: `template-gallery` (2026-08-11; d3 — authoring without a
+  Slices landed: `policy-rule-builder` **part 1 of 2 — BUILD ONLY** (2026-08-12;
+  the ADR's one adversarial-verify slice, and the skeptic pass is NOT yet run:
+  an independent `fable` session must still attack builder ⇄ JSON in both
+  directions, the raw-lock guard, and the 412 path before this slice is called
+  done). Built on opus, tests first per the plan. The hazard is silent
+  destruction — a builder that drops a field it did not understand leaves the
+  page looking right while the daemon enforces something the user never wrote,
+  invisible to every screenshot and every green e2e — so representability is
+  decided by ROUND TRIP rather than by a checklist: `parsePolicyRows` builds
+  rows, re-serializes, and compares the MEANING of the result against the input
+  (`default` absent ⇒ allow and `rules` absent ⇒ none are the only
+  normalizations, and they are the dialect's own). Anything that fails —
+  including a shape nobody enumerated — returns null and the island LOCKS to
+  raw with a notice. A malformed file never reaches the builder at all: the
+  daemon could not read it, which is exactly when a lossy rewrite would be most
+  destructive; that gate is also why duplicate JSON keys need no client
+  detector (`JSON.parse` collapses them, but such a file is malformed
+  server-side). The user's own spelling survives — `user-prompt-submit` stays
+  kebab in the row and in the file, since the daemon canonicalizes at parse and
+  the GUI has no business rewriting text behind a user's back. UI: default
+  decision + numbered, reorderable rows (first-match-wins makes order
+  load-bearing, so it is visible and editable), a Raw JSON toggle that shows
+  EXACTLY what Save would write (the rows are the document — no second
+  serializer), and the daemon left as the only validator of legality (its 422
+  renders as before). 29 property/round-trip tests written BEFORE the
+  implementation (91 units total, from 62), including a 300-case deterministic
+  generator for rows → JSON → rows identity and a 15-case raw-lock table; e2e
+  24 (from 20) with four new builder pins — compose-and-save, reorder, a
+  hand-written policy loading into rows and saving back byte-equivalent, and
+  the raw-lock refusing to touch a malformed file. One snap-read fix: a blanket
+  `[data-island="policy"] button` rule from when the island had exactly one
+  button was painting the mode toggle and every row action as a primary call to
+  action. dotnet 642 green twice.)
+  `template-gallery` (2026-08-11; d3 — authoring without a
   script-writing verb. **ADR-0011's provenance trigger stays UNFIRED**: the
   daemon gains no ability to write an executable; the gallery shows the whole
   script, says where to save it, and pre-fills the install form, leaving the

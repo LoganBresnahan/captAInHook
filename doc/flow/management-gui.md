@@ -220,6 +220,36 @@ bug**: the from-now anchor raced the first flush, silently losing a line appende
 at client-live (`ServeEventsAsync` now anchors before the flush). Pinned by
 `sse.test.ts`.
 
+## The policy editor is a rule builder over the same one write (ADR-0015 d4)
+
+The editor's default surface is a **rule table** — default decision, then one
+row per rule (event / handler / project / session / decision), numbered and
+reorderable because evaluation is first-match-wins and that order is
+load-bearing (ADR-0006). A **Raw JSON** toggle shows exactly what Save would
+write: the rows ARE the document while the builder is driving, so there is no
+second serializer to drift.
+
+The hazard the slice exists for is silent destruction: a builder that loads a
+hand-written `dispatch.json`, drops a field it did not understand, and writes
+the remainder back would leave the page looking right while the daemon enforces
+something the user never wrote — invisible to a screenshot and to a green e2e.
+So representability is decided by **round trip, not by a checklist**:
+`parsePolicyRows` builds rows, re-serializes them, and compares the MEANING of
+the result to the input (`default` absent ⇒ allow and `rules` absent ⇒ none are
+the only normalizations the dialect itself defines). Anything that fails —
+including a shape nobody enumerated — returns null and the island **locks to
+raw** with a notice, editing disabled. A malformed file never reaches the
+builder at all: the daemon could not read it, and that is precisely when a lossy
+rewrite would be most destructive.
+
+Two consequences worth stating. The user's own spelling survives: a rule written
+`user-prompt-submit` stays that way in the row and in the file (the daemon
+canonicalizes at parse; the GUI does not rewrite text behind the user's back).
+And duplicate JSON keys need no client detector — `JSON.parse` collapses them,
+but a file containing them is malformed *server-side*, and malformed always
+locks to raw. The daemon's parser remains the only validator of what is legal;
+these functions decide only what the builder can faithfully represent.
+
 ## The one write — the policy editor's ETag lifecycle (d1)
 
 `PolicyPanel` GETs `/policy`, seeds an editor from the raw file, and PUTs through
@@ -350,7 +380,8 @@ the engine — and the config's one retry stays for genuine contention.
 | token bootstrap (fragment→sessionStorage→scrub→bearer) | `web/src/auth.ts` (`bootstrapToken`, `apiFetch`, `currentToken`, `clearToken`) |
 | the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `SseFrame`, `PolicyVerdict`, `TRACE_CAP`; navigation: `view`, `setView`, `VIEWS`, `VIEW_LABELS`) |
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`) |
-| policy write client (ETag lifecycle) | `web/src/policy.ts` (`submitPolicy`) |
+| policy write client (ETag lifecycle) + the rule builder's round trip | `web/src/policy.ts` (`submitPolicy`; `parsePolicyRows`, `serializePolicyRows`, `sameMeaning`, `PolicyRow`/`PolicyRows`) |
+| rule builder UI (rows, order, raw toggle, raw-lock) | `web/src/PolicyPanel.tsx` (`RuleBuilder`, `data-rule-*`, `data-policy-mode`, `data-policy-locked`) |
 | handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
 | template gallery (cards, script view, save instructions, pre-fill) | `web/src/TemplateGallery.tsx`, `web/src/templates.ts` (`TEMPLATES`, `templateEntry`, `suggestedCommand`, `eventVerbs`, `effectLandsOn`), `web/src/templateScripts.ts` (the ONLY `?raw` importer) — starters in `examples/payloads/starter-*.sh` |
 | handlers editor UI (form, verbatim confirm, pending/skipped/registered states) | `web/src/HandlersEditor.tsx` (`HandlersSection`, `EntryForm`, `ConfirmModal` — focus trap + Esc + focus restore, `VerbatimEntry`, `WiringHints`) |

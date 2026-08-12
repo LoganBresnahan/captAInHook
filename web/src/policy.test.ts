@@ -88,3 +88,133 @@ test("network failure and odd statuses degrade to failed, never throw", async ()
   const draining = await submitPolicy(() => Promise.resolve(json(503, { error: "draining" })), "{}", null);
   assert.deepEqual(draining.verdict, { kind: "failed", detail: "HTTP 503" });
 });
+
+// ---------------------------------------------------------------------------
+// The rule builder's round-trip (ADR-0015 d4 / slice 6). These tests are the
+// point of the slice: a builder that silently rewrites a hand-written
+// dispatch.json is the ONE failure here that no screenshot and no e2e would
+// catch — the page looks right, the file is quietly different, and the daemon
+// starts enforcing something the user never wrote.
+//
+// The guard is stated as a PROPERTY rather than a checklist: parse → rows →
+// serialize must preserve MEANING exactly, and anything that does not is
+// refused (the builder locks to raw). Written before the implementation.
+
+const parsedJson = (s: string) => JSON.parse(s) as Record<string, unknown>;
+
+/** Meaning, not text: `default` absent means allow and `rules` absent means
+ * none, so those two normalizations are the only differences a faithful
+ * round-trip is allowed to introduce. Everything else must match exactly. */
+const meaning = (raw: string) => {
+  const doc = parsedJson(raw);
+  return {
+    version: doc.version,
+    default: doc.default ?? "allow",
+    rules: (doc.rules ?? []) as unknown[],
+  };
+};
+
+const ROUND_TRIPPABLE: [string, string][] = [
+  ["minimal", '{"version":1}'],
+  ["explicit empty", '{"version":1,"default":"allow","rules":[]}'],
+  ["default deny — the pause", '{"version":1,"default":"deny","rules":[]}'],
+  ["one event rule", '{"version":1,"rules":[{"event":"SessionStart","decision":"deny"}]}'],
+  ["kebab event spelling is the user's, and stays theirs",
+    '{"version":1,"rules":[{"event":"user-prompt-submit","decision":"deny"}]}'],
+  ["all four criteria at once",
+    '{"version":1,"default":"deny","rules":[{"event":"PreToolUse","handler":"guard","project":"/repo","session":"abc","decision":"allow"}]}'],
+  ["order is load-bearing (first match wins)",
+    '{"version":1,"rules":[{"handler":"a","decision":"allow"},{"handler":"a","decision":"deny"},{"event":"Stop","decision":"deny"}]}'],
+  ["paths and sessions with awkward characters",
+    '{"version":1,"rules":[{"project":"/home/me/my repo (v2)/–dash","decision":"deny"},{"session":"a\\"b\\\\c","decision":"allow"}]}'],
+  ["unicode survives", '{"version":1,"rules":[{"project":"/tmp/проект/日本語","decision":"deny"}]}'],
+];
+
+test("PROPERTY: parse → rows → serialize preserves meaning exactly", async (t) => {
+  const { parsePolicyRows, serializePolicyRows } = await import("./policy.ts");
+  for (const [name, raw] of ROUND_TRIPPABLE) {
+    await t.test(name, () => {
+      const doc = parsePolicyRows(raw);
+      assert.ok(doc !== null, `${name} should be representable`);
+      const out = serializePolicyRows(doc);
+      assert.deepEqual(meaning(out), meaning(raw), `${name} round-tripped unchanged`);
+    });
+  }
+});
+
+test("PROPERTY: rows → JSON → rows is the identity on every generated policy", async () => {
+  const { parsePolicyRows, serializePolicyRows } = await import("./policy.ts");
+  // A deterministic generator — a flake here would be unreproducible, and this
+  // is the test that guards a silent-destruction hazard.
+  let seed = 0x5eed;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
+  const maybe = (s: string) => (rnd() < 0.5 ? s : "");
+
+  for (let i = 0; i < 300; i++) {
+    const doc = {
+      default: pick(["allow", "deny"] as const),
+      rules: Array.from({ length: Math.floor(rnd() * 5) }, () => {
+        const row = {
+          event: maybe(pick(["SessionStart", "UserPromptSubmit", "PreToolUse", "user-prompt-submit"])),
+          handler: maybe(pick(["echo", "guard", "a-b_c"])),
+          project: maybe(pick(["/repo", "/home/me/x y", "/tmp/日本語"])),
+          session: maybe(pick(["abc123", 'a"b'])),
+          decision: pick(["allow", "deny"] as const),
+        };
+        // A criteria-less row is legal to COMPOSE (the daemon is the validator
+        // and will 422 it); force one criterion so this property is about the
+        // round trip rather than about validity.
+        if (!row.event && !row.handler && !row.project && !row.session) row.handler = "forced";
+        return row;
+      }),
+    };
+    const back = parsePolicyRows(serializePolicyRows(doc));
+    assert.deepEqual(back, doc, `iteration ${i} survived rows → JSON → rows`);
+  }
+});
+
+test("serializePolicyRows emits the strict dialect: no empty criteria, decision always present", async () => {
+  const { serializePolicyRows } = await import("./policy.ts");
+  const out = serializePolicyRows({
+    default: "allow",
+    rules: [{ event: "Stop", handler: "", project: "", session: "", decision: "deny" }],
+  });
+  const doc = parsedJson(out);
+  assert.equal(doc.version, 1, "version 1 is written, not assumed");
+  assert.deepEqual(doc.rules, [{ event: "Stop", decision: "deny" }],
+    "an unset criterion is OMITTED — the daemon rejects an empty-string criterion");
+  assert.ok(out.endsWith("\n"), "trailing newline, like a hand-written file");
+});
+
+test("RAW-LOCK: anything the builder cannot rebuild faithfully is refused", async (t) => {
+  const { parsePolicyRows } = await import("./policy.ts");
+  const unrepresentable: [string, string][] = [
+    ["not JSON at all", "{nope"],
+    ["a JSON array, not an object", "[]"],
+    ["a bare string", '"hello"'],
+    ["version missing", '{"rules":[]}'],
+    ["version 2 — a dialect we do not know", '{"version":2,"rules":[]}'],
+    ["an unknown top-level field we would DROP", '{"version":1,"pause":true,"rules":[]}'],
+    ["rules is not an array", '{"version":1,"rules":{}}'],
+    ["a rule that is not an object", '{"version":1,"rules":["nope"]}'],
+    ["an unknown field inside a rule", '{"version":1,"rules":[{"event":"Stop","decision":"deny","note":"why"}]}'],
+    ["a non-string criterion", '{"version":1,"rules":[{"event":1,"decision":"deny"}]}'],
+    ["an empty-string criterion", '{"version":1,"rules":[{"event":"","decision":"deny"}]}'],
+    ["a decision we do not know", '{"version":1,"rules":[{"event":"Stop","decision":"ask"}]}'],
+    ["a default we do not know", '{"version":1,"default":"maybe","rules":[]}'],
+    ["a missing decision", '{"version":1,"rules":[{"event":"Stop"}]}'],
+    ["a criteria-less rule (the daemon calls it malformed too)", '{"version":1,"rules":[{"decision":"deny"}]}'],
+  ];
+  for (const [name, raw] of unrepresentable) {
+    await t.test(name, () => {
+      assert.equal(parsePolicyRows(raw), null, `${name} must lock to raw, never be silently rewritten`);
+    });
+  }
+});
+
+test("an absent file is representable as an empty policy, not a lock", async () => {
+  const { parsePolicyRows } = await import("./policy.ts");
+  assert.deepEqual(parsePolicyRows(null), { default: "allow", rules: [] },
+    "no file yet ⇒ the builder starts from the zero-config default");
+});

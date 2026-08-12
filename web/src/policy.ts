@@ -18,6 +18,153 @@ import type { PolicyVerdict } from "./store.ts";
 
 export type SubmitResult = { verdict: PolicyVerdict; policy?: PolicyDto };
 
+// ---------------------------------------------------------------------------
+// The rule builder (ADR-0015 d4): rows ⇄ the strict JSON dialect.
+//
+// The hazard this code exists to avoid is silent destruction. A user's
+// `dispatch.json` is the daemon's front door; a builder that loads it, drops a
+// field it did not understand, and writes the remainder back would leave the
+// page looking correct while the daemon quietly enforces something the user
+// never wrote — and no screenshot, and no green e2e, would show it.
+//
+// So representability is decided by ROUND TRIP, not by a checklist of cases:
+// `parsePolicyRows` builds rows, re-serializes them, and compares the MEANING
+// of the result against the meaning of the input. Anything that fails to match
+// — including a shape nobody thought to enumerate here — returns null, and the
+// island locks to the raw editor with a notice. The safe answer is always
+// "refuse to represent it", never "represent most of it".
+//
+// The daemon's parser remains the ONLY validator of what is *legal* (its 422
+// carries its own violations, and this file never second-guesses them). These
+// functions decide only what the builder can faithfully REPRESENT.
+
+export type PolicyDecision = "allow" | "deny";
+
+/** One builder row. Unset criteria are the empty string here and are OMITTED
+ * from the JSON — the daemon rejects an empty-string criterion, so `""` must
+ * never reach the file. */
+export type PolicyRow = {
+  event: string;
+  handler: string;
+  project: string;
+  session: string;
+  decision: PolicyDecision;
+};
+
+export type PolicyRows = { default: PolicyDecision; rules: PolicyRow[] };
+
+export const EMPTY_ROW: PolicyRow = {
+  event: "", handler: "", project: "", session: "", decision: "deny",
+};
+
+const CRITERIA = ["event", "handler", "project", "session"] as const;
+const KNOWN_TOP = new Set(["version", "default", "rules"]);
+const KNOWN_RULE = new Set<string>([...CRITERIA, "decision"]);
+
+const isDecision = (v: unknown): v is PolicyDecision => v === "allow" || v === "deny";
+
+/** Rows → the exact strict JSON the daemon accepts, formatted like a
+ * hand-written file (2-space indent, trailing newline) because this text is
+ * also what the raw toggle shows and what the user's editor will see next. */
+export function serializePolicyRows(rows: PolicyRows): string {
+  const doc = {
+    version: 1,
+    default: rows.default,
+    rules: rows.rules.map((r) => {
+      const rule: Record<string, string> = {};
+      for (const c of CRITERIA) if (r[c] !== "") rule[c] = r[c];
+      rule.decision = r.decision;
+      return rule;
+    }),
+  };
+  return JSON.stringify(doc, null, 2) + "\n";
+}
+
+/** Raw JSON → rows, or null when the builder cannot represent it faithfully.
+ *
+ * `null` input is the ABSENT file (no policy yet): that is representable as the
+ * zero-config default — allow everything, no rules — because there is nothing
+ * of the user's to lose.
+ *
+ * Every other refusal means "lock the editor to raw". Note what is NOT checked
+ * here: duplicate JSON keys, which `JSON.parse` silently collapses. They need
+ * no client detector because the builder is only offered for a file the DAEMON
+ * has already accepted (`loaded`) or one that does not exist (`absent`) — a
+ * duplicate key makes the file malformed server-side, and malformed always
+ * locks to raw. */
+export function parsePolicyRows(raw: string | null): PolicyRows | null {
+  if (raw === null) return { default: "allow", rules: [] };
+
+  let doc: unknown;
+  try {
+    doc = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return null;
+  const top = doc as Record<string, unknown>;
+
+  for (const key of Object.keys(top)) if (!KNOWN_TOP.has(key)) return null;
+  if (top.version !== 1) return null;
+  if (top.default !== undefined && !isDecision(top.default)) return null;
+  if (top.rules !== undefined && !Array.isArray(top.rules)) return null;
+
+  const rules: PolicyRow[] = [];
+  for (const entry of (top.rules as unknown[] | undefined) ?? []) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    const rule = entry as Record<string, unknown>;
+    for (const key of Object.keys(rule)) if (!KNOWN_RULE.has(key)) return null;
+    if (!isDecision(rule.decision)) return null;
+
+    const row: PolicyRow = { ...EMPTY_ROW, decision: rule.decision };
+    let criteria = 0;
+    for (const c of CRITERIA) {
+      const v = rule[c];
+      if (v === undefined) continue;
+      if (typeof v !== "string" || v === "") return null;   // the daemon refuses both
+      row[c] = v;
+      criteria++;
+    }
+    // A criteria-less rule matches everything; the daemon calls it malformed,
+    // and a builder row that rendered as "no criteria" would invite exactly the
+    // typo it guards against.
+    if (criteria === 0) return null;
+    rules.push(row);
+  }
+
+  const parsedRows: PolicyRows = {
+    default: (top.default as PolicyDecision | undefined) ?? "allow",
+    rules,
+  };
+
+  // The round-trip guard itself. Everything above is what we KNOW to reject;
+  // this is what catches what we did not think of: if re-serializing these rows
+  // does not mean the same thing as the input, we cannot represent it.
+  return sameMeaning(raw, serializePolicyRows(parsedRows)) ? parsedRows : null;
+}
+
+/** Do two policy texts mean the same thing to the daemon? `default` absent is
+ * allow and `rules` absent is none — those two normalizations are the ONLY
+ * differences a faithful round trip may introduce (they are how the dialect is
+ * defined, not our invention). Key order and whitespace are not meaning; a
+ * different criterion, a dropped field, or an added one is. */
+function sameMeaning(a: string, b: string): boolean {
+  const canon = (s: string) => {
+    const d = JSON.parse(s) as Record<string, unknown>;
+    const rules = ((d.rules ?? []) as Record<string, unknown>[]).map((r) => {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(r).sort()) out[k] = r[k];
+      return out;
+    });
+    return JSON.stringify({ version: d.version, default: d.default ?? "allow", rules });
+  };
+  try {
+    return canon(a) === canon(b);
+  } catch {
+    return false;
+  }
+}
+
 export async function submitPolicy(
   fetchFn: (path: string, init?: RequestInit) => Promise<Response>,
   body: string,
