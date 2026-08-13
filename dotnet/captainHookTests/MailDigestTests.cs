@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using CaptainHook.Actors;
 using CaptainHook.Core;
 using CaptainHook.Handlers;
 using CaptainHook.Mail;
@@ -920,6 +921,314 @@ public class MailDigestRunTests
     }
 }
 
+/// ADR-0016 d10's other direction: delivery as a first-class LEDGER event.
+/// The chain these tests defend is envelope → `mail.deliver` → the
+/// recipient's later hook events, so what matters is (a) the event exists
+/// exactly when mail was really consumed and never otherwise, (b) its join
+/// keys line up with the store on one side and the trail on the other, and
+/// (c) `renderHash`/`bytesInjected` describe the bytes the effect actually
+/// carried, not the bytes the planner hoped for.
+public class MailDigestLedgerTests
+{
+    private static (int Exit, string Out, string Err) RunArgs(
+        string dir, string stdin, string[] argv, string? harnessDir = null)
+    {
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var exit = MailDigest.Run(argv, new StringReader(stdin), stdout, stderr,
+            mailDir: dir, harnessDir: harnessDir ?? NoHarnessDir());
+        return (exit, stdout.ToString(), stderr.ToString());
+    }
+
+    private static (int Exit, string Out, string Err) Run(
+        string dir, string stdin, string[]? argv = null) =>
+        RunArgs(dir, stdin, argv ?? ["--role", "main"]);
+
+    private static void Send(MailStoreTempDir tmp, MailEnvelope e) =>
+        Assert.IsType<MailAppend.Appended>(tmp.Store().Append(e));
+
+    private static JsonElement Answer(string stdoutText) =>
+        JsonDocument.Parse(stdoutText.TrimEnd('\n')).RootElement.Clone();
+
+    private static LogEvent[] Delivers(CapturedLog log) =>
+        [.. log.Events.Where(e => e.Evt == "mail.deliver")];
+
+    private static JsonElement Data(LogEvent e) =>
+        JsonDocument.Parse(e.ToJson()).RootElement.GetProperty("data").Clone();
+
+    private static string[] Ids(JsonElement data) =>
+        [.. data.GetProperty("envelopeIds").EnumerateArray().Select(x => x.GetString()!)];
+
+    private static string Sha256Of(string s) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(s)));
+
+    /// The whole event, on a real delivery: the join keys the causality chain
+    /// needs (dispatchId + sessionId + the envelope ids), and a hash + byte
+    /// count over exactly the text the inject carried.
+    [Fact]
+    public void Delivery_EmitsMailDeliver_JoiningTheEnvelopesToTheDispatch()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1", body: "first"));
+        Send(tmp, DigestFixtures.Env("m-2", body: "second"));
+
+        var (_, stdout, _) = Run(tmp.Dir, DigestFixtures.Request(dispatchId: "d-42"));
+        var text = Answer(stdout).GetProperty("text").GetString()!;
+
+        var ev = Assert.Single(Delivers(log));
+        Assert.Equal("info", ev.Lvl);
+        Assert.Equal("mail", ev.Src);
+        Assert.Equal("d-42", ev.Fields.DispatchId);
+        Assert.Equal("s-1", ev.Fields.SessionId);              // top-level, filterable
+        Assert.Equal("UserPromptSubmit", ev.Fields.HookEvent);
+
+        var data = Data(ev);
+        Assert.Equal("main", data.GetProperty("role").GetString());
+        Assert.Equal("ambient", data.GetProperty("seam").GetString());
+        Assert.Equal("inject", data.GetProperty("vehicle").GetString());
+        Assert.Equal(new[] { "m-1", "m-2" }, Ids(data));
+
+        // The stamp describes the bytes that were injected — nothing else.
+        Assert.Equal(Sha256Of(text), data.GetProperty("renderHash").GetString());
+        Assert.Equal(Encoding.UTF8.GetByteCount(text), data.GetProperty("bytesInjected").GetInt32());
+    }
+
+    /// The ids are the join key BACK to the store: every id on the ledger
+    /// names a line that is really there, with its body.
+    [Fact]
+    public void EnvelopeIds_ResolveToTheDurableStoreLines()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1", body: "the reason A did X"));
+
+        Run(tmp.Dir, DigestFixtures.Request());
+
+        var id = Ids(Data(Assert.Single(Delivers(log))))[0];
+        var line = Assert.Single(tmp.Store().Read(), l => l.Envelope?.Id == id);
+        Assert.Equal("the reason A did X", line.Envelope!.Body);
+    }
+
+    /// "Emit only on non-noop", case by case: each of these consumed nothing,
+    /// so a ledger entry would assert a delivery no recipient ever saw.
+    [Theory]
+    [InlineData("quiet urgent seam", "PostToolUse", new[] { "--role", "main", "--seam", "urgent" })]
+    [InlineData("event the spec never declares", "BrandNewEvent", new[] { "--role", "main" })]
+    [InlineData("effectless reconcile seam", "Stop", new[] { "--role", "main", "--seam", "reconcile" })]
+    public void NoopAnswers_PutNothingOnTheLedger(string why, string type, string[] argv)
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));   // pending, but not deliverable HERE
+
+        var (_, stdout, _) = RunArgs(tmp.Dir, DigestFixtures.Request(type: type), argv);
+
+        Assert.Equal("noop", Answer(stdout).GetProperty("effect").GetString());
+        Assert.True(Delivers(log).Length == 0, $"a {why} claimed a delivery on the ledger");
+    }
+
+    [Fact]
+    public void MalformedEnvelope_PutsNothingOnTheLedger()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        Run(tmp.Dir, "not an envelope");
+
+        Assert.Empty(Delivers(log));
+    }
+
+    /// The sharpest of the no-claim cases: the digest planned and RENDERED a
+    /// delivery, then the cursor refused to advance, so nothing was consumed
+    /// and the answer degraded to noop. A ledger entry here would be the one
+    /// false claim that matters — mail recorded as seen that the recipient
+    /// will be shown again at the next seam.
+    [Fact]
+    public void AdvanceFailure_PutsNothingOnTheLedger_ThenTheRetryDoes()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+        var cursors = new MailCursors(tmp.Store());
+        Directory.CreateDirectory(cursors.CursorPath("main", "s-1"));
+
+        Run(tmp.Dir, DigestFixtures.Request(dispatchId: "d-1"));
+        Assert.Empty(Delivers(log));
+
+        Directory.Delete(cursors.CursorPath("main", "s-1"));
+        Run(tmp.Dir, DigestFixtures.Request(dispatchId: "d-2"));
+        Assert.Equal("d-2", Assert.Single(Delivers(log)).Fields.DispatchId);
+    }
+
+    /// A reconcile-class block is a delivery too, and the vehicle is the one
+    /// fact the rest of the ledger cannot reconstruct: this digest did not
+    /// inform the loop, it blocked it. The hash covers the `reason`, which is
+    /// where the digest rode.
+    [Fact]
+    public void ReconcileBlock_RecordsTheDecideVehicle_AndHashesTheReason()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        using var harnessDir = new MailStoreTempDir();
+        File.WriteAllText(Path.Combine(harnessDir.Dir, "rec-h.json"), """
+            { "name": "rec-h", "response": { "adapter": "generic-json" },
+              "events": { "Stop": { "effects": ["decide"] } } }
+            """);
+        Send(tmp, DigestFixtures.Env("m-1", body: "unfinished thread"));
+
+        var (_, stdout, _) = RunArgs(tmp.Dir, DigestFixtures.Request(type: "Stop"),
+            ["--role", "main", "--harness", "rec-h", "--seam", "reconcile"], harnessDir.Dir);
+        var reason = Answer(stdout).GetProperty("reason").GetString()!;
+
+        var data = Data(Assert.Single(Delivers(log)));
+        Assert.Equal("decide", data.GetProperty("vehicle").GetString());
+        Assert.Equal("reconcile", data.GetProperty("seam").GetString());
+        Assert.Equal(Sha256Of(reason), data.GetProperty("renderHash").GetString());
+    }
+
+    /// The cap holds back a tail of the plan, and the ledger must follow the
+    /// DELIVERY, not the plan: only the delivered id is named, and the hash is
+    /// over the truncated text the recipient actually got. The held one shows
+    /// up on the next seam's event — the chain stays complete across seams.
+    [Fact]
+    public void WhenTheCapHoldsATail_TheLedgerNamesOnlyWhatWasDelivered()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1", body: new string('a', 400)));
+        Send(tmp, DigestFixtures.Env("m-2", body: new string('b', 400)));
+
+        var first = RunArgs(tmp.Dir, DigestFixtures.Request(dispatchId: "d-1"),
+            ["--role", "main", "--max-chars", "500"]);
+        var text = Answer(first.Out).GetProperty("text").GetString()!;
+
+        var data = Data(Assert.Single(Delivers(log)));
+        Assert.Equal(new[] { "m-1" }, Ids(data));
+        Assert.Equal(Sha256Of(text), data.GetProperty("renderHash").GetString());
+        Assert.Equal(Encoding.UTF8.GetByteCount(text), data.GetProperty("bytesInjected").GetInt32());
+
+        var second = RunArgs(tmp.Dir, DigestFixtures.Request(dispatchId: "d-2"),
+            ["--role", "main", "--max-chars", "500"]);
+        Assert.Contains("bbbb", Answer(second.Out).GetProperty("text").GetString());
+        Assert.Equal(new[] { "m-2" }, Ids(Data(Delivers(log)[1])));
+    }
+
+    /// A single oversized item is delivered truncated (held-forever is mail
+    /// lost). `bytesInjected` must then be the TRUNCATED size — the ledger
+    /// records what was shown, and an auditor comparing it against the store
+    /// line's length is exactly how "A only saw part of this" is discovered.
+    [Fact]
+    public void TruncatedDelivery_RecordsTheTruncatedSize_NotTheStoredBody()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1", body: new string('a', 5_000)));
+
+        var (_, stdout, _) = RunArgs(tmp.Dir, DigestFixtures.Request(),
+            ["--role", "main", "--max-chars", "600"]);
+        var text = Answer(stdout).GetProperty("text").GetString()!;
+        Assert.Contains("truncated", text);
+
+        var data = Data(Assert.Single(Delivers(log)));
+        Assert.Equal(Encoding.UTF8.GetByteCount(text), data.GetProperty("bytesInjected").GetInt32());
+        Assert.True(data.GetProperty("bytesInjected").GetInt32() < 5_000);
+    }
+
+    /// Sender-controlled ids are bounded on the ledger by the SAME display
+    /// clamp the digest head uses — so one 50KB id cannot bloat a trail line,
+    /// and the id on the ledger is character-for-character the id the
+    /// recipient was shown (the two surfaces join to each other verbatim).
+    [Fact]
+    public void HugeSenderId_IsClampedOnTheLedger_MatchingTheDigestText()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-" + new string('z', 50_000)));
+
+        var (_, stdout, _) = Run(tmp.Dir, DigestFixtures.Request());
+        var text = Answer(stdout).GetProperty("text").GetString()!;
+
+        var ev = Assert.Single(Delivers(log));
+        var id = Ids(Data(ev))[0];
+        Assert.True(id.Length < 200, $"ledger id ran to {id.Length} chars");
+        Assert.Contains(id, text);                      // same string on both surfaces
+        Assert.True(ev.ToJson().Length < 4096,
+            $"trail line ran to {ev.ToJson().Length} bytes on a sender-controlled id");
+    }
+
+    /// A collapsed run puts `dispatchId:""` on the wire. As a join key it
+    /// joins nothing, so it is ABSENT from the ledger line rather than an
+    /// empty-string column that every consumer would have to special-case.
+    [Fact]
+    public void EmptyDispatchId_IsOmitted_NotBlank()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        Run(tmp.Dir, DigestFixtures.Request(dispatchId: ""));
+
+        var ev = Assert.Single(Delivers(log));
+        Assert.Null(ev.Fields.DispatchId);
+        Assert.False(JsonDocument.Parse(ev.ToJson()).RootElement.TryGetProperty("dispatchId", out _));
+    }
+
+    /// Records how many `mail.deliver` events existed at the instant the
+    /// answer was written — the only way to observe the ORDER from outside.
+    private sealed class OrderProbe(CapturedLog log) : StringWriter
+    {
+        public int DeliversAtWrite { get; private set; } = -1;
+
+        public override void WriteLine(string? value)
+        {
+            DeliversAtWrite = log.Events.Count(e => e.Evt == "mail.deliver");
+            base.WriteLine(value);
+        }
+    }
+
+    /// The ordering rule the ledger's honesty rests on (the `mail.expire`
+    /// precedent): the event lands AFTER the answer is written, so a crash in
+    /// between leaves the ledger silent about a delivery rather than
+    /// asserting one that never reached stdout. Under-claiming is recoverable
+    /// by reading the store; a false claim is not.
+    [Fact]
+    public void TheEventLandsAfterTheAnswerIsWritten_NeverBefore()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        var probe = new OrderProbe(log);
+        MailDigest.Run(["--role", "main"], new StringReader(DigestFixtures.Request()),
+            probe, new StringWriter(), mailDir: tmp.Dir, harnessDir: NoHarnessDir());
+
+        Assert.Equal("inject", Answer(probe.ToString()).GetProperty("effect").GetString());
+        Assert.Equal(0, probe.DeliversAtWrite);   // nothing claimed yet at write time
+        Assert.Single(Delivers(log));             // claimed once the answer is out
+    }
+
+    /// Resident mode is the per-tool-call seam: one event per real delivery,
+    /// each addressed to its own dispatch, and none for the envelopes that
+    /// found nothing pending.
+    [Fact]
+    public void Resident_EmitsOneEventPerDelivery_Addressed()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        var stdin = DigestFixtures.Request(dispatchId: "d-1") + "\n"
+                  + DigestFixtures.Request(dispatchId: "d-2") + "\n";   // nothing left
+        RunArgs(tmp.Dir, stdin, ["--role", "main", "--resident"]);
+
+        var ev = Assert.Single(Delivers(log));
+        Assert.Equal("d-1", ev.Fields.DispatchId);
+    }
+}
+
 /// The smoke the plan demands: the digest as a REGISTERED exec handler,
 /// spawned by a real daemon as a real process, answering a real hook — the
 /// engine binary invoking itself as its own payload (d7's whole point: the
@@ -1025,6 +1334,35 @@ public class MailDigestDaemonSmokeTests : IDisposable
             new HookRequest("prompt02", "user-prompt-submit", "claude-code", payload)));
         Assert.DoesNotContain("captAInHook mail", second);
         Assert.DoesNotContain("smoke crossed", second);
+
+        // d10's ledger half, proven where it actually has to work: the digest
+        // is a SEPARATE PROCESS, so `mail.deliver` only reaches the trail if
+        // the child's own Log sink resolves to the same JSONL file the engine
+        // writes. Read from the sandbox trail on disk, not an in-process sink.
+        var trail = Path.Combine(_home, ".captainHook", "logs", "captainHook.jsonl");
+        Assert.True(File.Exists(trail), "the spawned digest wrote no trail at all");
+        var delivers = File.ReadAllLines(trail)
+            .Where(l => l.Contains("\"evt\":\"mail.deliver\""))
+            .Select(l => JsonDocument.Parse(l).RootElement.Clone())
+            .ToList();
+
+        // Exactly one — the second prompt delivered nothing and must not have
+        // claimed otherwise.
+        var deliver = Assert.Single(delivers);
+        Assert.Equal("s-live", deliver.GetProperty("sessionId").GetString());
+        Assert.Equal("UserPromptSubmit", deliver.GetProperty("hookEvent").GetString());
+        var data = deliver.GetProperty("data");
+        Assert.Equal("main", data.GetProperty("role").GetString());
+        Assert.Equal("inject", data.GetProperty("vehicle").GetString());
+        Assert.Equal("m-live", data.GetProperty("envelopeIds")[0].GetString());
+
+        // The causality chain's hinge, on real bytes: the ledger's dispatchId
+        // is the ADOPTED one the shim sent and the daemon dispatched under —
+        // which is what lets a delivery join to the recipient's own hook
+        // events. (Only the child's lines are in this file: the daemon logs
+        // through the suite's swapped sink, so its own dispatch.* events never
+        // reach the sandbox trail.)
+        Assert.Equal("prompt01", deliver.GetProperty("dispatchId").GetString());
 
         stop.Cancel();
         Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));

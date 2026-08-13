@@ -1,6 +1,8 @@
 using System.Buffers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using CaptainHook.Actors;
 using CaptainHook.Core;
 
 namespace CaptainHook.Mail;
@@ -89,6 +91,12 @@ namespace CaptainHook.Mail;
 // truncated with an explicit marker, because "held forever" is mail lost and
 // the full text stays durable in the store. No summarization, ever (the
 // rejected telephone game).
+//
+// PROVENANCE RUNS BOTH WAYS (d10). The digest tells the recipient who is
+// speaking; `mail.deliver` tells the LEDGER what the recipient was shown —
+// ids plus a hash of the rendered bytes, emitted from the one branch where
+// mail was really consumed. See LogDelivery below for what that costs and why
+// each field is the shape it is.
 
 /// The seam CLASS a digest registration assigns to the events it covers
 /// (ADR-0016 d5's three rows). Values match MailPriority's wire spellings on
@@ -564,6 +572,7 @@ public static class MailDigest
 
             case MailCursorWrite.Written:
                 stdout.WriteLine(AnswerLine(plan.Vehicle, render.Text, req.DispatchId));
+                LogDelivery(req, opts, plan, render);
                 return 0;
 
             default: throw new InvalidOperationException("MailCursorWrite is a closed set");
@@ -596,6 +605,75 @@ public static class MailDigest
             w.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buf.WrittenSpan);
+    }
+
+    /// `mail.deliver` (d10) — delivery as a FIRST-CLASS ledger event, the
+    /// join that closes the cross-agent causality chain: envelope
+    /// (`from`/`id`/`inReplyTo`, durable in the store) → this event (envelope
+    /// ids ↔ dispatchId ↔ recipient session) → the recipient's own later hook
+    /// events in that session. "Why did agent A do X" becomes answerable by
+    /// reconstructing exactly what A was shown.
+    ///
+    /// FOUR things this emitter decides, each with a direction of failure:
+    ///
+    ///   * ONLY ON A REAL DELIVERY. Every earlier return — no vehicle, nothing
+    ///     eligible, a malformed envelope, a cursor that refused to advance —
+    ///     answered noop and consumed nothing, and an event there would put a
+    ///     delivery on the ledger that no recipient ever saw. The one
+    ///     `Written` branch is the only place mail has actually been consumed.
+    ///   * AFTER the answer is written, never before — the `mail.expire`
+    ///     ordering rule (the ledger states facts): a crash between the two
+    ///     leaves the ledger SILENT about a delivery rather than asserting one
+    ///     that never reached stdout. The ledger may under-claim; it may never
+    ///     claim falsely.
+    ///   * IDS AND HASH, NOT BODIES (d10). The bodies are already durable in
+    ///     the mail store — the trail stays lean, and `renderHash` (SHA-256
+    ///     over the exact UTF-8 the effect carries, `PolicyContent.Of`'s
+    ///     stamp shape) makes the RENDERING tamper-evident: the store proves
+    ///     what was written, this proves what was shown. It hashes
+    ///     `render.Text` — what the cap actually produced, truncation
+    ///     included — because a hash of the plan would attest to text nobody
+    ///     received.
+    ///   * BOUNDED BY DATA, never by a sender. Ids are sender-controlled up to
+    ///     the 128KiB line cap, so each is display-clamped by the SAME clamp
+    ///     the digest head uses — which also makes the ledger id and the
+    ///     digest line's id the identical string, so the two surfaces join to
+    ///     each other verbatim. The count is bounded by `--max-chars`
+    ///     (deployment configuration), which is the same bound the digest text
+    ///     itself carries.
+    ///
+    /// As-built note on d10's shape: the ADR sketches `recipient: {role,
+    /// session}`, but `sessionId` is a first-class trail column that every
+    /// existing filter — the JSONL consumers, the API stream, the GUI trace —
+    /// reads at the top level; nesting it would make mail delivery the one
+    /// event invisible to a session filter. The session therefore rides
+    /// `sessionId` and `role` rides data, so the join keys are unchanged and
+    /// strictly better connected.
+    private static void LogDelivery(
+        DigestRequest req, MailDigestOptions opts, MailPlan plan, MailRender render)
+    {
+        var bytes = Encoding.UTF8.GetBytes(render.Text);
+        Log.Info("mail", "mail.deliver", new LogFields
+        {
+            // An empty dispatchId is what a collapsed run puts on the wire; as
+            // a join key it joins nothing, so it is absent rather than blank.
+            DispatchId = req.DispatchId.Length == 0 ? null : req.DispatchId,
+            SessionId = req.SessionId,
+            HookEvent = req.EventType,
+            Msg = "mail delivered into the recipient's context",
+            Data = new Dictionary<string, object>
+            {
+                ["role"] = opts.Role,
+                ["seam"] = Wire(opts.Seam),
+                // The vehicle is not derivable from anything else on the
+                // ledger, and it is the difference between informing the loop
+                // and blocking it (an inject vs. a reconcile-class block).
+                ["vehicle"] = Wire(plan.Vehicle),
+                ["envelopeIds"] = render.Delivered.Select(p => Clamp(p.Envelope.Id)).ToList(),
+                ["renderHash"] = Convert.ToHexStringLower(SHA256.HashData(bytes)),
+                ["bytesInjected"] = bytes.Length,
+            },
+        });
     }
 
     /// Lift a dispatchId out of a line the STRICT parse rejected, so the

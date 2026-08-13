@@ -324,6 +324,25 @@ shared edit log. The bus must not know or care what backs a member:
     bytes — the bodies are already durable in the mail store, ids keep the
     trail lean, and `renderHash` makes the rendering itself tamper-evident.
 
+    *As built (2026-08-13, `mail-deliver-ledger-event`):* the sketch above
+    nests `recipient: {role, session}`, but `sessionId` is a **first-class
+    trail column** every existing consumer reads at the top level (the JSONL
+    filters, the API stream, the GUI trace) — nesting it would make mail
+    delivery the one event invisible to a session filter. Shipped as
+    `sessionId`/`dispatchId`/`hookEvent` in the standard fields with
+    `role`, `seam`, `vehicle`, `envelopeIds`, `renderHash`, `bytesInjected`
+    in `data`: the join keys are unchanged and strictly better connected.
+    `vehicle` was added because it is the one fact no other ledger event can
+    reconstruct — whether the digest *informed* the loop (inject) or *blocked*
+    it (a reconcile-class decide). Two bounds the slice had to state: the
+    event fires **only** from the branch where the cursor really advanced (a
+    refused advance answers noop and must claim nothing), and it lands
+    **after** the answer is written, on the `mail.expire` ordering rule — the
+    ledger may under-claim a delivery, never claim one falsely. Envelope ids
+    are display-clamped by the same clamp the digest head uses, so one 128KiB
+    sender-controlled id cannot bloat a trail line and the id on the ledger
+    is character-for-character the id the recipient was shown.
+
 11. **Tamper-evidence: the mail store is hash-chained; trail chaining is a
     named follow-up, not silence.** The threat that matters is new with the
     bus: exec members run *as the user*, so the processes with motive and
@@ -526,7 +545,7 @@ before commits, live installation touched only via `/deploy`.
 | d5 — Stop seam data | `dotnet/captainHook/harnesses/claude-code.json` (`Stop.effects`), adapter set per ADR-0003 if needed |
 | d7 — CLI verbs | `Program.cs` verb routing → `Mail/`; exec-wire answers per ADR-0010's closed grammar |
 | d8 — profile/activation | `~/.captainHook/handlers.json` + `dispatch.json` (no new surface) |
-| d10 — provenance rendering + `mail.deliver` | the digest renderer + its golden tests; the deliver event beside the trail's one schema (both-emitter rules do not apply — only the engine's digest path emits it) |
+| d10 — provenance rendering + `mail.deliver` | `MailDigest.Render`/`ItemBlock` + their golden tests; `MailDigest.LogDelivery` emits `mail.deliver` (src `mail`) from the one advanced-the-cursor branch — the trail's one schema, engine-only, so both-emitter rules do not apply. `MailDigestLedgerTests` + the daemon smoke's sandbox-trail read (a spawned child's own sink) |
 | d11 — hash chain + flock append | `Mail/` store appender + a chain-verify helper; tamper/truncation tests |
 | d12 — policy content hash | the shared policy gate's `policy.reload` emit + `ApiPolicyWriter` |
 | d13 — lifetimes + perms | `Mail/` store creation (0600, `gen` rotation); retention prose in the flow doc |

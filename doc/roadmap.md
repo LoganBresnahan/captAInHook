@@ -1334,6 +1334,47 @@ run live*. The framework underneath is what exists today.
   twice. **Phase 4 complete — next is phase 5's hardening train:
   `mail-deliver-ledger-event` → `cursor-edge-adversarial-tests` →
   `stop-reconcile-seam`, with dogfood strictly last.**)
+  `mail-deliver-ledger-event` (2026-08-13; phase 5's first, d10's OTHER
+  direction — the digest already told the recipient who was speaking; now the
+  LEDGER records what the recipient was shown. `MailDigest.LogDelivery` emits
+  `mail.deliver` (src `mail`, info) carrying envelope ids + `renderHash` +
+  `bytesInjected`, closing the cross-agent causality chain on join keys that
+  already exist: envelope → this event (ids ↔ dispatchId ↔ session) → the
+  recipient's own later hook events. Four judgment calls, each with a
+  direction of failure. (1) ONLY where mail was really consumed: the single
+  `MailCursorWrite.Written` branch. The sharp case is the digest that planned
+  AND rendered a delivery and then could not advance the cursor — it degrades
+  to noop, the mail is still pending, and a ledger line there would be the one
+  false claim that matters (mail recorded as seen that the recipient will be
+  shown again). (2) AFTER the answer is written, on the `mail.expire` ordering
+  rule: a crash between advance and write leaves the ledger SILENT rather than
+  asserting a delivery that never reached stdout — the ledger may under-claim,
+  never claim falsely. (3) The stamp describes the bytes the effect ACTUALLY
+  carried (`PolicyContent.Of`'s shape — full 64-hex SHA-256 + UTF-8 count over
+  `render.Text`), so a cap-truncated delivery hashes truncated: the store
+  proves what was written, this proves what was shown, and an auditor
+  comparing the two is exactly how "A only saw part of this" surfaces. (4)
+  Bounded by data, never by a sender: ids are display-clamped by the SAME
+  clamp the digest head uses, which also makes the ledger id and the digest
+  line's id the identical string — the two surfaces join to each other
+  verbatim. `vehicle` joins the ADR's field list as the one fact nothing else
+  on the ledger can reconstruct: whether the digest informed the loop or
+  BLOCKED it. **ADR d10 annotated as-built**: the sketch's nested
+  `recipient: {role, session}` ships as the first-class `sessionId` column
+  instead — nesting would have made mail delivery the one event invisible to
+  every existing session filter (JSONL, API stream, GUI trace) — with `role`
+  in data; an empty `dispatchId` (what a collapsed run puts on the wire) is
+  omitted rather than blank, since as a join key it joins nothing. Proven
+  where it has to work: the daemon smoke now reads the SANDBOX TRAIL FILE
+  after a real spawned child answers a real hook — a separate process, so the
+  event only lands if the child's own Log sink resolves to the engine's JSONL
+  — asserting exactly one delivery (the second prompt delivered nothing and
+  claims nothing) and the adopted dispatchId on it. The `/shipshape` pass
+  closed the one gap it found — the emit-AFTER-write ORDER, which the whole
+  under-claim-never-false-claim argument rests on, had no test naming it;
+  pinned now by a stdout writer that records how many deliver events exist at
+  the instant the answer is written (zero). 14 ledger tests + the smoke
+  assertions; suite 868 → 882 green twice.)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
