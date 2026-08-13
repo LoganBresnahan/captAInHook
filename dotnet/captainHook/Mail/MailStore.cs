@@ -408,6 +408,38 @@ public sealed class MailStore(string dir)
     public static string HashOf(ReadOnlySpan<byte> lineBytes) =>
         Convert.ToHexStringLower(SHA256.HashData(lineBytes));
 
+    /// The store's CURRENT chain identity: the first COMPLETE line's hash,
+    /// null when no complete first line exists (absent, empty, or torn-only
+    /// store). This is the same head rule `MailCursors.Pending` applies to its
+    /// full read — the two MUST agree (pinned by test), because Advance
+    /// re-checks this value under its lock and a drift between the two rules
+    /// would either refuse every advance or silently disable the chain-changed
+    /// guard. Reads only the first line, not the store (N4: the store grows
+    /// unbounded; a guard must not cost a full read).
+    public string? HeadHash()
+    {
+        try
+        {
+            if (!File.Exists(FilePath)) return null;
+            using var fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var first = new MemoryStream();
+            var buf = new byte[8 * 1024];
+            int read;
+            while ((read = fs.Read(buf, 0, buf.Length)) > 0)
+            {
+                var nl = Array.IndexOf(buf, (byte)'\n', 0, read);
+                if (nl >= 0)
+                {
+                    first.Write(buf, 0, nl);
+                    return HashOf(first.GetBuffer().AsSpan(0, (int)first.Length));
+                }
+                first.Write(buf, 0, read);
+            }
+            return null;   // no terminator anywhere: a torn-only store has no head yet
+        }
+        catch (Exception) { return null; }   // unreadable now ≡ no identifiable chain
+    }
+
     /// The link the NEXT line must declare, plus whether the current tail is
     /// torn, the file's current length, and the tail line's own start offset
     /// (meaningful when Torn: it is the number the `mail.torn` warn reports).

@@ -464,6 +464,41 @@ public sealed class MailCursors(MailStore store)
             held = MailStore.TryLock(path + ".lock", lockWaitMs, out var lockError);
             if (held is null) return new MailCursorWrite.Failed(lockError!);
 
+            // THE CHAIN-CHANGED GUARD (the cursor-edge adversarial campaign's
+            // find): the staleness guard below deliberately ignores a disk
+            // cursor on a different chain ("vouches for nothing") — which is
+            // right when the DISK cursor is the stale one, and exactly
+            // backwards when the VIEW is: a view read from chain A, with the
+            // store since replaced by chain B and B's mail already delivered
+            // by a fresher digest, would sail past that guard and clobber B's
+            // cursor — whereupon the next read re-anchors on the head
+            // mismatch and B's delivered mail is pending AGAIN: a
+            // double-inject needing no tampering, just a replacement between
+            // read and advance (exactly what d13's rotation will one day do).
+            // So the advance re-reads the store's identity under the lock and
+            // refuses a view of a chain that is no longer there — the mail
+            // the view wanted to deliver is gone or re-anchorable anyway, and
+            // noop-now-redeliver-later is the safe direction. Honest bounds:
+            // same-head tail truncation stays invisible here (chain-invisible
+            // by phase 2's own statement — the truncation-reset re-anchor
+            // owns it, loudly), and a replacement racing the microseconds
+            // between this read and the rename below remains possible because
+            // nothing serializes store replacement itself; this guard turns a
+            // constructible interleaving into a vanishing one, and d13's
+            // rotation machinery owns the real answer (a `gen` bump). (The
+            // skeptic pass traced the residual window tighter than this first
+            // stated: a competing advance needs this same per-cursor flock,
+            // so no fresher delivery can land INSIDE the window — an
+            // in-window replacement degrades to a stale cursor write the
+            // next read re-anchors LOUDLY, redelivery being the safe
+            // direction; the silent-clobber shape needs a head flap.)
+            var currentHead = Store.HeadHash();
+            if (currentHead != view.Head)
+                return Refused(view.Role, path,
+                    $"the store's chain changed between the read and the advance (view read head "
+                    + $"'{view.Head ?? "(none)"}', store now has '{currentHead ?? "(none)"}') "
+                    + "— re-read before advancing");
+
             // The STALENESS guard (the If-Match pattern, ApiPolicyWriter's
             // precedent), now authoritative under the lock: a view whose
             // deliveries counter the on-disk cursor has moved past was planned
@@ -471,14 +506,36 @@ public sealed class MailCursors(MailStore store)
             // delivered. Only comparable when the disk cursor describes the
             // same chain the view read; a cursor the view legitimately
             // re-anchored away from (malformed, foreign gen, replaced head)
-            // vouches for nothing and blocks nothing.
-            if (File.Exists(path)
-                && MailCursor.TryParse(File.ReadAllText(path), out _) is { } disk
-                && disk.Gen == view.Gen && disk.Head == view.Head
-                && disk.Deliveries != view.Deliveries)
-                return new MailCursorWrite.Failed(
-                    $"view is stale: it was read at {view.Deliveries} deliveries but the cursor "
-                    + $"is at {disk.Deliveries} — re-read before advancing");
+            // vouches for nothing and blocks nothing — the chain-changed
+            // guard above already proved the VIEW's chain is the live one.
+            if (File.Exists(path))
+            {
+                if (MailCursor.TryParse(File.ReadAllText(path), out _) is { } disk
+                    && disk.Gen == view.Gen && disk.Head == view.Head
+                    && disk.Deliveries != view.Deliveries)
+                    return Refused(view.Role, path,
+                        $"view is stale: it was read at {view.Deliveries} deliveries but the cursor "
+                        + $"is at {disk.Deliveries} — re-read before advancing");
+            }
+            else if (view.Deliveries > 0)
+                // The cursor this view was read from is GONE (d13: deletable
+                // anytime). The advance proceeds — refusing would strand the
+                // rendered digest for no gain, and redelivery-after-deletion
+                // is the stated cost — but it proceeds LOUDLY: a vanished
+                // lineage means mail this view already consumed may be
+                // delivered again by whoever anchors fresh. (At deliveries 0
+                // the same deletion is indistinguishable from first contact
+                // and stays quiet — the one corner of the deletion cost that
+                // CANNOT be loud, pinned as such by the edge campaign.)
+                Log.Warn("mail", "mail.cursorVanished", new LogFields
+                {
+                    Msg = "the cursor this view was read from no longer exists — advancing starts a fresh lineage",
+                    Data = new Dictionary<string, object>
+                    {
+                        ["role"] = view.Role, ["path"] = path,
+                        ["viewDeliveries"] = view.Deliveries,
+                    },
+                });
 
             var deliveries = view.Deliveries + 1;
             var heldList = view.Pending
@@ -599,6 +656,24 @@ public sealed class MailCursors(MailStore store)
         }
 
         return (cursor, null);
+    }
+
+    /// A guard refusal, made first-class on the trail (the skeptic pass's
+    /// finding: without this, a refusal's loudness rode second-hand on the
+    /// digest's captured stderr). Info, not Warn — a refused advance is
+    /// usually a LEGITIMATE concurrent delivery winning the race, and the
+    /// refusal is the guard doing its job, not a fault.
+    private static MailCursorWrite.Failed Refused(string role, string path, string reason)
+    {
+        Log.Info("mail", "mail.cursorRefuse", new LogFields
+        {
+            Msg = "cursor advance refused — the view is not safe to apply; the mail stays pending",
+            Data = new Dictionary<string, object>
+            {
+                ["role"] = role, ["path"] = path, ["reason"] = reason,
+            },
+        });
+        return new MailCursorWrite.Failed(reason);
     }
 
     private static MailCursor Fresh(string? head, long deliveries) =>

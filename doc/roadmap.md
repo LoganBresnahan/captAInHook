@@ -1375,6 +1375,70 @@ run live*. The framework underneath is what exists today.
   pinned now by a stdout writer that records how many deliver events exist at
   the instant the answer is written (zero). 14 ledger tests + the smoke
   assertions; suite 868 → 882 green twice.)
+  `cursor-edge-adversarial-tests` (2026-08-13; phase 5's campaign — the
+  exactly-once tests the dogfood gate waits on, built fable per the plan's
+  "the slice IS adversarial thinking" row, **independent fable skeptic run
+  on the tests themselves** per the plan's verify column. Everything drives
+  real files and real locks: two barrier-started advances from ONE view
+  through separate MailCursors instances (exactly one Written, every round),
+  two full digest verbs racing one (role, session) (one inject, one noop,
+  one `mail.deliver`), and the drain soak — three senders appending under
+  flock contention against two racing digests, every envelope rendered into
+  exactly one digest, chain verifying clean. **Designing the fixtures found
+  a real double-inject** and the fix shipped in-slice: `Advance` never
+  re-checked the STORE against the view, and the staleness guard's
+  deliberate "a disk cursor on a different chain vouches for nothing" is
+  exactly backwards when the VIEW is the stale side — a view from a
+  replaced chain sailed past it and clobbered the cursor a fresher digest
+  had written for the new chain, whose already-delivered mail then re-pended
+  on the next read's re-anchor: constructible today by hand, a legitimate
+  race the day d13's rotation replaces chains for real. `Advance` now
+  re-reads the store's identity under its lock (`MailStore.HeadHash`, the
+  same first-complete-line rule `Pending` records — agreement pinned as its
+  own tripwire, including the bare-newline and past-the-cap-first-line
+  states) and refuses a view of a chain that is gone; both guards proven
+  load-bearing by MUTATION probes (disable either, watch its tests fail),
+  not just by passing. The rest of the campaign pins each accepted
+  deviation in its stated direction: advance-then-crash loses the digest
+  VISIBLY (store durable, `mail.cursorAdvance` on the trail, no
+  `mail.deliver` — the ledger under-claims, never falsely); same-head
+  truncation mid-read passes the guard honestly (chain-invisible, phase 2's
+  own statement) and lands on the truncation-reset's loud redelivery; a
+  foreign oversized line — forced past the write gate — is DELIVERED
+  truncated with the marker, never size-skipped (the windowless read means
+  skip would be silent loss); a chain break behind the frontier is one
+  audit fault while delivery continues (refusing to deliver over tampered
+  history would turn tamper-evidence into denial of service); an
+  expired-only mailbox noops untouched until the next DELIVERING digest
+  names and flushes it; and one full turn's seam interleaving — urgent
+  delivered mid-turn structurally gone at reconcile, held ambient arriving
+  there aged, second reconcile clean. **Skeptic pass on the tests: nine
+  findings, all addressed in-pass.** The real one: a cursor DELETED
+  mid-race at deliveries 0 lets both racers deliver — quietly, because
+  no-cursor-at-zero is indistinguishable from first contact — contradicting
+  the campaign's own "every accepted deviation is loud" header; pinned now
+  as d13's stated deletion cost (so nobody later "fixes" it with a guard
+  that would refuse every first contact), with the distinguishable variant
+  made loud (`mail.cursorVanished` warn on advancing over a vanished
+  lineage) and guard refusals made first-class on the trail
+  (`mail.cursorRefuse`, info — usually a legitimate concurrent delivery
+  winning the race). Also from the pass: the drain soak's noop-break had a
+  hole patched only by fixture-specific settings — final sweep now loops
+  until a genuine noop; the clobber regression asserts WHICH guard refused
+  (green-on-incidental-failure was the exact rot the charter names); the
+  id-count helper counted body lines (a body could fake a delivery — now
+  head-lines only); and the chunk-spanning HeadHash test used a line Append
+  would happily have written (now genuinely past the cap). The skeptic also
+  traced the guard's residual window TIGHTER than built: a competing
+  advance needs the same per-cursor flock the guard holds, so nothing can
+  deliver inside it — an in-window replacement degrades to a loud re-anchor,
+  and the silent shape needs a head flap (d13's `gen` owns it). The
+  mail-cursor slice's watch item recurred: the unidentified single-test
+  transient struck twice across this slice's ~12 full runs (one test each,
+  neither identified — both captures truncated to summaries), then refused
+  to reproduce across 7 subsequent fully-captured runs; the watch stands,
+  and full-run output is now captured to a file as a habit. 15 campaign
+  tests (`MailCursorEdgeTests.cs`); suite 882 → 897 green twice.)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

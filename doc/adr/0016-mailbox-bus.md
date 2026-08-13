@@ -180,6 +180,22 @@ shared edit log. The bus must not know or care what backs a member:
    rotation check; the advance runs under a per-cursor flock with a
    deliveries-counter staleness guard. Details in the roadmap slice entry.*
 
+   *As built (2026-08-13, `cursor-edge-adversarial-tests`): the campaign
+   found the staleness guard's cross-chain blind spot — a stale view from a
+   replaced chain sailed past it (different head ⇒ "the disk cursor vouches
+   for nothing") and clobbered the cursor a fresher digest had written for
+   the NEW chain, whose delivered mail then re-pended on the next read's
+   re-anchor: a constructible double-inject, and a legitimate race once
+   d13's rotation replaces chains for real. `Advance` therefore re-reads the
+   store's identity under its lock (`MailStore.HeadHash`, the same
+   first-complete-line rule `Pending` records, agreement pinned) and refuses
+   a view whose chain is gone. Guard refusals are first-class on the trail
+   (`mail.cursorRefuse`, info — usually a concurrent delivery winning);
+   a view advancing over its own deleted lineage warns
+   (`mail.cursorVanished`). One corner stated rather than guarded: a cursor
+   deleted mid-race at deliveries 0 doubles QUIETLY — indistinguishable from
+   first contact, pinned as d13's accepted deletion cost.*
+
 5. **Three seam classes; `priority` names the class the sender requests; the
    planner degrades to what the recipient's harness declares.**
 
@@ -540,7 +556,7 @@ before commits, live installation touched only via `/deploy`.
 
 | decision | will live in |
 |---|---|
-| d2/d3/d4 — envelope, TTL, store, cursor | `dotnet/captainHook/Mail/` (model + strict parser + store + cursor); tests beside the `DispatchPolicy` parse-table precedent |
+| d2/d3/d4 — envelope, TTL, store, cursor | `dotnet/captainHook/Mail/` (model + strict parser + store + cursor); tests beside the `DispatchPolicy` parse-table precedent; the interleaving / hostile-store campaign in `MailCursorEdgeTests.cs` (exactly-once races, chain-changed guard, deletion-race corner) |
 | d5 — planner + seam mapping | the `mail digest` command's planner; delivery capability = `handlers.json` registration × `HarnessSpec.events` verbs |
 | d5 — Stop seam data | `dotnet/captainHook/harnesses/claude-code.json` (`Stop.effects`), adapter set per ADR-0003 if needed |
 | d7 — CLI verbs | `Program.cs` verb routing → `Mail/`; exec-wire answers per ADR-0010's closed grammar |
