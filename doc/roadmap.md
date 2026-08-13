@@ -1258,6 +1258,82 @@ run live*. The framework underneath is what exists today.
   nothing written. Suite 804 → 813 green twice. **Phase 3 complete — mail
   has a real write path and every recipient a position in it; next is phase
   4, `mail-digest-handler`, the semantic core.**)
+  `mail-digest-handler` (2026-08-12; phase 4, the semantic core — d5/d7/d10's
+  read path, built fable per the plan's hard-reasoning row, **independent
+  fable skeptic pass run same day**. THE SEAM CLASS IS REGISTRATION DATA:
+  "is PostToolUse a mid-turn seam?" is a loop-position fact no HarnessSpec
+  field carries and no event NAME answers without hardcoding one harness's
+  vocabulary — and d7 already says registration is configuration — so the
+  registration declares it (`--seam ambient|urgent|reconcile`, one
+  handlers.json entry per seam class) and the planner stays a pure function
+  (priority × seam class × declared verbs → deliver|hold|degrade) with no
+  per-harness code. The matrix as built: ambient/reconcile-class seams
+  deliver ALL priorities (the cursor slice's pinned obligation — once a seam
+  advances, everything held ages, so holding at an advancing seam only burns
+  TTL); urgent-class delivers urgent only, and a QUIET urgent seam noops
+  WITHOUT advancing (three consecutive quiet mid-turn seams age a ttl-1
+  envelope by zero, pinned). Vehicle downward only with inject preferred at
+  EVERY class; an event the spec does not declare — or declares effectless
+  (claude Stop today) — delivers nothing and never advances, deliberately
+  STRICTER than the permissive capability gate, because the gate noops
+  AFTER the advance and that direction is silent mail loss. Rendering is
+  deterministic and golden-pinned: priority rank then arrival order,
+  provenance per item with the envelope id as the store join key, per-seam
+  char caps (4096 / urgent 1024, `--max-chars`) at whole-item granularity
+  (a capped tail stays PENDING — only rendered offsets ever advance),
+  expired mail named once in the digest that drops it. ADVANCE BEFORE EMIT
+  is the order-of-operations contract at the verb: everything that could
+  stop the effect is checked first, a failed advance answers noop with the
+  mail still pending, and the same seam asked twice delivers exactly once —
+  the Stop-loop guard's shape, pinned at the verb AND through a real-daemon
+  smoke (the engine registered as ITS OWN payload: handlers.json command =
+  the co-located apphost, seeded mail riding `additionalContext` on the
+  first prompt, the cursor on disk in the sandbox, the second prompt
+  clean). `--resident` speaks ADR-0010 d3's lock-step protocol, because an
+  urgent-class registration fires per tool call and a cold JIT start per
+  dispatch is the tax ADR-0004 d7 killed.
+  **Skeptic pass: four real finds, all fixed in-pass, plus three
+  hardenings.** (1) The truncation path could deliver a CONTENT-FREE digest
+  — a sender-controlled topic longer than the cap (or a pathological
+  `--max-chars`) cut the item block from the FRONT, erasing id and sender
+  while the cursor advanced past the mail; truncation now cuts the BODY
+  only, the provenance head always renders whole with every
+  sender-controlled field display-clamped, and the id moved ahead of the
+  topic. (2) The "hard cap" was not hard: the expired parenthetical
+  appended unbounded sender data OUTSIDE maxChars — probed at 50,285 bytes
+  into a mid-turn answer via a 50KB envelope id; now a count + at most
+  three clamped ids, the whole urgent-seam answer pinned < 4KB. (3)
+  `--seam reconcile` mis-registered on a decide+inject mid-turn event
+  (PreToolUse) turned an ambient status message into a DENIED tool call;
+  the vehicle preference is inverted — inject at every class, decide only
+  when inject is absent — so the block shape is reserved for events whose
+  only loop verb is decide (Stop's phase-5 shape, unchanged). (4) The
+  resident malformed-line recovery was self-defeating: its un-echoed noop
+  is itself the protocol error the engine kills a conversation over; the
+  error reply now lifts a best-effort dispatchId from the rejected line
+  (addressing a failure report is not guessing at mail), and true garbage
+  stays an honest protocol kill, stated. Hardened from the pass's PLAUSIBLE
+  finds: the exec-child env allowlist gains the engine's own config paths
+  (`CAPTAINHOOK_MAIL_DIR`/`HARNESS_DIR`/`LOG` — ADR-0010 d5 amendment
+  note; a child resolving DEFAULT paths under a redirected daemon read the
+  wrong mailbox and logged into the live tree), and a resident re-resolves
+  its harness spec per envelope through the daemon's own stamp-gated
+  reload (a spawn-frozen view is advance-then-gate-swallow; pinned by a
+  between-envelopes spec edit that leaves the newly-arrived mail pending),
+  plus strict `--seam` spelling (Enum.TryParse comma lists refused).
+  Survived attack unbroken: advance-before-emit and at-most-once (no
+  in-contract double-inject or lost-without-trace envelope constructible),
+  quiet seams age nothing, all nine matrix cells, every emitted shape
+  through ExecWire.ParseAnswer, lone surrogates unreachable past the
+  envelope parser, oneshot answer-wins-over-exit. Named residue, stated
+  not engineered around: the answer still crosses the dispatcher merge and
+  the capability gate after the advance, so a co-registered deny/replace
+  handler on the digest's event can eat a delivered digest — registration
+  guidance (examples/payloads) says give the digest its seam events to
+  itself. 55 digest tests (46 + 9 skeptic pins); suite 813 → 868 green
+  twice. **Phase 4 complete — next is phase 5's hardening train:
+  `mail-deliver-ledger-event` → `cursor-edge-adversarial-tests` →
+  `stop-reconcile-seam`, with dogfood strictly last.**)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

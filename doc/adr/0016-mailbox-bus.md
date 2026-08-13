@@ -200,6 +200,49 @@ shared edit log. The bus must not know or care what backs a member:
    for Stop's block shape, that is coded-adapter work inside ADR-0003's closed
    set, not config.
 
+   *As built (2026-08-12, slice `mail-digest-handler`) — what the table above
+   leaves unmarked.* **The seam CLASS is registration data**: "is PostToolUse
+   a mid-turn seam?" is a loop-position fact no HarnessSpec field carries and
+   no event name answers without hardcoding one harness's vocabulary — and d7
+   already says registration is configuration — so the digest registration
+   declares it (`--seam ambient|urgent|reconcile`, one `handlers.json` entry
+   per seam class) and the planner stays pure over (priority, seam class,
+   verbs). The matrix as built: ambient- and reconcile-class seams deliver
+   ALL priorities (the cursor's obligation — once a seam advances, everything
+   held ages, so holding at an advancing seam only burns TTL); an
+   urgent-class seam delivers urgent only, and when nothing urgent is pending
+   it answers noop WITHOUT advancing, so quiet mid-turn seams age nothing.
+   The vehicle degrades downward only, and `inject` is preferred at EVERY
+   seam class: mail never escalates itself into a deny to get read, so the
+   reconcile class reaches for `decide` (verdict `deny`, the digest as the
+   reason) only when inject is absent — Stop's shape once phase 5 declares
+   it — and a `--seam reconcile` typo on a decide+inject mid-turn event
+   degrades to a plain inject instead of denying the user's tool call (a
+   skeptic-pass find). An event the spec does not declare — or declares
+   with no effects — delivers nothing and never advances: the capability
+   gate is permissive there, but it noops AFTER the advance, and that
+   direction is mail lost silently. The "hard token cap" is a CHARACTER
+   cap (deterministic; tokens are model-specific), per-seam-class defaults
+   4096 / 1024 (urgent), `--max-chars` to override, whole-item granularity —
+   with one anti-deadlock exception: a first item too big to ever fit is
+   delivered truncated with an explicit marker, because held-forever is mail
+   lost and the full text stays durable in the store. Truncation cuts the
+   BODY only: the provenance head always renders whole, its
+   sender-controlled fields display-clamped, and the expired parenthetical
+   names a count plus at most three clamped ids — so the cap can be exceeded
+   only by a bounded constant, and no rendering path can consume mail while
+   erasing the id needed to look it up (two more skeptic finds). The
+   provenance line carries the envelope **id** before the topic (the join
+   key back to the store, and the handle d9's future ask/reply would
+   quote). `--resident` speaks ADR-0010
+   d3's lock-step protocol, because an urgent-class registration fires per
+   tool call — a cold JIT start per dispatch is the tax ADR-0004 d7 killed.
+   Stated hazard, not engineered around: the digest's answer still crosses
+   the dispatcher merge and the capability gate after the cursor has
+   advanced, so a co-registered deny/replace handler on the same event can
+   eat a delivered digest — registration guidance is to give the digest's
+   seam events to itself.
+
 6. **Addresses are stable roles, not session ids.** `to: "main"` names a role;
    the store maps role → live session(s) at delivery time (each live session
    holding the role has its own cursor and receives its own delivery).

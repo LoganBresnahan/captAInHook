@@ -31,11 +31,13 @@ public static class MailSend
         string? subverb, TextReader stdin, TextWriter stdout, TextWriter stderr,
         string? mailDir = null, string? nowTs = null)
     {
+        // `digest` is routed to MailDigest by Program.cs before this runs;
+        // this usage line still names both so a bare `mail` teaches the verb.
         if (subverb != "send")
         {
             stderr.WriteLine(subverb is null
-                ? "captainHook mail: a subverb is required — usage: captainHook mail send  (one JSON envelope on stdin)"
-                : $"captainHook mail: unknown subverb '{subverb}' — usage: captainHook mail send  (one JSON envelope on stdin)");
+                ? "captainHook mail: a subverb is required — usage: captainHook mail <send|digest>  (send: one JSON envelope on stdin)"
+                : $"captainHook mail: unknown subverb '{subverb}' — usage: captainHook mail <send|digest>  (send: one JSON envelope on stdin)");
             return 1;
         }
 

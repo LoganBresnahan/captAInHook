@@ -107,7 +107,19 @@ public sealed class ExecHandler(
     /// core is deliberately baked into the FIRST spawn site so no build ever
     /// ships an inherit-everything window.
     private static readonly HashSet<string> AllowedEnv = new(StringComparer.Ordinal)
-        { "PATH", "HOME", "USER", "SHELL", "LANG", "TZ", "TMPDIR" };
+        {
+            "PATH", "HOME", "USER", "SHELL", "LANG", "TZ", "TMPDIR",
+            // The engine's own config PATHS cross too (they are ours, and
+            // they are paths, never secrets): an engine-as-payload child —
+            // `mail digest` (ADR-0016 d7) — that resolved the DEFAULT mail
+            // dir or harness dir while its daemon ran a redirected one would
+            // read the wrong mailbox, write cursors into the live tree, or
+            // plan against a spec view the daemon-side capability gate does
+            // not hold (advance-then-swallow = silent mail loss; the
+            // mail-digest skeptic pass, finding 5). Same for the trail path:
+            // a sandboxed daemon's children must not log into the live tree.
+            "CAPTAINHOOK_MAIL_DIR", "CAPTAINHOOK_HARNESS_DIR", "CAPTAINHOOK_LOG",
+        };
 
     private const int StderrCapBytes = 8 * 1024;
 

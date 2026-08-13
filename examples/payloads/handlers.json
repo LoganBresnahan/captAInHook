@@ -17,6 +17,25 @@
       "mode": "oneshot",
       "failMode": "open",
       "budgetMs": 3000
+    },
+    {
+      "name": "mail-digest-ambient",
+      "command": "/home/oof/.captainHook/bin/captainHook",
+      "args": ["mail", "digest", "--role", "main", "--seam", "ambient"],
+      "events": ["SessionStart", "UserPromptSubmit"],
+      "mode": "oneshot",
+      "failMode": "open",
+      "budgetMs": 5000
+    },
+    {
+      "name": "mail-digest-urgent",
+      "command": "/home/oof/.captainHook/bin/captainHook",
+      "args": ["mail", "digest", "--role", "main", "--seam", "urgent", "--resident"],
+      "events": ["PostToolUse"],
+      "mode": "resident",
+      "failMode": "open",
+      "budgetMs": 2000,
+      "readinessTimeoutMs": 10000
     }
   ]
 }

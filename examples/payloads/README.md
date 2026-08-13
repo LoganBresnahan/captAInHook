@@ -81,3 +81,27 @@ it. `memory` is `oneshot` on `Stop` because session edges are rare; a warm
 process there would just idle. When no daemon is running, a resident entry
 **degrades** to oneshot-lifecycle for that one collapsed hook (spawn, serve,
 die) — it never orphans a child.
+
+## The mail digest (ADR-0016)
+
+The example `handlers.json` also carries two **mailbox-bus** entries — not
+scripts but the engine invoking **itself** as its own payload
+(`captainHook mail digest`, decision 7: the strict parser, cursor atomicity,
+and TTL arithmetic live in tested C#, not a shell script):
+
+- `mail-digest-ambient` — `oneshot` on the turn-start seams
+  (`SessionStart`, `UserPromptSubmit`): delivers everything pending for the
+  role as one bounded `inject` digest.
+- `mail-digest-urgent` — `resident` on `PostToolUse` with `--seam urgent`:
+  mid-turn fires on every tool call, so only `urgent`-priority mail
+  qualifies, the budget is a quarter of ambient's, and the process stays
+  warm (a cold JIT start per tool call is the tax the AOT shim killed).
+
+**The `--seam` flag is the registration declaring what CLASS of seam these
+events are** — registration is configuration (ADR-0016 d5/d7): the planner
+degrades against the harness's declared verbs, so a misclassified entry
+noops rather than losing mail. Which events you register the digest on IS
+your deployment's delivery capability; the Stop/reconcile seam is not wired
+for claude-code yet (its spec declares no Stop effects — ADR-0016 phase 5).
+Mail lands on the bus from anything that can run a process:
+`printf '{...envelope...}' | captainHook mail send`.

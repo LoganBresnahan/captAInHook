@@ -106,8 +106,9 @@ public class MailSendTests
         Assert.False(File.Exists(tmp.FilePath));
     }
 
-    /// Only `send` exists today (`mail digest` is phase 4): anything else is
-    /// a loud usage error, never a guess.
+    /// Program.cs routes `digest` to MailDigest before MailSend.Run ever
+    /// sees it, so any subverb reaching here that is not `send` — including
+    /// a directly-passed "digest" — is a loud usage error, never a guess.
     [Fact]
     public void AnUnknownOrMissingSubverb_IsAUsageError()
     {

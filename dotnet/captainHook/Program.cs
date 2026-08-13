@@ -57,9 +57,14 @@ switch (inv.Mode)
         return await UiVerb.RunAsync(Console.Out, Console.Error);
 
     case Mode.MailSend:
-        // Human/CLI verb (ADR-0016 decision 7): one envelope on stdin onto
-        // the durable store. Stdout is fine here — not hook mode.
-        return CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error);
+        // The mail verbs (ADR-0016 decision 7). `send` is a human/CLI verb —
+        // stdout is free for its confirmation line. `digest` is the READ
+        // path: an exec-wire handler command whose stdout IS its answer to
+        // the engine (registered in handlers.json; flags after the subverb
+        // are its registration args, invisible to Invocation on purpose).
+        return inv.EventName == "digest"
+            ? CaptainHook.Mail.MailDigest.Run(args[2..], Console.In, Console.Out, Console.Error)
+            : CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error);
 
     case Mode.Doctor:
     {

@@ -26,7 +26,8 @@ public enum Mode
     /// refuses it like every other non-hook verb.
     Ui,
     /// `mail <subverb>` — the mailbox bus CLI (ADR-0016 decision 7): `mail
-    /// send` appends one validated envelope to the durable store. The subverb
+    /// send` appends one validated envelope to the durable store; `mail
+    /// digest` is the read path (an exec-wire handler command). The subverb
     /// rides EventName; the engine validates it (unknown subverbs are a loud
     /// usage error there, not a parse-time guess here). Engine-only; the shim
     /// refuses it.

@@ -184,7 +184,15 @@ its lessons are imported wholesale (§ Pattern lineage).
    NOT inherit the daemon's environment. Default allowlist: `PATH`, `HOME`,
    `USER`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` — plus the entry's explicit
    `env` map (literal adds) and `passEnv` list (named passthroughs from the
-   daemon env). Nothing else crosses. Rationale: the daemon's environment can
+   daemon env). Nothing else crosses.
+   *Amended 2026-08-12 (ADR-0016 phase 4, skeptic finding):* the engine's own
+   config **paths** — `CAPTAINHOOK_MAIL_DIR`, `CAPTAINHOOK_HARNESS_DIR`,
+   `CAPTAINHOOK_LOG` — join the allowlist. They are ours and carry paths,
+   never secrets; an engine-as-payload child (`mail digest`) that resolved
+   the DEFAULT mail/harness/trail paths while its daemon ran redirected ones
+   would read the wrong mailbox, diverge from the capability gate's spec
+   view (advance-then-swallow = silent mail loss), or log into the live tree
+   from a sandbox. Rationale: the daemon's environment can
    carry agent credentials and API keys; resident children are long-lived; and
    item 10's community handlers must never inherit ambient secrets a user
    didn't name. **Sandboxing (namespaces, seccomp, cgroup caps, network deny)
