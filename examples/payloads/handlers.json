@@ -36,6 +36,33 @@
       "failMode": "open",
       "budgetMs": 2000,
       "readinessTimeoutMs": 10000
+    },
+    {
+      "name": "mail-observer-alpha",
+      "command": "/home/oof/captAInHook/examples/payloads/starter-mail-observer.sh",
+      "events": ["PostToolUse"],
+      "mode": "resident",
+      "failMode": "open",
+      "budgetMs": 2000,
+      "readinessTimeoutMs": 5000,
+      "env": {
+        "MAIL_ROLE": "alpha",
+        "MAIL_PEER": "beta",
+        "CAPTAINHOOK_BIN": "/home/oof/.captainHook/bin/captainHook"
+      }
+    },
+    {
+      "name": "mail-watcher-alpha",
+      "command": "/home/oof/captAInHook/examples/payloads/starter-mail-watcher.sh",
+      "events": ["Stop"],
+      "mode": "oneshot",
+      "failMode": "open",
+      "budgetMs": 25000,
+      "env": {
+        "MAIL_ROLE": "alpha",
+        "MAIL_PEER": "beta",
+        "CAPTAINHOOK_BIN": "/home/oof/.captainHook/bin/captainHook"
+      }
     }
   ]
 }

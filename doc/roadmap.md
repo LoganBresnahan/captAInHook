@@ -1546,6 +1546,55 @@ run live*. The framework underneath is what exists today.
   either way; and an ALL-CAPS override key (`"STOP"`) still misses Canon
   into the permissive path, one step beyond the two documented spellings.
   Suite 903 → 904 green twice.)
+  `first-members-dogfood` (2026-08-14; phase 5's last, deliberately so — the
+  exactly-once campaign and the Stop pin were green, so the gate opened. Two
+  committed MEMBERS, both answering `noop` because a member's value is what
+  reaches ANOTHER agent: `starter-mail-observer.sh` (write-only, d5's cheapest
+  class, resident on PostToolUse — streams reads and edits to the PEER's role
+  and escalates to `urgent` when an edit lands on a path the peer is holding,
+  which is the payload only the hub position makes possible: neither agent can
+  compute it alone) and `starter-mail-watcher.sh` (on-demand LLM member on Stop
+  — a DETERMINISTIC gate, my edits ∩ the peer's reads, decides whether the turn
+  is worth waking a model over, so it is cheap when there is nothing to say).
+  **The reentrancy guard is PROVEN, not asserted** (the plan's new test
+  pattern): a stub `claude` that EXITS NONZERO when `--setting-sources ""` is
+  missing from its argv — the shipped watcher passes it and the model's words
+  reach the bus, while a guard-stripped copy is refused and degrades to the
+  ungarnished handoff, which is what gives the first test its meaning.
+  **The slice's real find, caught while designing the swarm test: two agents
+  cannot get two roles from REGISTRATION at all.** `handlers.json` is global and
+  `--role` is a static string, so both members run in both windows and every
+  observer reports the same role — the bus reduced to one agent talking to
+  itself. The fix is the ADR's own slogan arriving as a requirement — *swarm
+  activation is a dispatch-policy flip* — concretely handler-named rules AND'd
+  with a `project` path-prefix, an excluded handler being filtered BEFORE
+  fan-out (never asked, never restarted), so the wrong-role member costs nothing
+  in the window it does not belong to. The shared-role alternative was rejected
+  in-slice: nothing in the digest filters by sender, so a member would receive
+  its own traffic back. Now DRIVEN rather than described, and mutation-checked —
+  making the observer address its own role fails the sender-hears-nothing
+  assertion. Two smaller findings recorded in the report: a `settings.json` hook
+  edit takes effect MID-SESSION with no restart (assumed otherwise and planned
+  around it; the trail then showed 9 real PostToolUse dispatches from the live
+  session), and WSL2 stepped the wall clock **−89,120ms** during the run while
+  the engine's monotonic `durMs` stayed correct — invariant 2 re-confirmed with
+  the measurement HARNESS as the violator, exactly as in item 19's flake hunt.
+  Live on the deployed stack and measured: observer **3.9–5.0ms** per tool call
+  inside a 10.4ms dispatch / 14–18ms shim round trip, 100.3ms once for the
+  resident cold spawn (the latency doctrine's whole argument), oneshot digest
+  159.8ms on a turn edge; write path → chained envelope with genesis `prev`,
+  read path → a HOOKLESS peer's `mail send` delivered at a real turn-start seam
+  with provenance, exactly-once on the second seam, `mail.deliver` on the ledger
+  with renderHash + bytesInjected, cursor on disk. Deliberately NOT dogfooded
+  and stated: a second real agent loop (the suite covers two sessions/projects/
+  roles with real spawned payloads; the live half used one real agent + a
+  synthetic hookless peer) and a Stop-seam digest left ARMED — a blocking
+  turn-end seam unattended is not worth a demo when our advance is the only
+  livelock guard. **Live tree reverted to exactly as found** (handlers,
+  settings, mail store, views all restored/removed; the append-only trail keeps
+  the record). Field report:
+  doc/dogfood/2026-08-14-first-bus-members.md. 5 tests
+  (`MailDogfoodTests.cs`); suite 904 → 909 green twice.)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

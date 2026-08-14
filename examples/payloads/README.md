@@ -23,7 +23,26 @@ clearly-marked section to change:
 | [`starter-side-effect.sh`](starter-side-effect.sh) | `noop` | `Stop` | do work, change nothing (`background` is not an exec verb — see the header) |
 | [`starter-llm.sh`](starter-llm.sh) | `inject` | `UserPromptSubmit` | splice a *model* into the loop, with the reentrancy guard and a degrade-to-noop path |
 
-⚠ **These four are also the GUI's template gallery** (ADR-0015 d3): `web/`
+**Bus members** — two starters that are not about a VERB but about a POSITION:
+what it looks like to join the mailbox bus (ADR-0016), where the interesting
+thing is not the effect on your own loop (both answer `noop`) but what reaches
+*another agent*:
+
+| script | class | event | the idea |
+| --- | --- | --- | --- |
+| [`starter-mail-observer.sh`](starter-mail-observer.sh) | write-only member | `PostToolUse` | stream this agent's reads and edits onto the bus; escalate to `urgent` when the edit hits a file the PEER is holding — the stale-view warning no single agent can compute |
+| [`starter-mail-watcher.sh`](starter-mail-watcher.sh) | on-demand LLM member | `Stop` | a deterministic gate decides whether a turn is worth waking a model over; past it, a second model writes the handoff note. Carries the `--setting-sources ""` reentrancy guard |
+
+⚠ **Two agents need two ROLES, and registration alone cannot give them that** —
+`handlers.json` is global, so both members run in both windows. Dispatch policy
+is what scopes a member to an agent (ADR-0016's "swarm activation is a
+dispatch-policy flip"): handler-named rules AND'd with a `project` path-prefix.
+The rule shape is in `starter-mail-observer.sh`'s header, and the pairing is
+driven end-to-end in `MailSwarmDaemonSmokeTests`.
+
+⚠ **The four VERB starters are also the GUI's template gallery** (ADR-0015 d3;
+the two bus members above are deliberately NOT gallery templates — the gallery
+is one-per-verb): `web/`
 inlines their text at build time via Vite `?raw`, so **editing a starter script
 changes the shipped GUI on the next `npm run build`**. That is the intended
 coupling — one copy of each script, never a drifting duplicate — but it means a
