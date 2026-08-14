@@ -64,7 +64,13 @@ public class HarnessRegistryTests
         Assert.Equal("session_id", spec.Request.SessionIdField);
         Assert.Equal("cwd", spec.Request.CwdField);
         Assert.Equal(["inject"], spec.Events["UserPromptSubmit"]);
-        Assert.Empty(spec.Events["Stop"]);   // Stop accepts nothing — gate fodder
+
+        // Stop takes `decide` and ONLY decide (ADR-0016 d5's reconcile seam):
+        // the block is the sole loop verb the host offers at turn end, and its
+        // absence of `inject` is what makes the digest's block non-escalating
+        // there rather than a second choice. SessionEnd stays the gate fodder.
+        Assert.Equal(["decide"], spec.Events["Stop"]);
+        Assert.Empty(spec.Events["SessionEnd"]);
     }
 
     [Fact]
@@ -160,6 +166,45 @@ public class HarnessRegistryTests
         Assert.Contains(errors, e => e.Contains("'response.adapter'") && e.Contains("smoke-signals"));
         Assert.Contains(errors, e => e.Contains("events.Stop") && e.Contains("explode"));
     }
+
+    /// A spec's event KEYS canonicalize like everything else that names an
+    /// event. The direction of failure is what makes this matter: dispatch
+    /// canonicalizes its side, so a spec key that does not would declare an
+    /// event no dispatch can name — the lookup misses into the PERMISSIVE
+    /// undeclared path and a deliberately restrictive declaration flips open,
+    /// the one way a capability gate must never fail. (Found by the slice's
+    /// skeptic pass, as fallout from Canon learning single words.)
+    [Fact]
+    public void SpecEventKeys_Canonicalize_SoARestrictiveDeclarationStillBinds()
+    {
+        using var doc = JsonDocument.Parse("""
+            { "name": "quiet", "response": { "adapter": "generic-json" },
+              "events": { "stop": { "effects": [] }, "user-prompt-submit": { "effects": ["inject"] } } }
+            """);
+
+        var spec = HarnessSpec.TryParse(doc.RootElement, out var errors);
+        Assert.Empty(errors);
+        Assert.Equal(["Stop", "UserPromptSubmit"], spec!.Events.Keys.Order());
+
+        // ...and it BINDS: the silencer the user wrote actually gates.
+        Assert.IsType<Effect.Noop>(Harness.ApplyCapabilityGate(
+            spec, TestUtil.Ev("Stop"), new Effect.Decide(Verdict.Deny, "blocked")));
+    }
+
+    /// Two spellings of one event is a contradiction, not a merge: the spec
+    /// says two different things about the same seam, and last-write-wins
+    /// would silently pick one.
+    [Fact]
+    public void SpecDeclaringOneEventTwice_IsMalformed()
+    {
+        using var doc = JsonDocument.Parse("""
+            { "name": "twofaced", "response": { "adapter": "generic-json" },
+              "events": { "Stop": { "effects": ["decide"] }, "stop": { "effects": [] } } }
+            """);
+
+        Assert.Null(HarnessSpec.TryParse(doc.RootElement, out var errors));
+        Assert.Contains(errors, e => e.Contains("duplicate event declaration") && e.Contains("Stop"));
+    }
 }
 
 /// GOLDEN STRINGS. These pin the exact bytes each adapter emits — the
@@ -196,6 +241,62 @@ public class ResponseAdapterGoldenTests
 
         // Noop is the bare two-character object — the most common live output.
         Assert.Equal("{}", Claude("Stop", new Effect.Noop()));
+    }
+
+    /// The turn-end exception (ADR-0016 decision 5; roadmap item 20, phase 5).
+    /// Stop has NO member in the host's `hookSpecificOutput` union, so a decide
+    /// there speaks the TOP-LEVEL `decision`/`reason` pair instead. Getting it
+    /// wrong neither throws nor warns — the union parse just fails and the
+    /// block evaporates — which is why this is pinned as exact bytes and why
+    /// the shape was read off the shipped host's own schemas rather than the
+    /// published docs (doc/platform.md § The Stop block shape).
+    [Fact]
+    public void ClaudeHookJson_StopDecide_IsTheTopLevelBlock()
+    {
+        Assert.Equal(
+            """{"decision":"block","reason":"you have unopened mail"}""",
+            Claude("Stop", new Effect.Decide(Verdict.Deny, "you have unopened mail")));
+
+        // The envelope must be ABSENT, not merely different: it is the
+        // presence of `hookSpecificOutput` with an unmatched `hookEventName`
+        // that fails the parse and swallows the block.
+        var block = Claude("Stop", new Effect.Decide(Verdict.Deny, "x"));
+        Assert.DoesNotContain("hookSpecificOutput", block);
+        Assert.DoesNotContain("permissionDecision", block);
+
+        // A null reason keeps the empty-string convention the nested shape has.
+        Assert.Equal(
+            """{"decision":"approve","reason":""}""",
+            Claude("Stop", new Effect.Decide(Verdict.Allow, null)));
+
+        // `ask` has no word in the top-level vocabulary — `approve|block` is
+        // the whole of it, and a third value fails the host's schema parse,
+        // discarding the decision — so it degrades to noop rather than
+        // shipping something unparseable.
+        Assert.Equal("{}", Claude("Stop", new Effect.Decide(Verdict.Ask, "well?")));
+
+        // SubagentStop is the same contract, declared decide-only like Stop.
+        Assert.Equal(
+            """{"decision":"block","reason":"r"}""",
+            Claude("SubagentStop", new Effect.Decide(Verdict.Deny, "r")));
+    }
+
+    /// The branch is EVENT-shaped, not decide-shaped: every other event keeps
+    /// the nested `permissionDecision` it has always emitted. This is the
+    /// guard against a later "simplification" that hoists the top-level shape
+    /// everywhere and silently breaks the tool gate.
+    [Fact]
+    public void ClaudeHookJson_DecideElsewhere_StaysNested()
+    {
+        foreach (var ev in new[] { "PreToolUse", "UserPromptSubmit" })
+        {
+            var json = Claude(ev, new Effect.Decide(Verdict.Deny, "nope"));
+            Assert.Equal(
+                "{\"hookSpecificOutput\":{\"hookEventName\":\"" + ev
+                    + "\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"nope\"}}",
+                json);
+            Assert.DoesNotContain("\"decision\"", json);
+        }
     }
 
     [Fact]
@@ -237,8 +338,8 @@ public class ResponseAdapterGoldenTests
 public class CapabilityGateTests
 {
     // The gate always runs against a real spec shape — the embedded claude-code
-    // default, whose Stop event declares NO effects and which never declares
-    // an event named "SomethingBrandNew".
+    // default, whose Stop/SubagentStop events declare decide ONLY and which
+    // never declares an event named "SomethingBrandNew".
     private static readonly HarnessSpec ClaudeCode = HarnessTestUtil.EmbeddedOnlyRegistry().Get("claude-code");
 
     [Fact]
@@ -261,6 +362,36 @@ public class CapabilityGateTests
         Assert.Equal("Stop", warn.Fields.HookEvent);
         Assert.Equal("claude-code", warn.Fields.Data!["harness"]);
         Assert.Equal("inject", warn.Fields.Data!["effect"]);
+    }
+
+    /// The same rule one layer down, at a granularity the gate cannot see: the
+    /// gate reasons about effect KINDS and `decide` is genuinely declared on
+    /// Stop, so only the adapter knows that the top-level vocabulary there is
+    /// `approve|block` and has no word for `ask`. A third word fails the
+    /// host's schema parse and the whole decision is discarded — but it is
+    /// still mail (or a gate) that went nowhere, so it is loud.
+    [Fact]
+    public void UnrepresentableVerdictOnStop_DowngradesToNoop_AndWarns()
+    {
+        using var captured = new CapturedLog();
+
+        var json = ResponseAdapters.Get("claude-hook-json")
+            .Serialize(TestUtil.Ev("Stop"), new Effect.Decide(Verdict.Ask, "well?"));
+
+        Assert.Equal("{}", json);
+        var warn = Assert.Single(captured.Events, e => e.Evt == "harness.verdictUnsupported");
+        Assert.Equal("warn", warn.Lvl);
+        Assert.Equal("harness", warn.Src);
+        Assert.Equal("Stop", warn.Fields.HookEvent);
+        Assert.Equal("claude-hook-json", warn.Fields.Data!["adapter"]);
+        Assert.Equal("ask", warn.Fields.Data!["verdict"]);
+
+        // The representable verdicts stay silent — a warn per block would be
+        // noise on the seam's happy path.
+        Assert.Single(captured.Events, e => e.Evt == "harness.verdictUnsupported");
+        ResponseAdapters.Get("claude-hook-json")
+            .Serialize(TestUtil.Ev("Stop"), new Effect.Decide(Verdict.Deny, "mail"));
+        Assert.Single(captured.Events, e => e.Evt == "harness.verdictUnsupported");
     }
 
     [Fact]
@@ -297,6 +428,23 @@ public class CapabilityGateTests
         Assert.Same(noop, Harness.ApplyCapabilityGate(ClaudeCode, TestUtil.Ev("Stop"), noop));
 
         Assert.Empty(captured.Events);   // the happy path is silent
+    }
+
+    /// SubagentStop is declared decide-only precisely so this flattens: were
+    /// the event undeclared, an Inject would pass the permissive gate and the
+    /// adapter would ship a nested `hookSpecificOutput` the host's union has
+    /// no member for — the silent turn-end loss, one event over from Stop.
+    [Fact]
+    public void InjectOnSubagentStop_FlattensToNoop()
+    {
+        using var captured = new CapturedLog();
+
+        var final = Harness.ApplyCapabilityGate(
+            ClaudeCode, TestUtil.Ev("SubagentStop"), new Effect.Inject("mail"), dispatchId: "d1234567");
+
+        Assert.IsType<Effect.Noop>(final);
+        var warn = Assert.Single(captured.Events, e => e.Evt == "harness.effectUnsupported");
+        Assert.Equal("SubagentStop", warn.Fields.HookEvent);
     }
 }
 
@@ -341,6 +489,19 @@ public class RequestParsingTests
         // UserPromptSubmit (the one the live deployment fires most).
         using var empty = JsonDocument.Parse("{}");
         Assert.Equal("UserPromptSubmit", Harness.ParseEvent(spec, null, empty.RootElement).Type);
+
+        // A SINGLE-WORD event is a one-segment kebab and canonicalizes the
+        // same way. It used to pass through untouched, so `hook stop` — what
+        // the install template's {event-kebab} writes into settings.json —
+        // produced the event `stop`, which matches no spec declaration: every
+        // capability lookup missed into the permissive undeclared path, and
+        // the digest saw no verbs to deliver with. Silent while nothing was
+        // registered at turn end; the whole seam the moment something is.
+        Assert.Equal("Stop", Harness.ParseEvent(spec, "stop", empty.RootElement).Type);
+        Assert.Equal("Stop", Harness.Canon("stop"));
+        Assert.Equal("Stop", Harness.Canon("Stop"));       // idempotent
+        Assert.Equal("SessionEnd", Harness.Canon("session-end"));
+        Assert.Equal("", Harness.Canon(""));
     }
 }
 

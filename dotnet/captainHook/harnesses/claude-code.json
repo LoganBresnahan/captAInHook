@@ -12,7 +12,8 @@
     "UserPromptSubmit": { "effects": ["inject"] },
     "PreToolUse":       { "effects": ["decide", "inject"] },
     "PostToolUse":      { "effects": ["inject", "replace"] },
-    "Stop":             { "effects": [] },
+    "Stop":             { "effects": ["decide"] },
+    "SubagentStop":     { "effects": ["decide"] },
     "SessionEnd":       { "effects": [] }
   },
   "install": {

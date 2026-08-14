@@ -53,6 +53,8 @@ harness's wire format — with a structured JSONL trail the whole way.
 │        │                                                                  │
 │        ▼                                                                  │
 │   spec's response adapter (closed set: claude-hook-json / generic-json)   │
+│   rendering may differ PER EVENT: a decide on Stop is the top-level       │
+│   {"decision":"block"} pair, not the nested permissionDecision shape      │
 └────────┼──────────────────────────────────────────────────────────────────┘
          ▼
  STDOUT  one effect JSON in the harness's wire format  ← the ONLY stdout bytes
@@ -167,6 +169,29 @@ serialized by the adapter the spec names (`claude-hook-json` or
 `generic-json`) — a CLOSED, coded set: data selects *which* adapter, code
 defines *what* it emits, and config never becomes a template language.
 
+An adapter may render the same effect kind differently **per event**, and
+`claude-hook-json` does: at turn end the host has no `hookSpecificOutput`
+member for `Stop`, so a `Decide` there emits the top-level
+`{"decision":"block","reason":…}` pair instead of the `permissionDecision`
+shape every other event takes (`DecidesAtTopLevel`; `SubagentStop` rides the
+same contract and is declared decide-only in the spec exactly like Stop, so
+an inject there is flattened by the gate rather than shipped unparseable).
+This is *coded-adapter work inside the closed set* per
+ADR-0003, not configuration — the wire format is code's business. It is also
+the sharpest failure surface in this flow: the nested shape on Stop matches no
+union member, so the host drops the **decision** — the failure surfaces only
+as a verbose-mode non-blocking hook error — and a
+turn-end block that does not block reads like a healthy
+noop. The exact contract, the version it was read from, and how to re-probe it
+after a harness upgrade are in doc/platform.md § The Stop block shape.
+
+Event-name canonicalization is load-bearing for all of it: `Harness.Canon`
+PascalCases the kebab name the install template writes (`hook {event-kebab}`),
+including **single-word** events — `stop` → `Stop`. A name that does not
+canonicalize misses every spec declaration, falls through the capability gate's
+permissive undeclared path, and is echoed back as a `hookEventName` the host
+rejects outright.
+
 ## Fan-out under a budget
 
 Handlers run concurrently via `Task.WhenAll` on the thread pool, so dispatch
@@ -261,12 +286,12 @@ relocated.
 | dispatch policy gate (the front door — resolve/evaluate/short-circuit, both paths, hot reload) | [dispatch-policy.md](dispatch-policy.md); `Core/DispatchPolicy.cs`, `HookRun.PolicyGateFor` |
 | `Doctor` (reaper: PID-reuse guard + path lineage), `DoctorVerdict` | `dotnet/captainHook/Core/Doctor.cs` |
 | harness resolution, stdin read, dispatchId, stdout write (`HookRun.CollapsedAsync`); Console wiring in `Program.cs` | `dotnet/captainHook/Core/HookRun.cs` |
-| `HarnessSpec` (+`TryParse`), `HarnessRegistry`, `Harness.ParseEvent`/`Canon`, `Harness.ApplyCapabilityGate`, `IResponseAdapter` + `ResponseAdapters` | `dotnet/captainHook/Core/Harness.cs` |
+| `HarnessSpec` (+`TryParse`), `HarnessRegistry`, `Harness.ParseEvent`/`Canon`, `Harness.ApplyCapabilityGate`, `IResponseAdapter` + `ResponseAdapters`, `ClaudeHookJsonAdapter.DecidesAtTopLevel` (the Stop block shape — doc/platform.md) | `dotnet/captainHook/Core/Harness.cs` |
 | default harness spec (embedded resource) | `dotnet/captainHook/harnesses/claude-code.json` |
 | `Registry` (spec registration), `HandlerSpec`, `Dispatcher` (ctor spawns workers), `RunGuarded`, `Merge`, `Trace` | `dotnet/captainHook/Core/Dispatcher.cs` |
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
 | `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged/abandoned), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared` (src `harness`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `policy.skip/exclude/malformed/reload` (src `policy`); `doctor.verdict` (src `doctor`) |
+| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged/abandoned), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared`, `harness.verdictUnsupported` (src `harness`; the last fires from the adapter, which has no dispatchId in scope — it carries `hookEvent` + `adapter` + `verdict`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `policy.skip/exclude/malformed/reload` (src `policy`); `doctor.verdict` (src `doctor`) |
 | pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `AtMostOnceTests.cs` (commit-marker boundary, mid-write deadline → truncated frame dispatches nothing, one-dispatch-per-id accounting); `SoakTests.cs` (round-trip golden wire; 200-dispatch soak: serialization permutation, queue count, escalation under load); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md`; `doc/adr/0006-dispatch-policy.md` |

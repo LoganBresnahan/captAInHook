@@ -539,12 +539,16 @@ public class HandlersHotReloadTests : IDisposable
         Assert.True(Alive(pidA));
         Assert.True(File.Exists(RecordPath(pidA)));
 
-        // --- ADD b (resident on Stop), a UNCHANGED ---
+        // --- ADD b (resident on PostToolUse), a UNCHANGED ---
+        // Not Stop: this probe reads a PID out of the echo server's INJECT,
+        // and since phase 5's data edit Stop declares `decide` alone, so the
+        // capability gate correctly flattens an inject there to noop and the
+        // pong never arrives. The reload behavior under test is event-neutral.
         File.WriteAllText(path, HandlersJson(
             ResidentJson("a", EchoServer, "UserPromptSubmit"),
-            ResidentJson("b", EchoServer, "Stop")));
+            ResidentJson("b", EchoServer, "PostToolUse")));
         Touch(path, 2);
-        var pidB = await PollPidAsync("stop", "b");        // first Stop hook reconciles + warms b
+        var pidB = await PollPidAsync("post-tool-use", "b");   // first hook reconciles + warms b
         Assert.NotEqual(pidA, pidB);
         // No churn: a still answers from the SAME warm child.
         Assert.True(TryPid(await ForwardBodyAsync("user-prompt-submit", "achk0001"), out var pidA2));

@@ -98,7 +98,22 @@ public sealed record HarnessSpec(
                             kinds.Add(kind);
                     }
                 }
-                events[prop.Name] = kinds;
+                // Event KEYS canonicalize at load, exactly as ExecHandlersFile
+                // does for registrations — both sides of the capability lookup
+                // must agree, and dispatch canonicalizes its side. Without
+                // this, a spec written `"stop"` (or `"user-prompt-submit"`)
+                // declares an event no dispatch can ever name: the lookup
+                // misses into the permissive undeclared path and a
+                // deliberately restrictive declaration silently flips OPEN,
+                // which is the one direction a capability gate must never
+                // fail. Two spellings of one event is a contradiction, not a
+                // merge — the spec says two different things about the same
+                // seam and we refuse to guess which was meant.
+                var key = Harness.Canon(prop.Name);
+                if (events.ContainsKey(key))
+                    errs.Add($"events.{prop.Name}: duplicate event declaration — '{key}' is already declared");
+                else
+                    events[key] = kinds;
             }
         }
 
@@ -235,10 +250,17 @@ public static class Harness
     }
 
     /// kebab-case (cavemem style) -> PascalCase (host style).
+    ///
+    /// A SINGLE-WORD event is just a one-segment kebab and takes the same
+    /// rule: the earlier `Contains('-')` short-circuit passed `stop` through
+    /// untouched, which read as a distinct event from the spec's `Stop` —
+    /// every declaration missed, so the capability gate fell to its permissive
+    /// undeclared path and any emitted `hookEventName` was a word the host
+    /// rejects. Harmless while no single-word event was wired up; load-bearing
+    /// the moment one is (ADR-0016 d5's Stop seam). Already-PascalCase input
+    /// is unchanged, which is why this stays idempotent for every caller.
     public static string Canon(string s) =>
-        s.Contains('-')
-            ? string.Concat(s.Split('-').Select(p => p.Length == 0 ? p : char.ToUpperInvariant(p[0]) + p[1..]))
-            : s;
+        string.Concat(s.Split('-').Select(p => p.Length == 0 ? p : char.ToUpperInvariant(p[0]) + p[1..]));
 
     /// Capability gate, applied AFTER Merge to the single merged effect.
     /// Declared event + undeclared effect kind => warn and downgrade to Noop
@@ -314,13 +336,70 @@ public static class ResponseAdapters
 /// docs before relying on them in a live settings.json wire-up.
 internal sealed class ClaudeHookJsonAdapter : IResponseAdapter
 {
+    /// Events whose blocking verb rides the TOP-LEVEL `decision`/`reason` pair
+    /// instead of a `hookSpecificOutput` member — ADR-0016 decision 5's
+    /// "coded-adapter work inside ADR-0003's closed set, not config".
+    ///
+    /// The host parses `hookSpecificOutput` as a UNION keyed on
+    /// `hookEventName` and declares NO member for Stop, so the
+    /// PreToolUse-shaped `permissionDecision` every other event takes is not
+    /// merely ignored at turn end — it fails the union parse and the block is
+    /// lost SILENTLY, which is the whole hazard this branch exists to close.
+    /// Verified against the shipped host's own schemas, not the published
+    /// docs, which describe a different (nested) Stop shape; the version this
+    /// was read from and how to re-probe it live in
+    /// doc/platform.md § The Stop block shape.
+    ///
+    /// `SubagentStop` rides the same contract and is declared decide-only in
+    /// the spec exactly like Stop: were it UNDECLARED, an Inject there would
+    /// pass ApplyCapabilityGate's permissive path and ship the nested shape —
+    /// the same silent loss this branch closes for Stop, one event over.
+    private static bool DecidesAtTopLevel(string eventType) =>
+        eventType is "Stop" or "SubagentStop";
+
     public string Serialize(HookEvent e, Effect eff) => eff switch
     {
         Effect.Inject inj => J(new { hookSpecificOutput = new { hookEventName = e.Type, additionalContext = inj.Text } }),
+        Effect.Decide dec when DecidesAtTopLevel(e.Type) => TopLevelDecision(e, dec),
         Effect.Decide dec => J(new { hookSpecificOutput = new { hookEventName = e.Type, permissionDecision = dec.Verdict.ToString().ToLowerInvariant(), permissionDecisionReason = dec.Reason ?? "" } }),
         Effect.Replace rep => J(new { hookSpecificOutput = new { hookEventName = e.Type, replaceOutput = rep.Text } }),
         _ => "{}",
     };
+
+    /// The top-level vocabulary is `approve|block` — NOT the allow/deny/ask
+    /// the nested shape speaks — and any third word fails the host's schema
+    /// validation, discarding the whole decision (surfaced only as a
+    /// non-blocking hook error). `ask` has no meaning at turn end anyway (there is no
+    /// pending action to ask about), so it degrades to noop on the house rule
+    /// ApplyCapabilityGate already states one layer up: never send a harness
+    /// something it cannot represent. The gate cannot make this call itself —
+    /// it reasons about effect KINDS, and `decide` is genuinely declared here;
+    /// only the adapter knows which VERDICTS the wire has words for.
+    private static string TopLevelDecision(HookEvent e, Effect.Decide dec) => dec.Verdict switch
+    {
+        Verdict.Deny => J(new { decision = "block", reason = dec.Reason ?? "" }),
+        // Unreachable through a real dispatch — Merge has no Allow case, so a
+        // lone Decide(Allow) falls through to Noop and never arrives here. It
+        // is spelled out anyway because the adapter's job is to be TOTAL over
+        // the wire vocabulary: the day Merge learns an allow, this must not be
+        // the place that has to be remembered.
+        Verdict.Allow => J(new { decision = "approve", reason = dec.Reason ?? "" }),
+        _ => Unrepresentable(e, dec.Verdict),
+    };
+
+    private static string Unrepresentable(HookEvent e, Verdict verdict)
+    {
+        Log.Warn("harness", "harness.verdictUnsupported", new LogFields
+        {
+            HookEvent = e.Type,
+            Data = new Dictionary<string, object>
+            {
+                ["adapter"] = "claude-hook-json",
+                ["verdict"] = verdict.ToString().ToLowerInvariant(),
+            },
+        });
+        return "{}";
+    }
 
     static string J(object o) => JsonSerializer.Serialize(o);
 }

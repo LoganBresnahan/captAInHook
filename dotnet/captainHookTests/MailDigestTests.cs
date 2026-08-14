@@ -629,22 +629,27 @@ public class MailDigestRunTests
 
     // ---- the reconcile class ----------------------------------------------
 
-    /// claude-code's Stop declares NO effects today (the phase-5 data edit is
-    /// deliberately unshipped): a reconcile-class registration there answers
-    /// noop and advances nothing — mail waits for a capable seam.
+    /// The SHIPPED claude-code spec, not a synthetic one: phase 5's data edit
+    /// declares `Stop: ["decide"]`, so a reconcile-class registration there
+    /// blocks with the digest as the reason and advances the cursor. Stop
+    /// declares decide and NOT inject, which is exactly what makes the block
+    /// the non-escalating vehicle here rather than a second-choice one.
     [Fact]
-    public void ReconcileSeam_OnEffectlessStop_Noops()
+    public void ReconcileSeam_OnTheRealStopSpec_BlocksAndAdvances()
     {
         using var tmp = new MailStoreTempDir();
-        Send(tmp, DigestFixtures.Env("m-1"));
+        Send(tmp, DigestFixtures.Env("m-1", body: "unfinished thread"));
 
         var (exit, stdout, _) = RunArgs(tmp.Dir,
             DigestFixtures.Request(type: "Stop"),
             ["--role", "main", "--seam", "reconcile"]);
 
         Assert.Equal(0, exit);
-        Assert.Equal("noop", Answer(stdout).GetProperty("effect").GetString());
-        Assert.Empty(Directory.GetFiles(tmp.Dir, "cursor.*"));
+        var answer = Answer(stdout);
+        Assert.Equal("decide", answer.GetProperty("effect").GetString());
+        Assert.Equal("deny", answer.GetProperty("verdict").GetString());
+        Assert.Contains("unfinished thread", answer.GetProperty("reason").GetString());
+        Assert.NotEmpty(Directory.GetFiles(tmp.Dir, "cursor.*"));
     }
 
     /// With a spec that DOES declare decide on Stop, the reconcile seam
@@ -1016,7 +1021,10 @@ public class MailDigestLedgerTests
     [Theory]
     [InlineData("quiet urgent seam", "PostToolUse", new[] { "--role", "main", "--seam", "urgent" })]
     [InlineData("event the spec never declares", "BrandNewEvent", new[] { "--role", "main" })]
-    [InlineData("effectless reconcile seam", "Stop", new[] { "--role", "main", "--seam", "reconcile" })]
+    // Stop declares `decide` since phase 5's data edit, so the effectless case
+    // moves to SessionEnd — still `"effects": []` and still the shape that
+    // must never advance: an event whose spec grants the digest no verb.
+    [InlineData("effectless reconcile seam", "SessionEnd", new[] { "--role", "main", "--seam", "reconcile" })]
     public void NoopAnswers_PutNothingOnTheLedger(string why, string type, string[] argv)
     {
         using var log = new CapturedLog();
@@ -1259,7 +1267,7 @@ public class MailDigestDaemonSmokeTests : IDisposable
             Path.GetDirectoryName(corelib)!)!)!)!;
     }
 
-    private string WriteHandlers()
+    private string WriteHandlers(string hookEvent = "UserPromptSubmit", params string[] extraArgs)
     {
         var handlers = new
         {
@@ -1270,8 +1278,8 @@ public class MailDigestDaemonSmokeTests : IDisposable
                 {
                     name = "mail-digest",
                     command = Path.Combine(AppContext.BaseDirectory, "captainHook"),
-                    args = new[] { "mail", "digest", "--role", "main" },
-                    events = new[] { "UserPromptSubmit" },
+                    args = new[] { "mail", "digest", "--role", "main" }.Concat(extraArgs).ToArray(),
+                    events = new[] { hookEvent },
                     mode = "oneshot",
                     failMode = "open",
                     budgetMs = 20000,
@@ -1363,6 +1371,62 @@ public class MailDigestDaemonSmokeTests : IDisposable
         // through the suite's swapped sink, so its own dispatch.* events never
         // reach the sandbox trail.)
         Assert.Equal("prompt01", deliver.GetProperty("dispatchId").GetString());
+
+        stop.Cancel();
+        Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));
+    }
+
+    /// The reconcile seam on the REAL wire (roadmap item 20, phase 5). This is
+    /// the only test that sees what Claude Code would actually read at turn
+    /// end: a spawned digest child, the shipped `Stop: ["decide"]` spec, the
+    /// capability gate, and claude-hook-json's top-level branch — the layers
+    /// the verb-level tests each stop short of. Two things are being pinned at
+    /// once, and they fail in opposite directions:
+    ///
+    ///   1. the SHAPE — a nested `hookSpecificOutput` here parses as nothing
+    ///      and the block is lost silently, so the turn ends with mail unread;
+    ///   2. N3's TERMINATION — a reconcile turn that generates no new inbound
+    ///      must let the SECOND Stop pass, or block-on-unread is an infinite
+    ///      loop. cursor-advance-on-inject is the whole guard, and here it is
+    ///      advancing on a DECIDE, across process boundaries, on real files.
+    [Fact]
+    public async Task Daemon_StopSeam_BlocksWithTheTopLevelShape_ThenTerminates()
+    {
+        if (!ProcessGroup.Prefix.Pgroup) return;   // xunit 2.x: no dynamic skip
+
+        var mailDir = Path.Combine(_home, ".captainHook", "mail");
+        var store = new MailStore(mailDir);
+        Assert.IsType<MailAppend.Appended>(
+            store.Append(DigestFixtures.Env("m-stop", body: "the thread you left open")));
+
+        var handlersPath = WriteHandlers("Stop", "--seam", "reconcile");
+        using var stop = new CancellationTokenSource();
+        var daemon = Task.Run(() => DaemonHost.RunAsync(
+            _tmp.Paths, NoHarnessDir(), stop.Token, handlersPath: handlersPath));
+        await PollUntilAsync(async () =>
+            await ShimClient.TryForwardAsync(_tmp.Paths.SocketPath,
+                new HookRequest("warmup00", "session-start", "claude-code", "{}"u8.ToArray()))
+                is ForwardOutcome.Answered,
+            TimeSpan.FromSeconds(15), "daemon up");
+
+        var payload = Encoding.UTF8.GetBytes("""{"session_id":"s-stop"}""");
+        var first = Body(await ShimClient.TryForwardAsync(_tmp.Paths.SocketPath,
+            new HookRequest("stop01", "stop", "claude-code", payload)));
+
+        // Parsed, not substring-matched: the fields are the contract.
+        var blocked = JsonDocument.Parse(first).RootElement;
+        Assert.Equal("block", blocked.GetProperty("decision").GetString());
+        Assert.Contains("the thread you left open", blocked.GetProperty("reason").GetString());
+        Assert.False(blocked.TryGetProperty("hookSpecificOutput", out _),
+            "a hookSpecificOutput envelope on Stop matches no member of the host's union — the block would be dropped");
+
+        // Second Stop, same session, nothing new sent: the digest has nothing
+        // pending, answers noop, and the merged answer is the bare object that
+        // lets the turn end. Without the advance this is where a livelock
+        // would show up as a second block.
+        var second = Body(await ShimClient.TryForwardAsync(_tmp.Paths.SocketPath,
+            new HookRequest("stop02", "stop", "claude-code", payload)));
+        Assert.Equal("{}", second.Trim());
 
         stop.Cancel();
         Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));

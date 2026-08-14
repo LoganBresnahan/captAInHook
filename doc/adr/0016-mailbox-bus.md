@@ -259,6 +259,58 @@ shared edit log. The bus must not know or care what backs a member:
    eat a delivered digest — registration guidance is to give the digest's
    seam events to itself.
 
+   *As built (2026-08-13, slice `stop-reconcile-seam`) — the Stop seam turned
+   on.* The data edit landed as `"Stop": { "effects": ["decide"] }` — decide
+   and ONLY decide, which is what makes the block the non-escalating vehicle
+   here rather than a second choice, since the vehicle rule prefers inject
+   wherever inject exists. **The conditional above fired**: the adapter's
+   `Decide` rendering is NOT event-appropriate for Stop, so the coded-adapter
+   branch this decision reserved was needed. Concretely — read off the shipped
+   host's own schemas rather than its published docs, which describe a
+   different (nested) shape — `hookSpecificOutput` is a union keyed on
+   `hookEventName` with **no `Stop` member at all**, so the `permissionDecision`
+   shape every other event takes fails the union parse and the block is
+   dropped with no error: the "ships silently" hazard, made concrete.
+   `ClaudeHookJsonAdapter.DecidesAtTopLevel` renders Stop (and `SubagentStop`,
+   the same contract, declared decide-only in the spec exactly like Stop so an
+   inject there flattens at the gate instead of shipping the unparseable
+   nested shape) as the top-level `{"decision":"block","reason":…}` pair,
+   with `ask` — a word the top-level vocabulary lacks; a third word fails the
+   host's schema parse and the whole decision is discarded — degrading to
+   noop on the existing never-send-what-it-cannot-represent rule. The full contract, the harness
+   version it was read from, and the re-probe command live in
+   doc/platform.md § The Stop block shape.
+
+   Building it surfaced a **defect the seam could not work around**:
+   `Harness.Canon` short-circuited on names without a hyphen, so a
+   single-word event stayed lowercase — and the install template writes
+   `hook {event-kebab}`, making `stop` exactly what arrives live. That name
+   matched no spec declaration, so every capability lookup missed into the
+   permissive undeclared path, the digest saw no declared verbs and noop'd
+   forever, and any echoed `hookEventName` would have been a word the host
+   rejects outright. Harmless for as long as no single-word event was wired
+   up; the whole seam the moment one is. A single word is now just a
+   one-segment kebab and takes the same rule. Fallout from that fix, found by
+   the same pass and closed with it: a spec's event KEYS were stored raw into
+   a case-sensitive map, so an override declaring `"stop"` would now miss
+   every lookup and fall to the permissive undeclared path — a deliberately
+   restrictive declaration flipping OPEN, the one direction a capability gate
+   must never fail. Spec keys canonicalize at load like registrations already
+   did, and two spellings of one event is malformed rather than a merge.
+
+   The phase-4 hazard above gets SHARPER here and is still not engineered
+   around: `Merge` takes the FIRST deny in registration order, so a
+   deny-answering handler registered ahead of the digest on Stop wins and the
+   digest's reason — the rendered mail — is discarded. The cursor has already
+   advanced and `mail.deliver` has already been written with a `renderHash`
+   attesting to what was shown, so that mail is skipped permanently AND the
+   ledger claims a delivery that never reached the model — d10's "may
+   under-claim, never claim falsely" broken from the outside. Registration
+   guidance is unchanged and now load-bearing rather than advisory: **give the
+   digest its seam events to itself.** The fix, if a second Stop handler ever
+   becomes legitimate, is for `Merge` to concatenate deny reasons rather than
+   take the first.
+
 6. **Addresses are stable roles, not session ids.** `to: "main"` names a role;
    the store maps role → live session(s) at delivery time (each live session
    holding the role has its own cursor and receives its own delivery).
@@ -451,6 +503,30 @@ shared edit log. The bus must not know or care what backs a member:
 - **N3 · The Stop seam can loop.** Block-on-unread must terminate;
   cursor-advance-on-inject (decision 4) is the guard and MUST be pinned by a
   test shaped "reconcile turn generates no new inbound ⇒ second Stop passes."
+
+  *As built (2026-08-13, `stop-reconcile-seam`).* Pinned end to end through a
+  real daemon, a spawned digest child, and the live adapter. Two things the
+  slice's skeptic pass established about the guard's surroundings, neither
+  engineered around, both stated so nobody assumes otherwise:
+
+  **The harness offers no second guard.** The host has no loop cap of its own
+  — `Stop` and `SubagentStop` share one runner, and `stop_hook_active` is
+  merely *passed to* hooks, never enforced. Termination therefore rests
+  entirely on our cursor advance, for every handler answering at that seam,
+  not only the digest.
+
+  **Which makes fail-closed on Stop a livelock.** `Dispatcher.Fail` answers
+  `Decide(Deny)` when a `FailMode.Closed` handler crashes, so such a handler,
+  broken at turn end, blocks every Stop forever with no bound. Declaring
+  `Stop: ["decide"]` is what put that answer on the wire — before the data
+  edit the capability gate flattened it to Noop. Not reachable in any shipped
+  configuration (exec handlers default to fail-open, and nothing fail-closed
+  registers at turn end), so it is recorded rather than guarded: registration
+  guidance is that **fail-closed handlers do not belong on Stop**, and the
+  belt-and-braces fix, if the hazard ever becomes real, is to honor
+  `stop_hook_active` from the Stop payload — answer noop when it is true and
+  nothing new is pending — which costs the ability to deliver mail that
+  arrived during a reconcile turn.
 - **N4 · The store grows unbounded** until rotation mechanics land (ADR-0009's
   analogue; `gen` in the cursor reserves them, d13 sets the retention policy —
   archived generations kept by default). Acceptable for v1 dogfood volume; not

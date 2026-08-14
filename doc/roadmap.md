@@ -1439,6 +1439,113 @@ run live*. The framework underneath is what exists today.
   to reproduce across 7 subsequent fully-captured runs; the watch stands,
   and full-run output is now captured to a file as a habit. 15 campaign
   tests (`MailCursorEdgeTests.cs`); suite 882 → 897 green twice.)
+  `stop-reconcile-seam` (2026-08-13; phase 5's third — the turn-end seam
+  turned on. ADR-0016 d5 left one conditional open: enabling Stop is a data
+  edit UNLESS the adapter's `Decide` rendering is not event-appropriate there,
+  in which case it is coded-adapter work. **The conditional fired**, and
+  finding out which way it fell was most of the slice. The published hooks
+  docs were fetched twice and gave two DIFFERENT nested shapes
+  (`hookSpecificOutput.decision`, then `.permissionDecision`), neither
+  matching what the installed harness actually parses — so the contract was
+  read off the shipped binary's own schemas instead: `hookSpecificOutput` is
+  a union keyed on `hookEventName` with **17 members and no `Stop` among
+  them**, while the top level carries `decision: approve|block` + `reason`,
+  and `block` becomes a message appended to the conversation (which is what
+  "prevents stopping" mechanically IS). So the nested shape at turn end
+  matches no member, fails the parse, and drops the block with no error —
+  the "a wrong Stop block shape ships silently" hazard, made concrete rather
+  than assumed. Shipped: `"Stop": { "effects": ["decide"] }` (decide and only
+  decide — which is what makes the block non-escalating, since the vehicle
+  rule prefers inject wherever inject exists) plus
+  `ClaudeHookJsonAdapter.DecidesAtTopLevel`, covering `SubagentStop` too as
+  the same contract reachable through the capability gate's permissive
+  undeclared path, and degrading `ask` — a word the top-level vocabulary
+  lacks and the host THROWS on — to noop on the existing
+  never-send-what-it-cannot-represent rule.
+  **One real defect found, and the seam could not have worked around it**:
+  `Harness.Canon` short-circuited on names with no hyphen, so a single-word
+  event stayed lowercase — and the install template writes
+  `hook {event-kebab}`, making `stop` precisely what arrives on the live
+  wire. It matched no spec declaration, so every capability lookup missed
+  into the permissive undeclared path, the digest saw no verbs and would
+  have noop'd forever, and an echoed `hookEventName` of `stop` is a name the
+  host rejects outright. Caught by the end-to-end pin failing, not by
+  reasoning; a single word is now a one-segment kebab under the same rule,
+  pinned with the idempotence and empty-string edges. Two tests fell out of
+  the data edit and are corrections rather than churn: the ledger theory's
+  "effectless reconcile seam" case moved Stop → SessionEnd (still
+  `"effects": []`), and a hot-reload E2E that read a pid out of an INJECT on
+  Stop moved to PostToolUse — the gate now correctly flattens that inject,
+  which is the data edit having teeth. **N3's termination pin lands where it
+  has to**: a daemon smoke test drives a spawned digest child through the
+  shipped spec, the capability gate, and the real adapter — first Stop
+  answers the top-level block carrying the digest as its reason and with no
+  `hookSpecificOutput` key at all, second Stop answers the bare `{}` that
+  lets the turn end, cursor-advance-on-inject doing it across a process
+  boundary on real files. Golden bytes pin the shape, and a companion test
+  pins that every OTHER event keeps the nested `permissionDecision` — the
+  guard against a later "simplification" that hoists the top-level shape and
+  silently breaks the tool gate. Docs: doc/platform.md § The Stop block shape
+  (contract + harness version + the re-probe command, since the docs and the
+  binary disagree and only one of them parses our stdout), the hook-dispatch
+  flow doc's egress prose, ADR-0016 d5 annotated as-built.
+  **First skeptic pass run 2026-08-13 (opus)** (against the plan's verify
+  column: "a wrong Stop block shape ships silently"). It re-derived the
+  contract from the binary WITHOUT taking the implementation's word for it
+  and confirmed all four claims — the 17-member union with no Stop, the
+  top-level `decision`/`reason` consumption, the rejection of a third
+  verdict, the event-name equality check — adding the detail that a nested
+  Stop shape is
+  not perfectly silent: it yields a verbose-only `hook_non_blocking_error`,
+  and the decision is discarded either way. It also proved the tests bite by
+  MUTATION: forcing the nested shape fails the golden bytes, the warn pin, and
+  the daemon end-to-end; restoring the old `Canon` fails both the unit pin and
+  the end-to-end — the regression is caught at the real wire, not only in a
+  unit. **No REAL defect; four latent hazards, all now recorded rather than
+  discovered later.** One earned a code fix (the override-spec case-miss, in
+  d5's note above); two are stated in the ADR (fail-closed-on-Stop is an
+  unbounded livelock now that Stop declares `decide` — the harness has NO loop
+  cap of its own, so our advance is the only guard; and `Merge`'s
+  first-deny-wins can falsify the delivery ledger from outside the digest);
+  one is a deploy-boundary cosmetic worth knowing before reading the trail:
+  the live JSONL holds **4,494 `"hookEvent":"stop"` lines** from the old
+  pass-through, so the same physical event starts logging as `Stop` at the
+  cutover and any consumer grouping by event name sees a discontinuity there.
+  Nothing keys state on the spelling (cursors key role+session), so it is
+  presentation only. Suite 897 → 903 green twice.
+  **Independent fable skeptic pass run 2026-08-14** — the plan's verify
+  column proper, run once the first pass was noticed to have been opus
+  (build-opus / skeptic-fable is the house split, and this slice's hazard is
+  exactly the contract-re-derivation class the split exists for). It
+  re-derived the contract from the 2.1.119 binary with byte-offset evidence,
+  confirmed every load-bearing claim, and re-ran both mutations itself
+  (Canon revert → 4 tests fail incl. the daemon e2e; nested-shape force → 3
+  fail, the stays-nested companion correctly unaffected). **Verdict: ship —
+  no real defect — but it earned its keep three ways.** (1) A new latent
+  hazard FIXED in-pass: `SubagentStop` was undeclared, so an Inject there
+  passed the permissive gate into the memberless nested shape — the exact
+  disease this slice cures, one event over; now declared `["decide"]` like
+  Stop, pinned by a gate-flatten test. (2) A pre-existing hazard recorded:
+  `replaceOutput` appears NOWHERE in the 245MB binary — the PostToolUse
+  union member takes `additionalContext`/`updatedMCPToolOutput` only, and
+  the schema's unknown-key strip discards an `Effect.Replace` with no error
+  of any kind, quieter than the Stop failure; now its own ⚠ row in
+  platform.md § The Stop block shape (the spec still advertises `replace`;
+  re-probe on upgrade). (3) The record corrected on two accuracy points,
+  fixed across code comments + platform.md + the flow doc + the d5 note:
+  the host does not observably THROW on a third verdict — the zod enum
+  rejects it at parse into the same `hook_non_blocking_error` path, the
+  `Unknown hook decision type` throw being dead code behind the enum and
+  even the runner's throws caught — and the dropped Stop decision is not
+  zero-signal: a visible "Stop hook error occurred" notification fires, so
+  the DECISION is what is silent, not the failure. Traced and stated, not
+  engineered around: the host converts agent-scoped Stop registrations to
+  SubagentStop while the command string still says `hook stop`, and the CLI
+  arg wins over the payload field, so such a firing is gated and logged as
+  Stop — routing/telemetry aliasing only, the output shape stays correct
+  either way; and an ALL-CAPS override key (`"STOP"`) still misses Canon
+  into the permissive path, one step beyond the two documented spellings.
+  Suite 903 → 904 green twice.)
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
