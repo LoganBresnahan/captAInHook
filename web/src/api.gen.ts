@@ -132,6 +132,7 @@ export interface MailCursorDto {
   session: string | null;
   gen: number;
   head: string | null;
+  offset: number;
   frontier: number;
   deliveries: number;
   lastDeliveredId: string | null;

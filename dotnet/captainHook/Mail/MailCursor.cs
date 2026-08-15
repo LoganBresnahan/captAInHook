@@ -292,17 +292,20 @@ public sealed record MailCursor(
 /// held, stamped at the opportunity that first passed it over.
 public sealed record PendingMail(long Offset, MailEnvelope Envelope, long? SeenAt);
 
-/// Everything one read of the store-through-a-cursor yields. `Frontier` is
-/// where Advance will move the offset — the end of the COMPLETE lines read,
-/// never inside an unterminated tail. `Expired` are TTL-consumed envelopes:
-/// reported this once (so the digest can say so), dropped by the next Advance.
-/// `SkippedMalformed` counts this-role's unreadable lines being stepped over —
-/// warn-and-skip made visible, mirroring the envelope's failure direction.
+/// Everything one read of the store-through-a-cursor yields. `Offset` is
+/// where the cursor IS — its read position, 0 for a fresh or re-anchored one
+/// (everything at or beyond it is unread; `Frontier` is where Advance will
+/// move it — the end of the COMPLETE lines read, never inside an unterminated
+/// tail. `Expired` are TTL-consumed envelopes: reported this once (so the
+/// digest can say so), dropped by the next Advance. `SkippedMalformed` counts
+/// this-role's unreadable lines being stepped over — warn-and-skip made
+/// visible, mirroring the envelope's failure direction.
 public sealed record MailPendingView(
     string Role,
     string? Session,
     int Gen,
     string? Head,
+    long Offset,
     long Frontier,
     long Deliveries,
     string? LastDeliveredId,
@@ -521,7 +524,7 @@ public sealed class MailCursors(MailStore store)
         }
 
         return new MailPendingView(
-            role, session, cursor.Gen, head, frontier,
+            role, session, cursor.Gen, head, cursor.Offset, frontier,
             cursor.Deliveries, cursor.LastDeliveredId,
             reanchorReason is not null, reanchorReason,
             pending, expired, skipped);
@@ -597,7 +600,7 @@ public sealed class MailCursors(MailStore store)
             // direction; the silent-clobber shape needs a head flap.)
             var currentHead = Store.HeadHash();
             if (currentHead != view.Head)
-                return Refused(view.Role, path,
+                return Refused(view.Role, view.Session, path,
                     $"the store's chain changed between the read and the advance (view read head "
                     + $"'{view.Head ?? "(none)"}', store now has '{currentHead ?? "(none)"}') "
                     + "— re-read before advancing");
@@ -616,7 +619,7 @@ public sealed class MailCursors(MailStore store)
                 if (MailCursor.TryParse(File.ReadAllText(path), out _) is { } disk
                     && disk.Gen == view.Gen && disk.Head == view.Head
                     && disk.Deliveries != view.Deliveries)
-                    return Refused(view.Role, path,
+                    return Refused(view.Role, view.Session, path,
                         $"view is stale: it was read at {view.Deliveries} deliveries but the cursor "
                         + $"is at {disk.Deliveries} — re-read before advancing");
             }
@@ -632,6 +635,7 @@ public sealed class MailCursors(MailStore store)
                 // CANNOT be loud, pinned as such by the edge campaign.)
                 Log.Warn("mail", "mail.cursorVanished", new LogFields
                 {
+                    SessionId = view.Session,
                     Msg = "the cursor this view was read from no longer exists — advancing starts a fresh lineage",
                     Data = new Dictionary<string, object>
                     {
@@ -659,23 +663,42 @@ public sealed class MailCursors(MailStore store)
             // fact: had the write failed, the mail was NOT dropped, and an
             // expiry event for it would have been fiction (repeated fiction,
             // on every retry).
+            //
+            // WHO MOVED (ADR-0016 d14, the reducer's find): every event this
+            // method emits names the cursor it is about — the session rides
+            // the trail's first-class `sessionId` column (d10's as-built rule
+            // for `mail.deliver`, so one session filter sees the whole
+            // choreography) and the role rides data. Without it a watcher
+            // cannot tell which of a role's sessions advanced, and a canvas
+            // that guessed would draw a cursor moving that did not — the one
+            // wrong picture no screenshot catches. The expire carries the
+            // envelope's OFFSET beside its id because ids are not unique on
+            // this bus (the store does not dedup); the advance carries the
+            // exact offsets it consumed for the same reason: a count says how
+            // many, an offset list says which, and only the list lets a
+            // reader reproduce the held set the digest just wrote.
             foreach (var e in view.Expired)
                 Log.Info("mail", "mail.expire", new LogFields
                 {
+                    SessionId = view.Session,
                     Msg = "mail expired undelivered: passed over at its full ttlDeliveries of opportunities",
                     Data = new Dictionary<string, object>
                     {
-                        ["id"] = e.Envelope.Id, ["to"] = view.Role,
+                        ["id"] = MailEnvelope.ClampField(e.Envelope.Id), ["to"] = view.Role,
+                        ["offset"] = e.Offset,
                         ["ttlDeliveries"] = e.Envelope.TtlDeliveries, ["seenAt"] = e.SeenAt!,
                     },
                 });
 
             Log.Debug("mail", "mail.cursorAdvance", new LogFields
             {
+                SessionId = view.Session,
                 Data = new Dictionary<string, object>
                 {
                     ["role"] = view.Role, ["offset"] = view.Frontier,
-                    ["delivered"] = delivered.Count, ["held"] = heldList.Count,
+                    ["delivered"] = delivered.Count,
+                    ["deliveredOffsets"] = delivered.OrderBy(o => o).ToList(),
+                    ["held"] = heldList.Count,
                     ["expired"] = view.Expired.Count, ["deliveries"] = deliveries,
                 },
             });
@@ -710,16 +733,16 @@ public sealed class MailCursors(MailStore store)
         }
         catch (Exception)
         {
-            return Reanchor(role, path, head, deliveries: 0, "cursor file unreadable");
+            return Reanchor(role, session, path, head, deliveries: 0, ReanchorCause.Cursor, "cursor file unreadable");
         }
 
         var cursor = MailCursor.TryParse(text, out var errors);
         if (cursor is null)
-            return Reanchor(role, path, head, deliveries: 0,
+            return Reanchor(role, session, path, head, deliveries: 0, ReanchorCause.Cursor,
                 $"cursor malformed: {string.Join("; ", errors)}");
 
         if (cursor.Gen != CurrentGen)
-            return Reanchor(role, path, head, cursor.Deliveries,
+            return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Cursor,
                 $"cursor gen {cursor.Gen}, store gen {CurrentGen} — rotated");
 
         if (cursor.Head != head && cursor.Head is not null)
@@ -727,34 +750,34 @@ public sealed class MailCursors(MailStore store)
             // path (phase 2: every generation restarts at genesis) — rotation
             // or wholesale replacement. Either way this cursor's offsets
             // describe a file that no longer exists.
-            return Reanchor(role, path, head, cursor.Deliveries,
+            return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Store,
                 "store head hash changed — a different chain at the same path");
 
         if (cursor.Offset > frontier)
-            return Reanchor(role, path, head, cursor.Deliveries,
+            return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Store,
                 $"cursor offset {cursor.Offset} past the frontier {frontier} — store truncated");
 
         if (cursor.Offset != frontier && !complete.Any(l => l.Offset == cursor.Offset))
             // Legitimate offsets rest on a line boundary or at the frontier —
             // ours always do, so one that does not was written against bytes
             // that are gone (TrailCursor's alignment self-heal, one layer up).
-            return Reanchor(role, path, head, cursor.Deliveries,
+            return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Store,
                 $"cursor offset {cursor.Offset} rests on no line boundary");
 
         foreach (var h in cursor.Held)
         {
             if (h.Offset >= cursor.Offset)
-                return Reanchor(role, path, head, cursor.Deliveries,
+                return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Cursor,
                     $"held entry at {h.Offset} is not behind the frontier {cursor.Offset}");
             var line = complete.FirstOrDefault(l => l.Offset == h.Offset);
             if (line?.Envelope is null || line.Envelope.Id != h.Id)
-                return Reanchor(role, path, head, cursor.Deliveries,
+                return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Store,
                     $"held entry at {h.Offset} (id '{h.Id}') no longer matches the file");
             if (line.Envelope.To != role)
                 // A held entry may only ever name this role's own mail — a
                 // cursor claiming another role's line is a changed file or a
                 // hand edit, never a substitutable delivery.
-                return Reanchor(role, path, head, cursor.Deliveries,
+                return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Store,
                     $"held entry at {h.Offset} is addressed to '{line.Envelope.To}', not '{role}'");
         }
 
@@ -766,10 +789,11 @@ public sealed class MailCursors(MailStore store)
     /// digest's captured stderr). Info, not Warn — a refused advance is
     /// usually a LEGITIMATE concurrent delivery winning the race, and the
     /// refusal is the guard doing its job, not a fault.
-    private static MailCursorWrite.Failed Refused(string role, string path, string reason)
+    private static MailCursorWrite.Failed Refused(string role, string? session, string path, string reason)
     {
         Log.Info("mail", "mail.cursorRefuse", new LogFields
         {
+            SessionId = session,
             Msg = "cursor advance refused — the view is not safe to apply; the mail stays pending",
             Data = new Dictionary<string, object>
             {
@@ -782,15 +806,37 @@ public sealed class MailCursors(MailStore store)
     private static MailCursor Fresh(string? head, long deliveries) =>
         new(CurrentGen, head, Offset: 0, LastDeliveredId: null, deliveries, []);
 
+    /// Which side of the cursor⇄store agreement broke. `Cursor`: the file's
+    /// own bytes are distrusted (unreadable, malformed, a foreign gen, a held
+    /// entry ahead of its own frontier) and the STORE is believed intact —
+    /// a watcher holding a picture of the ledger may keep it. `Store`: the
+    /// bytes the cursor described are gone or changed (a different chain, a
+    /// truncation, an offset off every boundary, a held line that no longer
+    /// matches) — every picture of the ledger taken before this read is
+    /// suspect. Ambiguous cases (a held mismatch could be either) are
+    /// `Store`, the direction that costs a re-read rather than a lie.
+    public enum ReanchorCause { Cursor, Store }
+
+    // `deliveries` rides the event because it is the one thing a re-anchor
+    // KEEPS: a watcher applying "offset 0, held empty" needs the counter the
+    // fresh cursor inherits, or its next TTL arithmetic starts from a guess.
+    // `cause` rides it because the reason is prose and a watcher must not
+    // parse prose to learn whether its ledger picture survived (the reducer
+    // skeptic pass's top find: a store-truncation re-anchor rebuilt a
+    // pending set from lines that no longer existed, and nothing flagged).
     private (MailCursor, string?) Reanchor(
-        string role, string path, string? head, long deliveries, string reason)
+        string role, string? session, string path, string? head, long deliveries,
+        ReanchorCause cause, string reason)
     {
         Log.Warn("mail", "mail.cursorReanchor", new LogFields
         {
+            SessionId = session,
             Msg = "cursor re-anchored at 0 — retained mail for this role is pending again",
             Data = new Dictionary<string, object>
             {
                 ["role"] = role, ["path"] = path, ["reason"] = reason,
+                ["cause"] = cause == ReanchorCause.Store ? "store" : "cursor",
+                ["deliveries"] = deliveries,
             },
         });
         return (Fresh(head, deliveries), reason);

@@ -98,6 +98,7 @@ public class WireJsonlTests
                 ["id"] = "m-01",
                 ["to"] = "reviewer",
                 ["offset"] = 4_096L,
+                ["bytes"] = 233,
                 ["from"] = new Dictionary<string, object>
                 {
                     ["agent"] = "intent-watcher", ["harness"] = "claude-code", ["session"] = "s-77",
@@ -111,10 +112,62 @@ public class WireJsonlTests
         Assert.Equal(fsharp, wire);
         Assert.Equal(
             """
-            {"ts":"2026-07-06T03:04:05.789Z","lvl":"debug","src":"mail","evt":"mail.append","data":{"id":"m-01","to":"reviewer","offset":4096,"from":{"agent":"intent-watcher","harness":"claude-code","session":"s-77"},"kind":"status","topic":"build","priority":"urgent","ttlDeliveries":3}}
+            {"ts":"2026-07-06T03:04:05.789Z","lvl":"debug","src":"mail","evt":"mail.append","data":{"id":"m-01","to":"reviewer","offset":4096,"bytes":233,"from":{"agent":"intent-watcher","harness":"claude-code","session":"s-77"},"kind":"status","topic":"build","priority":"urgent","ttlDeliveries":3}}
             """,
             wire);
         Assert.DoesNotContain("body", wire);
+    }
+
+    /// The cursor's side of the choreography (ADR-0016 d14, slice
+    /// `mail-reducer`): `mail.cursorAdvance` and `mail.expire` name the cursor
+    /// they are about — the session on the trail's first-class `sessionId`
+    /// column (d10's rule for `mail.deliver`), the role in data — and carry
+    /// OFFSETS beside counts and ids, because ids are not unique on the bus
+    /// and a count cannot say which. A reducer reproduces the digest's held
+    /// set from exactly these keys; pinned literally so a rename is a byte
+    /// diff here, not a cursor that quietly stops moving on a canvas.
+    [Fact]
+    public void MailCursorAdvance_IdenticalBytes_NamesTheCursorAndItsOffsets()
+    {
+        var (fsharp, wire) = RenderBoth("debug", "mail", "mail.cursorAdvance",
+            sessionId: "s-1",
+            data: new Dictionary<string, object>
+            {
+                ["role"] = "main",
+                ["offset"] = 812L,
+                ["delivered"] = 2,
+                ["deliveredOffsets"] = new List<long> { 0, 406 },
+                ["held"] = 1,
+                ["expired"] = 0,
+                ["deliveries"] = 4L,
+            });
+
+        Assert.Equal(fsharp, wire);
+        Assert.Equal(
+            """
+            {"ts":"2026-07-06T03:04:05.789Z","lvl":"debug","src":"mail","evt":"mail.cursorAdvance","sessionId":"s-1","data":{"role":"main","offset":812,"delivered":2,"deliveredOffsets":[0,406],"held":1,"expired":0,"deliveries":4}}
+            """,
+            wire);
+    }
+
+    [Fact]
+    public void MailExpire_IdenticalBytes_NamesTheCursorAndTheOffset()
+    {
+        var (fsharp, wire) = RenderBoth("info", "mail", "mail.expire",
+            sessionId: "s-1",
+            msg: "mail expired undelivered: passed over at its full ttlDeliveries of opportunities",
+            data: new Dictionary<string, object>
+            {
+                ["id"] = "m-amb", ["to"] = "main", ["offset"] = 203L,
+                ["ttlDeliveries"] = 2, ["seenAt"] = 1L,
+            });
+
+        Assert.Equal(fsharp, wire);
+        Assert.Equal(
+            """
+            {"ts":"2026-07-06T03:04:05.789Z","lvl":"info","src":"mail","evt":"mail.expire","sessionId":"s-1","msg":"mail expired undelivered: passed over at its full ttlDeliveries of opportunities","data":{"id":"m-amb","to":"main","offset":203,"ttlDeliveries":2,"seenAt":1}}
+            """,
+            wire);
     }
 
     [Fact]

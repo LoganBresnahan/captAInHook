@@ -890,6 +890,10 @@ public class MailAppendProvenanceTests
         Assert.Equal("m-01", data.GetProperty("id").GetString());
         Assert.Equal("reviewer", data.GetProperty("to").GetString());
         Assert.Equal(0, data.GetProperty("offset").GetInt64());
+        // `bytes` is the line's length without its terminator — MailLine.Bytes,
+        // so offset + bytes + 1 is where the next line starts and a trail
+        // reader can track the store's frontier without a snapshot.
+        Assert.Equal(tmp.Bytes().Length - 1, data.GetProperty("bytes").GetInt32());
         Assert.Equal("status", data.GetProperty("kind").GetString());
         Assert.Equal("build", data.GetProperty("topic").GetString());
         Assert.Equal("urgent", data.GetProperty("priority").GetString());

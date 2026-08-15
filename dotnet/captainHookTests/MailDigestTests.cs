@@ -36,7 +36,7 @@ static class DigestFixtures
         IReadOnlyList<PendingMail> pending,
         IReadOnlyList<PendingMail>? expired = null,
         long deliveries = 0, string role = "main") =>
-        new(role, "s-1", Gen: 1, Head: null, Frontier: 0, deliveries,
+        new(role, "s-1", Gen: 1, Head: null, Offset: 0, Frontier: 0, deliveries,
             LastDeliveredId: null, Reanchored: false, ReanchorReason: null,
             pending, expired ?? [], SkippedMalformed: 0);
 

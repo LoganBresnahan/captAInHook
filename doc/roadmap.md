@@ -104,6 +104,93 @@ run live*. The framework underneath is what exists today.
   two emitters and a reducer is about to read these keys by name, so a rename
   should surface as a byte diff, not a silent field the canvas stops finding.
   4 tests; suite 938 → 942 green twice. **Phase 1 complete.**)
+  `mail-reducer` (2026-08-15; phase 2, slice 3 — `web/src/mail.ts`, the pure
+  model the canvas will draw: `seedMail(MailDto)` then `reduceMail(state,
+  {line|gap|reset})`, selectors `projectCursor` / `lineStatus` /
+  `deliveriesFor` / `presenceTier`; no clock, no network, no DOM — the caller
+  passes `atMs`, so presence decays in the browser's monotonic clock and never
+  reconciles two wall clocks. **The first drive found the trail could not name
+  the cursor an advance moved**: `mail.cursorAdvance` / `mail.expire` / the
+  re-anchor family carried a role and no session — unattributable the moment a
+  role has two sessions, and a canvas that guessed would draw a cursor moving
+  that did not (the one wrong picture no screenshot catches). So the engine
+  side landed first, as an as-built amendment to d14: the cursor family gains
+  the `sessionId` column (d10's rule for `mail.deliver`, so one session filter
+  sees the whole choreography); the advance carries `deliveredOffsets` beside
+  its count and the expire its `offset` beside its id, because ids are not
+  unique on this bus and a count says how many, never which; the re-anchor
+  carries the `deliveries` it preserves; `mail.append` carries `bytes` so the
+  store's frontier is derivable from the tail alone (an append landing anywhere
+  but offset+bytes+1 is a hole the reducer can NAME); and `MailPendingView` /
+  `MailCursorDto` gain the cursor's own `offset` — its position, distinct from
+  `frontier` (the store's end) — since a role with no fresh mail left the
+  position unknowable. Golden trail lines for advance + expire join append's in
+  `WireJsonlTests`. **N8's mitigation is now mechanical, not a promise**:
+  `MailReducerGoldenTests` drives 15 scenarios through the REAL store, cursors
+  and digest verb — first contact, hold-then-expire across three seams, two
+  sessions on one role, re-anchor preserving deliveries, a torn tail terminated
+  into a counted malformed line, a `?since=` partial ledger (exact, because
+  cursor state is materialized from the DTO's held/fresh items with their ttl,
+  never re-derived from lines the picture may not have) and its re-anchor
+  variant (honestly NOT exact: flagged), a deleted cursor restarting its
+  lineage, the sessionless reader, a hold-only advance, a refused stale view, a
+  vanished lineage, the reconcile seam's `decide` — capturing (before
+  snapshot, trail, after snapshot) per scenario into `web/src/mail.golden.json`
+  with `ts` pinned and the temp dir spelled `<mail>`, asserted deterministic
+  and pinned as a drift detector on `ApiSchemaTests`' precedent (regenerate
+  with `CAPTAINHOOK_SCHEMA_UPDATE=1`); `web/src/mail.test.ts` replays every
+  scenario and requires the projected pending set to equal C#'s per cursor,
+  per offset, per seenAt — the reducer's truth is re-derived from the engine's
+  every time the engine moves. Three rules shape the reducer and each has a
+  test: APPLY what an event states, DERIVE what the ledger proves, FLAG what
+  neither gives — `deliveries` on an advance is a per-cursor sequence number,
+  so a stale replay (the stream opened before the snapshot) is ignored, a
+  skipped one marks the cursor `uncertain` and raises `resnapshot`, and a
+  first advance (deliveries 1, always from an anchor at 0) is reconstructed
+  exactly from a complete ledger — which also recovers d13's quiet corner, the
+  deleted-and-silently-re-anchored cursor, that the engine itself cannot be
+  loud about; every advance's re-derived held/expired set is CROSS-CHECKED
+  against the counts the event carries; an event with a field the reducer
+  cannot read is refused whole, never defaulted (a defaulted offset is
+  indistinguishable from a legitimate one downstream). DELIVERED comes from a
+  `mail.deliver` record and nowhere else (pin iii): an advance without its
+  deliver leaves the envelope `passed` — *before cursor · no record* — and
+  records carry across a re-seed because they are ledger facts a snapshot
+  cannot contain, the one thing that survives the replace. And every
+  re-snapshot REPLACES reduced state (`seedMail`), on `Gap`, `Reset`, a
+  misaligned `since`, or any of the reducer's own findings. C# 947 (943 + 2
+  goldens + 2 wire pins) green twice; web `npm test` 43 in `mail.test.ts`.
+  **The adversarial pass** (an independent skeptic, `mail.skeptic.test.ts`,
+  34 tests kept as regression pins; a 500-seed differential against a C#-
+  semantics model survived) found nine, one of them the exact silent-wrong
+  picture the plan feared: a re-anchor whose CAUSE is the store changing (a
+  truncation, a replaced chain) rebuilt the fresh set from lines that no
+  longer existed, counts matched, nothing flagged. The reason was prose, so
+  the engine now says which side broke — `mail.cursorReanchor` gains `cause:
+  "cursor" | "store"` (ambiguous held-mismatch cases are `store`, the
+  direction that costs a re-read rather than a lie); the reducer rebuilds
+  nothing on `store` and raises `resnapshot`; a 16th golden scenario truncates
+  a real store under a real cursor. The rest, all fixed and pinned: a replayed
+  `mail.deliver` duplicated its record (identity is now its content — a record
+  has no sequence number); an old lineage's advance replayed after a restart
+  moved the position BACKWARDS (a real advance never does, so anything behind
+  the picture is stale whatever its count); a lower count at the same offset
+  was flagged where it is stale — except count 1, which is also what a
+  deleted-and-restarted cursor with nothing new appended looks like, and the
+  reducer keeps the flag there because the two are indistinguishable and the
+  wrong reading is silent and lasting; a snapshot that caught an append in
+  flight (the torn tail WAS that line's first bytes) refused the line's own
+  append instead of completing it; a replayed re-anchor with a lower carried
+  count rewound the cursor; `sessionId: ""` made a phantom second cursor for
+  the sessionless reader (engine-side `CursorPath` normalizes "" to null); a
+  `null` trail frame threw; a partial-ledger first contact set `uncertain`
+  without asking for the snapshot that could clear it. Standing hazard for
+  slice 5, named here because the replay rules exist for it: the stream must
+  open BEFORE the snapshot (or events between are lost), which means the
+  region between stream-open and snapshot is folded as replay — cheap to
+  avoid entirely if `MailDto` grows the trail's current SSE id so the stream
+  can open exactly at the snapshot; decide there. Not wired into the store or
+  the SSE fold — that is slice 5's seam; `ui/` is unchanged by construction.)
 
 - [x] **19. GUI overhaul — sidebar views, template-gallery authoring, the
   screenshot loop** — the GUI works but has a visible defect (handlers table

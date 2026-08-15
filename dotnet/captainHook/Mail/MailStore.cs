@@ -262,7 +262,13 @@ public sealed class MailStore(string dir)
             // which is the one surface with the lifetime and the modes for it.
             // The two sender-controlled strings are clamped by the same
             // spelling the digest head uses, so an id here and an id in a
-            // rendered digest are the same string.
+            // rendered digest are the same string. `bytes` (the line's
+            // length, terminator excluded — `MailLine.Bytes`) rides beside
+            // `offset` so a reader tailing these events knows where the NEXT
+            // line must start: the store's frontier becomes derivable from
+            // the trail alone, and an append that lands anywhere else is a
+            // gap the reader can name instead of a picture that quietly
+            // drifts.
             var from = new Dictionary<string, object> { ["agent"] = envelope.From.Agent };
             from["harness"] = envelope.From.Harness;
             // Absent-means-omit, the trail's rule: a write-only member has no
@@ -277,6 +283,7 @@ public sealed class MailStore(string dir)
                     ["id"] = MailEnvelope.ClampField(envelope.Id),
                     ["to"] = envelope.To,
                     ["offset"] = offset,
+                    ["bytes"] = lineBytes,
                     ["from"] = from,
                     ["kind"] = Wire(envelope.Kind),
                     ["topic"] = MailEnvelope.ClampField(envelope.Topic),

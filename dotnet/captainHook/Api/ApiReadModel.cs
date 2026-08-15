@@ -245,7 +245,7 @@ public sealed class ApiReadModel
     }
 
     private static MailCursorDto Cursor(MailPendingView v) => new(
-        v.Role, v.Session, v.Gen, v.Head, v.Frontier, v.Deliveries, v.LastDeliveredId,
+        v.Role, v.Session, v.Gen, v.Head, v.Offset, v.Frontier, v.Deliveries, v.LastDeliveredId,
         v.Reanchored, v.ReanchorReason,
         v.Pending.Select(p => Pending(p, v.Deliveries)).ToList(),
         v.Expired.Select(p => Pending(p, v.Deliveries)).ToList(),

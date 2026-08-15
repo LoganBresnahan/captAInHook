@@ -124,10 +124,15 @@ public sealed record MailSenderDto(string Agent, string Harness, string? Session
 
 /// One cursor file's view of the store — `MailCursors.Pending` verbatim, which
 /// is what keeps the drawn mailbox and the delivered mailbox the same thing.
+/// `Offset` is where the cursor IS (its read position; 0 when fresh or
+/// re-anchored) and `Frontier` is where the next advance will put it — the
+/// store's end of complete lines — so a canvas can draw the cursor and the
+/// unread stretch ahead of it without inferring either from the pending list
+/// (a role with no fresh mail would leave the position unknowable).
 /// `Reanchored` means THIS read distrusted the file on disk (`ReanchorReason`
 /// names which rule), so everything retained for the role is pending again.
 public sealed record MailCursorDto(
-    string Role, string? Session, int Gen, string? Head, long Frontier, long Deliveries,
+    string Role, string? Session, int Gen, string? Head, long Offset, long Frontier, long Deliveries,
     string? LastDeliveredId, bool Reanchored, string? ReanchorReason,
     IReadOnlyList<MailPendingDto> Pending, IReadOnlyList<MailPendingDto> Expired,
     int SkippedMalformed);

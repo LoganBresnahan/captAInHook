@@ -562,6 +562,9 @@
                   "null"
                 ]
               },
+              "offset": {
+                "type": "integer"
+              },
               "frontier": {
                 "type": "integer"
               },
@@ -636,6 +639,7 @@
               "session",
               "gen",
               "head",
+              "offset",
               "frontier",
               "deliveries",
               "lastDeliveredId",
