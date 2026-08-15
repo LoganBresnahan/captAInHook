@@ -13,7 +13,7 @@ namespace CaptainHook.Api;
 // Adds no engine dependency (invariant 3): the exporter is System.Text.Json.
 public static class ApiSchema
 {
-    /// The GUI-consumed response shapes — the four read endpoints' roots (their
+    /// The GUI-consumed response shapes — the five read endpoints' roots (their
     /// nested records inline) plus the discovery file a client bootstraps from.
     /// A new endpoint DTO joins this list or the GUI never learns its shape.
     private static readonly (string Name, Type Type)[] Types =
@@ -22,6 +22,7 @@ public static class ApiSchema
         ("PolicyDto", typeof(PolicyDto)),
         ("HarnessesDto", typeof(HarnessesDto)),
         ("HandlersDto", typeof(HandlersDto)),
+        ("MailDto", typeof(MailDto)),
         ("ApiDiscovery", typeof(ApiDiscovery)),
     ];
 
@@ -43,7 +44,33 @@ public static class ApiSchema
             // read leniency in would generate `string | number` TS for every int.
             NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.Strict,
         };
-        var exporter = new JsonSchemaExporterOptions { TreatNullObliviousAsNonNullable = true };
+        var exporter = new JsonSchemaExporterOptions
+        {
+            TreatNullObliviousAsNonNullable = true,
+            // NAME the nested DTO nodes. The exporter inlines every nested
+            // record, and json-schema-to-typescript names an inlined object
+            // after the PROPERTY it hangs off — which is fine until one shape
+            // appears twice (MailDto's `pending` and `expired` are both
+            // MailPendingDto), where it dedupes into a hoisted `Items`. A
+            // `title` is the schema's own way to say what a node is, and the
+            // TS generator honours it, so the DTO's C# name survives the whole
+            // pipeline instead of being re-guessed at the far end.
+            TransformSchemaNode = (ctx, schema) =>
+            {
+                var type = ctx.TypeInfo.Type;
+                // Only a PLAIN object node: a nullable property exports as a
+                // `["object","null"]` union, and naming that union makes the
+                // TS generator emit a reference to a type it then never
+                // declares (probed — the page would not compile). Those stay
+                // inline and anonymous, exactly as they were before.
+                if (schema is JsonObject obj && obj["type"] is JsonValue kind
+                    && kind.TryGetValue<string>(out var k) && k == "object"
+                    && type.Name.EndsWith("Dto", StringComparison.Ordinal)
+                    && type.Namespace == typeof(ApiSchema).Namespace)
+                    obj["title"] = type.Name;
+                return schema;
+            },
+        };
         var defs = new JsonObject();
         foreach (var (name, type) in Types)
             defs[name] = JsonSchemaExporter.GetJsonSchemaAsNode(options, type, exporter);

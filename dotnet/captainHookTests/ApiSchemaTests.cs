@@ -30,7 +30,7 @@ public class ApiSchemaTests
         // The wire is camelCase (ApiJson's Web options); the schema must
         // describe THAT, not the C# property spelling.
         var schema = ApiSchema.Export();
-        foreach (var def in new[] { "StatusDto", "PolicyDto", "HarnessesDto", "HandlersDto", "ApiDiscovery" })
+        foreach (var def in new[] { "StatusDto", "PolicyDto", "HarnessesDto", "HandlersDto", "MailDto", "ApiDiscovery" })
             Assert.Contains($"\"{def}\"", schema);
         Assert.Contains("\"uptimeMs\"", schema);       // camelCase property
         Assert.Contains("\"openStreams\"", schema);

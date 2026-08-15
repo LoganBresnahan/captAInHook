@@ -37,7 +37,52 @@ run live*. The framework underneath is what exists today.
   the reducer is an interpolator between authoritative snapshots, never a
   second store; the trail's days-to-weeks lifetime means older envelopes show
   *before cursor · no record*, never "delivered".
-  Slices landed: —
+  Slices landed: `mail-read-endpoint` (2026-08-15; phase 1, slice 1 —
+  `GET /api/v1/mail?since=` returns the bus as one snapshot: chain status
+  (`VerifyChain`, head, gen, line count, and the 0700/0600 modes d13 promises,
+  SHOWN rather than asserted), every line from the offset with its parsed
+  envelope, one `MailCursors.Pending` view per cursor file, and inferred
+  presence. **The write half is not reachable, by construction**: the API is
+  handed a `MailReadPort` — five METHOD-GROUP delegates bound to Read /
+  VerifyChain / HeadHash / List / Pending, built by a factory that creates the
+  store and the cursors privately — rather than an interface, which the
+  writable type would implement and one cast would re-open. Pinned all three of
+  d14's ways plus the honest bound: a reflection walk over the read model's
+  DECLARED graph (ctor params + fields, transitively through engine types)
+  reaches `MailReadPort` and never `MailStore`/`MailCursors` and finds no
+  Append/Advance — and because the captured closures DO hold those objects
+  where reflection cannot see, a source pin asserts no file under `Api/` NAMES
+  either type or verb (which is why the port re-exports `Gen` and `FilePath`:
+  the pin is only meaningful if nothing there needs them); a route-table theory
+  drives PUT/POST/DELETE/PATCH on `/mail` and two sub-paths, asserting 404 AND
+  that the store's bytes are unchanged and no cursor file was created —
+  **asking cannot create a mailbox**. `since` is the cursor's own address
+  space: absent ⇒ 0 (a fresh snapshot wants everything), and an offset resting
+  on no line boundary answers `sinceAligned: false` rather than splicing a
+  fresh tail onto a prefix that is gone, while a malformed one is a 400 —
+  refused, not defaulted, because a silently-full store looks to a reducer
+  exactly like a legitimate resnapshot, the one failure no screenshot catches.
+  The torn tail reads the way the digest reads it: reported as a line with
+  `terminated: false`, never behind the frontier, pinned equal to
+  `Pending().Frontier` on the same store. Presence is cursor files ∪ recent
+  dispatch sessions and says which half it knows: `SessionPresence` (ServeStats'
+  sibling — bounded at 64, oldest evicted, stamped in `DispatchOneAsync` BEFORE
+  the policy gate, since a session whose hooks are denied is still here) reports
+  an AGE off the monotonic clock, never a timestamp, so no browser has to
+  reconcile two wall clocks; a cursor-only session reads `lastDispatchAgeMs:
+  null` (quiet, or the daemon restarted) and a dispatch-only session holds no
+  role yet. Cursor listing is a RECOGNITION, not a parse: `MailCursors.List` /
+  `TryParseCursorFileName` / `Dec` accept only names `Enc` could have produced
+  (round-trip checked), so lock files and atomic-write temps fall out by the
+  same rule rather than by a special case — and the drive corrected the test's
+  own premise, since a well-formed hand-written cursor file IS a cursor by
+  every rule the digest applies to it. Schema codegen gained a
+  `TransformSchemaNode` that titles nested DTO nodes, because
+  json-schema-to-typescript names an inlined object after its PROPERTY and
+  deduped `pending`/`expired` into a hoisted `Items`; titles are stamped on
+  plain object nodes only — probed, a titled `["object","null"]` union makes
+  the generator reference a type it never declares. 26 tests
+  (`MailApiTests`); suite 912 → 938 green twice.)
 
 - [x] **19. GUI overhaul — sidebar views, template-gallery authoring, the
   screenshot loop** — the GUI works but has a visible defect (handlers table

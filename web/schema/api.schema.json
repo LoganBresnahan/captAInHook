@@ -43,7 +43,8 @@
         "backgroundPending",
         "openStreams",
         "shimPath"
-      ]
+      ],
+      "title": "StatusDto"
     },
     "PolicyDto": {
       "type": "object",
@@ -105,7 +106,8 @@
                   "project",
                   "session",
                   "decision"
-                ]
+                ],
+                "title": "PolicyRuleDto"
               }
             }
           },
@@ -140,7 +142,8 @@
         "raw",
         "path",
         "etag"
-      ]
+      ],
+      "title": "PolicyDto"
     },
     "HarnessesDto": {
       "type": "object",
@@ -173,7 +176,8 @@
                   "eventNameField",
                   "sessionIdField",
                   "cwdField"
-                ]
+                ],
+                "title": "HarnessRequestDto"
               },
               "events": {
                 "type": "object",
@@ -192,13 +196,15 @@
               "request",
               "events",
               "install"
-            ]
+            ],
+            "title": "HarnessDto"
           }
         }
       },
       "required": [
         "harnesses"
-      ]
+      ],
+      "title": "HarnessesDto"
     },
     "HandlersDto": {
       "type": "object",
@@ -244,7 +250,8 @@
               "dead",
               "childState",
               "childPid"
-            ]
+            ],
+            "title": "HandlerDto"
           }
         },
         "source": {
@@ -305,7 +312,8 @@
               "failMode",
               "registered",
               "skipReason"
-            ]
+            ],
+            "title": "ExpectedHandlerDto"
           }
         },
         "raw": {
@@ -329,7 +337,358 @@
         "expected",
         "raw",
         "etag"
-      ]
+      ],
+      "title": "HandlersDto"
+    },
+    "MailDto": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "chain": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "head": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gen": {
+              "type": "integer"
+            },
+            "lines": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "dirMode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fileMode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "faults": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": {
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "detail": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "offset",
+                  "kind",
+                  "detail"
+                ],
+                "title": "MailChainFaultDto"
+              }
+            }
+          },
+          "required": [
+            "ok",
+            "head",
+            "gen",
+            "lines",
+            "bytes",
+            "dirMode",
+            "fileMode",
+            "faults"
+          ],
+          "title": "MailChainDto"
+        },
+        "since": {
+          "type": "integer"
+        },
+        "sinceAligned": {
+          "type": "boolean"
+        },
+        "frontier": {
+          "type": "integer"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "offset": {
+                "type": "integer"
+              },
+              "bytes": {
+                "type": "integer"
+              },
+              "terminated": {
+                "type": "boolean"
+              },
+              "hash": {
+                "type": "string"
+              },
+              "envelope": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "ts": {
+                    "type": "string"
+                  },
+                  "from": {
+                    "type": "object",
+                    "properties": {
+                      "agent": {
+                        "type": "string"
+                      },
+                      "harness": {
+                        "type": "string"
+                      },
+                      "session": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "agent",
+                      "harness",
+                      "session"
+                    ],
+                    "title": "MailSenderDto"
+                  },
+                  "to": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "topic": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string"
+                  },
+                  "inReplyTo": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "ttlDeliveries": {
+                    "type": "integer"
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "prev": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "ts",
+                  "from",
+                  "to",
+                  "kind",
+                  "topic",
+                  "priority",
+                  "inReplyTo",
+                  "ttlDeliveries",
+                  "body",
+                  "prev"
+                ]
+              },
+              "errors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "offset",
+              "bytes",
+              "terminated",
+              "hash",
+              "envelope",
+              "errors"
+            ],
+            "title": "MailLineDto"
+          }
+        },
+        "cursors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "gen": {
+                "type": "integer"
+              },
+              "head": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "frontier": {
+                "type": "integer"
+              },
+              "deliveries": {
+                "type": "integer"
+              },
+              "lastDeliveredId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reanchored": {
+                "type": "boolean"
+              },
+              "reanchorReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "pending": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "ttlDeliveries": {
+                      "type": "integer"
+                    },
+                    "seenAt": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "opportunities": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "offset",
+                    "id",
+                    "priority",
+                    "ttlDeliveries",
+                    "seenAt",
+                    "opportunities"
+                  ],
+                  "title": "MailPendingDto"
+                }
+              },
+              "expired": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/cursors/items/properties/pending/items"
+                }
+              },
+              "skippedMalformed": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "role",
+              "session",
+              "gen",
+              "head",
+              "frontier",
+              "deliveries",
+              "lastDeliveredId",
+              "reanchored",
+              "reanchorReason",
+              "pending",
+              "expired",
+              "skippedMalformed"
+            ],
+            "title": "MailCursorDto"
+          }
+        },
+        "presence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "session": {
+                "type": "string"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "lastDispatchAgeMs": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "session",
+              "roles",
+              "lastDispatchAgeMs"
+            ],
+            "title": "MailPresenceDto"
+          }
+        }
+      },
+      "required": [
+        "dir",
+        "chain",
+        "since",
+        "sinceAligned",
+        "frontier",
+        "lines",
+        "cursors",
+        "presence"
+      ],
+      "title": "MailDto"
     },
     "ApiDiscovery": {
       "type": "object",

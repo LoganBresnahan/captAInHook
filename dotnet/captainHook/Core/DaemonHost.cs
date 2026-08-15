@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using CaptainHook.Actors;
 using CaptainHook.Api;
+using CaptainHook.Mail;
 using CaptainHook.Wire;
 
 namespace CaptainHook.Core;
@@ -38,7 +39,7 @@ public static class DaemonHost
         Registry? registry = null, TimeSpan? drainDeadline = null,
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
         int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null,
-        string? uiDir = null, string? handlersPath = null)
+        string? uiDir = null, string? handlersPath = null, string? mailDir = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -138,10 +139,20 @@ public static class DaemonHost
         var startTick = clk();
         var lastActive = new[] { startTick };
 
+        // The mail view's two read-only inputs (ADR-0016 d14). The port is
+        // built HERE from the resolved mail dir and captures the store and
+        // cursors privately — the read model never sees a writable handle, so
+        // GET /mail cannot append or advance no matter what it grows into.
+        // `presence` is the dispatch half of presence inference, stamped in
+        // DispatchOneAsync below off the SAME monotonic clock uptime uses.
+        var presence = new SessionPresence(clk);
+        var mailPort = MailReadPort.Over(MailStore.ResolveDir(mailDir));
+
         // The read model projects the SAME resolvers/registry/dispatcher the
         // dispatch path runs, so the API's read view cannot drift (ADR-0007 d3).
         var readModel = new ApiReadModel(
-            paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick, handlersPath);
+            paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick, handlersPath,
+            mailPort, presence);
 
         // The write surface (ADR-0007 d4) edits the SAME policyPath the read model
         // reports and `policy` (ReloadingPolicy) stat-gates — so a PUT lands on the
@@ -267,7 +278,7 @@ public static class DaemonHost
             Volatile.Write(ref lastActive[0], clk());
             _ = Task.Run(async () =>
             {
-                try { await ServeConnectionAsync(conn, harnesses, dispatcher, policy, reloadable); }
+                try { await ServeConnectionAsync(conn, harnesses, dispatcher, policy, reloadable, presence); }
                 finally
                 {
                     Volatile.Write(ref lastActive[0], clk());
@@ -431,7 +442,7 @@ public static class DaemonHost
     /// and carry on serving.
     private static async Task ServeConnectionAsync(
         Socket conn, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy,
-        ReloadingHandlers? reloadable)
+        ReloadingHandlers? reloadable, SessionPresence presence)
     {
         using var _ = conn;
         await using var stream = new NetworkStream(conn, ownsSocket: false);
@@ -455,7 +466,7 @@ public static class DaemonHost
                 return;
             }
 
-            var res = await DispatchOneAsync(req, harnesses, dispatcher, policy, reloadable);
+            var res = await DispatchOneAsync(req, harnesses, dispatcher, policy, reloadable, presence);
             await Frame.WriteAsync(stream, res.Encode());
         }
         catch (Exception ex)
@@ -472,7 +483,7 @@ public static class DaemonHost
     /// shim's dispatchId, gate, serialize.
     private static async Task<HookResponse> DispatchOneAsync(
         HookRequest req, ReloadingHarnessRegistry harnesses, Dispatcher dispatcher, ReloadingPolicy policy,
-        ReloadingHandlers? reloadable)
+        ReloadingHandlers? reloadable, SessionPresence presence)
     {
         // Hot reload FIRST (ADR-0010 phase 7): an edit to handlers.json is
         // effective on THIS hook — the reconcile adds/removes/replaces exec
@@ -496,6 +507,13 @@ public static class DaemonHost
         try { payload = JsonSerializer.Deserialize<JsonElement>(string.IsNullOrWhiteSpace(raw) ? "{}" : raw); }
         catch { payload = JsonSerializer.Deserialize<JsonElement>("{}"); }
         var evt = Harness.ParseEvent(spec, req.EventName, payload);
+
+        // Presence, stamped BEFORE the policy gate (ADR-0016 d14): a session
+        // whose hooks are being denied is still a session that is here, and
+        // the mail canvas showing it faded-but-present is more honest than
+        // showing nothing. Observability only — the dispatch path reads it
+        // never, and a stamp is a dictionary write under a tiny lock.
+        presence.Seen(evt.SessionId);
 
         // Dispatch policy (ADR-0006): the SAME shared gate the collapsed path
         // calls, at the identical seam — an event-level deny (or a Malformed

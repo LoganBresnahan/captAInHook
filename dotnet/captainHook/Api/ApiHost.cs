@@ -422,9 +422,53 @@ public sealed class ApiHost : IDisposable
                     if (policy.Etag is not null) ctx.Response.AddHeader("ETag", policy.Etag);
                     await ApiJson.WriteAsync(ctx.Response, 200, policy);
                     return;
+                // GET /mail (ADR-0016 d14, the observation surface). Note what
+                // is NOT here and never will be: no PUT, no POST, no DELETE
+                // under /api/v1/mail — a non-GET falls through to the 404
+                // below, and the read model it would have to call has no
+                // append or advance handle to reach anyway. Observation is not
+                // delivery, pinned at the route table as well as in the graph.
+                case "/api/v1/mail":
+                    if (ParseSince(ctx.Request.Url?.Query) is not { } since)
+                    {
+                        await ApiJson.WriteAsync(ctx.Response, 400,
+                            new { error = "invalid_since", detail = "since must be a non-negative integer byte offset" });
+                        return;
+                    }
+                    // Null read model for mail (no bus wired) ⇒ 404 through the
+                    // shared tail, like every other capability-gated route.
+                    if (_read.Mail(since) is { } mail)
+                    {
+                        await ApiJson.WriteAsync(ctx.Response, 200, mail);
+                        return;
+                    }
+                    break;
             }
         }
         await ApiJson.WriteAsync(ctx.Response, 404, new { error = "not_found", path });
+    }
+
+    /// `?since=<byte offset>` for GET /mail: absent ⇒ 0 (the whole retained
+    /// store — what a fresh snapshot wants), a non-negative integer ⇒ itself,
+    /// anything else ⇒ null, which the caller answers 400. REFUSED rather than
+    /// defaulted on purpose: an env var falls back silently because a typo must
+    /// not darken the GUI, but a bad query is a client bug, and silently
+    /// re-sending the whole store would look to a reducer exactly like a
+    /// legitimate resnapshot. Hand-parsed — the BCL's query parsers live
+    /// outside this host's zero-dependency diet, and one integer needs none.
+    internal static long? ParseSince(string? query)
+    {
+        if (string.IsNullOrEmpty(query)) return 0;
+        foreach (var pair in query.TrimStart('?').Split('&'))
+        {
+            if (pair.Length == 0) continue;
+            var eq = pair.IndexOf('=');
+            var key = eq < 0 ? pair : pair[..eq];
+            if (key != "since") continue;   // unknown params are ignored, as HTTP expects
+            var value = eq < 0 ? "" : pair[(eq + 1)..];
+            return long.TryParse(value, out var n) && n >= 0 ? n : null;
+        }
+        return 0;
     }
 
     /// Exactly "/ui", "/ui/", or "/ui/<asset>" — nothing else is UI-shaped. A

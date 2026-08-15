@@ -348,6 +348,44 @@ public sealed class MailCursors(MailStore store)
         Path.Combine(Store.Dir,
             $"cursor.{Enc(role)}.{(string.IsNullOrEmpty(session) ? "" : Enc(session))}.json");
 
+    /// The inverse of `Enc`, or null when the text is not something `Enc`
+    /// could have produced (a stray `%`, a bad hex pair, bytes that are not
+    /// UTF-8). Null is a REFUSAL, never a guess: the only caller is the
+    /// observation surface's file listing, and a filename this cannot decode
+    /// is a file we did not write — reporting a guessed role would invent a
+    /// mailbox on the canvas.
+    public static string? Dec(string s)
+    {
+        var bytes = new List<byte>(s.Length);
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (s[i] != '%')
+            {
+                // Only the passthrough alphabet may appear unescaped; anything
+                // else means the name was not produced by Enc.
+                if (s[i] is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-')
+                {
+                    bytes.Add((byte)s[i]);
+                    continue;
+                }
+                return null;
+            }
+            if (i + 2 >= s.Length
+                || !byte.TryParse(s.AsSpan(i + 1, 2), System.Globalization.NumberStyles.HexNumber,
+                                  System.Globalization.CultureInfo.InvariantCulture, out var b))
+                return null;
+            bytes.Add(b);
+            i += 2;
+        }
+        try
+        {
+            // Strict decode: invalid UTF-8 must not become U+FFFD here, or two
+            // different files would decode to the same displayed role.
+            return new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes.ToArray());
+        }
+        catch (DecoderFallbackException) { return null; }
+    }
+
     public static string Enc(string s)
     {
         var sb = new StringBuilder(s.Length);
@@ -360,6 +398,71 @@ public sealed class MailCursors(MailStore store)
                 sb.Append('%').Append(b.ToString("X2"));
         }
         return sb.ToString();
+    }
+
+    /// Every (role, session) that currently holds a cursor file in `dir` —
+    /// the observation surface's answer to "who is on this bus?" (d14). A
+    /// PURE LISTING: it opens nothing and writes nothing, so asking the
+    /// question can never create a mailbox or advance one.
+    ///
+    /// A cursor file is the ONLY on-disk trace a recipient leaves (the daemon
+    /// keeps no session registry, and d14 does not add one), which is exactly
+    /// why the answer is inference rather than presence: a session that has
+    /// never been delivered to holds no cursor and does not appear here.
+    /// Files this cannot decode back to the name that produced them are
+    /// SKIPPED, not guessed — `cursor.<role>.<session>.json` with both
+    /// segments percent-encoded, so the lock files (`.lock` suffix) and the
+    /// atomic-write temps (leading `.`) fall out by the same rule rather than
+    /// by a special case. Never throws: an unreadable directory lists empty.
+    public static IReadOnlyList<(string Role, string? Session)> List(string dir)
+    {
+        string[] files;
+        try { files = Directory.GetFiles(dir, "cursor.*.json"); }
+        catch (Exception) { return []; }   // absent, unreadable, not a directory
+
+        var found = new List<(string Role, string? Session)>();
+        foreach (var file in files)
+            if (TryParseCursorFileName(Path.GetFileName(file)) is { } id)
+                found.Add(id);
+        return found
+            .OrderBy(x => x.Role, StringComparer.Ordinal)
+            .ThenBy(x => x.Session ?? "", StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// `cursor.<encRole>.<encSession>.json` → the names that produced it, or
+    /// null. `Enc` never emits `.`, so the two dots inside the name are
+    /// unambiguous separators; the round-trip check (re-encoding must give
+    /// back the exact filename) is what makes this a recognition rather than
+    /// a parse — a hand-made `cursor.a.b.json` with an unencoded byte is not
+    /// ours and is refused.
+    public static (string Role, string? Session)? TryParseCursorFileName(string fileName)
+    {
+        const string prefix = "cursor.", suffix = ".json";
+        if (!fileName.StartsWith(prefix, StringComparison.Ordinal)
+            || !fileName.EndsWith(suffix, StringComparison.Ordinal)
+            || fileName.Length <= prefix.Length + suffix.Length)
+            return null;
+
+        var middle = fileName[prefix.Length..^suffix.Length];
+        var dot = middle.IndexOf('.');
+        if (dot < 0 || middle.IndexOf('.', dot + 1) >= 0) return null;   // exactly one separator
+
+        var encRole = middle[..dot];
+        var encSession = middle[(dot + 1)..];
+        if (encRole.Length == 0) return null;                            // a role always has a name
+
+        if (Dec(encRole) is not { } role) return null;
+        string? session = null;
+        if (encSession.Length > 0)
+        {
+            if (Dec(encSession) is not { } s) return null;
+            session = s;
+        }
+        // Canonicality: only a name WE would have written is ours to report.
+        return Enc(role) == encRole && (session is null ? "" : Enc(session)) == encSession
+            ? (role, session)
+            : null;
     }
 
     /// Read the store through this recipient's cursor: what is pending, what

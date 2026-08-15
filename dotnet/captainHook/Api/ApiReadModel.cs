@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CaptainHook.Core;
+using CaptainHook.Mail;
 
 namespace CaptainHook.Api;
 
@@ -24,12 +25,17 @@ public sealed class ApiReadModel
     private readonly string? _handlersPath;
     private readonly Func<long> _clock;
     private readonly long _startTick;
+    private readonly MailReadPort? _mail;          // null => GET /mail 404s (no bus to observe)
+    private readonly SessionPresence? _presence;   // null => presence is cursor-files only
 
     public ApiReadModel(
         string version, ServeStats stats, Dispatcher dispatcher,
         ReloadingHarnessRegistry harnesses, ReloadingPolicy policy, string? policyPath,
-        Func<long> clock, long startTick, string? handlersPath = null)
+        Func<long> clock, long startTick, string? handlersPath = null,
+        MailReadPort? mail = null, SessionPresence? presence = null)
     {
+        _mail = mail;
+        _presence = presence;
         _version = version;
         _stats = stats;
         _dispatcher = dispatcher;
@@ -174,6 +180,138 @@ public sealed class ApiReadModel
 
         return new PolicyDto(state, error, doc, raw, _policyPath, etag);
     }
+
+    /// GET /mail (ADR-0016 d14): one read-only snapshot of the bus — chain
+    /// status, the ledger from `since`, every cursor's pending view, and the
+    /// inferred presence behind them. Null when no mail port was wired (the
+    /// route then 404s, exactly like the other capability-gated endpoints).
+    ///
+    /// WHAT THIS METHOD CANNOT DO is the point: `_mail` is a `MailReadPort`,
+    /// which has no Append and no Advance, so no shape of bug or feature here
+    /// can deliver mail. Reading a mailbox changes nothing on disk — every
+    /// call below (`Read`, `VerifyChain`, `HeadHash`, `Cursors`, `Pending`) is
+    /// a pure read, which is also what makes it safe to serve on every poll.
+    public MailDto? Mail(long since)
+    {
+        if (_mail is null) return null;
+
+        var lines = _mail.Read();
+        // The frontier stops BEFORE an unterminated tail — MailCursors.Pending's
+        // rule, applied identically here so the picture and the delivery agree
+        // about where the store ends. The torn line itself is still REPORTED
+        // (an operator watching an interrupted write should see it), just never
+        // counted as consumable.
+        var torn = lines.Count > 0 && !lines[^1].Terminated;
+        var complete = torn ? lines.Take(lines.Count - 1).ToList() : lines.ToList();
+        var frontier = torn
+            ? lines[^1].Offset
+            : complete.Count > 0 ? complete[^1].Offset + complete[^1].Bytes + 1 : 0;
+        var bytes = lines.Count > 0
+            ? lines[^1].Offset + lines[^1].Bytes + (lines[^1].Terminated ? 1 : 0)
+            : 0;
+
+        // Alignment, on the cursor's own rule: a legitimate resume offset rests
+        // on a line boundary or at the frontier. Anything else means the bytes
+        // the client last read are gone — it must re-snapshot from 0 rather
+        // than splice a stale prefix onto a fresh tail.
+        var aligned = since == 0 || since == frontier || lines.Any(l => l.Offset == since);
+
+        var faults = _mail.VerifyChain();
+        var chain = new MailChainDto(
+            Ok: faults.Count == 0,
+            Head: _mail.HeadHash(),
+            Gen: _mail.Gen,
+            Lines: lines.Count,
+            Bytes: bytes,
+            DirMode: Mode(_mail.Dir),
+            FileMode: Mode(_mail.FilePath),
+            Faults: faults
+                .Select(f => new MailChainFaultDto(f.Offset, Camel(f.Kind.ToString()), f.Detail))
+                .ToList());
+
+        var lineDtos = lines
+            .Where(l => l.Offset >= since)
+            .Select(l => new MailLineDto(
+                l.Offset, l.Bytes, l.Terminated, l.Hash,
+                l.Envelope is null ? null : Envelope(l.Envelope),
+                l.Errors))
+            .ToList();
+
+        var cursors = _mail.Cursors()
+            .Select(id => Cursor(_mail.Pending(id.Role, id.Session)))
+            .ToList();
+
+        return new MailDto(_mail.Dir, chain, since, aligned, frontier, lineDtos, cursors, Presence(cursors));
+    }
+
+    private static MailCursorDto Cursor(MailPendingView v) => new(
+        v.Role, v.Session, v.Gen, v.Head, v.Frontier, v.Deliveries, v.LastDeliveredId,
+        v.Reanchored, v.ReanchorReason,
+        v.Pending.Select(p => Pending(p, v.Deliveries)).ToList(),
+        v.Expired.Select(p => Pending(p, v.Deliveries)).ToList(),
+        v.SkippedMalformed);
+
+    // `Opportunities` is the cursor's own arithmetic (deliveries − seenAt + 1),
+    // computed HERE rather than in the client so the TTL countdown a viewer
+    // sees is the same number MailCursors compares against ttlDeliveries. Fresh
+    // mail (never passed over) has consumed nothing: 0.
+    private static MailPendingDto Pending(PendingMail p, long deliveries) => new(
+        p.Offset, p.Envelope.Id, Camel(p.Envelope.Priority.ToString()), p.Envelope.TtlDeliveries,
+        p.SeenAt, p.SeenAt is { } seen ? deliveries - seen + 1 : 0);
+
+    // Presence = cursor files ∪ recently-dispatched sessions (ADR-0016 d14).
+    // Both halves are INFERENCE: the first says "this session was delivered to
+    // once", the second "this daemon served a hook of its N ms ago". Neither is
+    // a liveness claim, and a session holding no cursor and sending no hooks
+    // simply is not here — which is honest, because nothing on this machine
+    // knows otherwise.
+    private IReadOnlyList<MailPresenceDto> Presence(IReadOnlyList<MailCursorDto> cursors)
+    {
+        var roles = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var c in cursors)
+        {
+            if (c.Session is null) continue;   // a sessionless reader has no presence to infer
+            if (!roles.TryGetValue(c.Session, out var list)) roles[c.Session] = list = [];
+            if (!list.Contains(c.Role)) list.Add(c.Role);
+        }
+
+        var ages = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var (session, ageMs) in _presence?.Recent() ?? [])
+            ages[session] = ageMs;
+
+        return roles.Keys.Union(ages.Keys, StringComparer.Ordinal)
+            .Select(s => new MailPresenceDto(
+                s,
+                roles.TryGetValue(s, out var r) ? r : [],
+                ages.TryGetValue(s, out var a) ? a : null))
+            // Freshest first, then the quiet cursor-only sessions by name — a
+            // stable order so a re-render never reshuffles the lanes.
+            .OrderBy(p => p.LastDispatchAgeMs ?? long.MaxValue)
+            .ThenBy(p => p.Session, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static MailEnvelopeDto Envelope(MailEnvelope e) => new(
+        e.Id, e.Ts, new MailSenderDto(e.From.Agent, e.From.Harness, e.From.Session),
+        e.To, Camel(e.Kind.ToString()), e.Topic, Camel(e.Priority.ToString()),
+        e.InReplyTo, e.TtlDeliveries, e.Body, e.Prev);
+
+    /// The unix mode as three octal digits ("600"), or null when the path is
+    /// absent or its mode unreadable. Owner-only is a d13 guarantee about
+    /// these files; showing it beats asserting it.
+    private static string? Mode(string path)
+    {
+        try
+        {
+            if (!File.Exists(path) && !Directory.Exists(path)) return null;
+            return Convert.ToString((int)File.GetUnixFileMode(path), 8).PadLeft(3, '0');
+        }
+        catch (Exception) { return null; }   // unsupported platform, permissions, a race
+    }
+
+    /// A closed set's member name in the wire's camelCase — the enum spelling
+    /// every other DTO here uses ("prevMismatch", "urgent").
+    private static string Camel(string name) => char.ToLowerInvariant(name[0]) + name[1..];
 
     private static PolicyDocDto Doc(DispatchPolicy p) => new(
         Default: p.Default.ToString().ToLowerInvariant(),
