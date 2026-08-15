@@ -114,6 +114,16 @@ ADR-0008); it ships what is committed.
 
 ### 1c. Discard a pre-0600 trail (ADR-0016 d13)
 
+⚠ **Run this in the SAME command block as the swap above, not as a separate
+step.** Every tool call the deployer makes fires `PreToolUse` through the shim,
+so a command that runs *between* the swap and this discard cold-starts the new
+daemon and writes the deploy's `shim.fallback` + `shim.spawnDaemon` evidence
+into the very trail this step then deletes. Observed on the 2026-08-15 deploy:
+the cold-path proof was lost to the discard running one tool call late, and only
+the daemon's existence (new identity, new pid) attested that a cold start had
+happened at all. Swap-then-discard as one block leaves the first hook AFTER the
+block to cold-start into the fresh trail, which is what step 3 reads.
+
 Both emitters now create the trail `0600` and `logs/` `0700` — but
 `UnixCreateMode` applies **on create only**, and `Directory.CreateDirectory` is
 a no-op on a directory that already exists. A tree from before that fix keeps
@@ -125,17 +135,32 @@ untouched by this, and a fresh file created by the new build is self-evidently
 correct where a chmod'ed one only looks it. Both emitters open-write-close per
 line and hold no fd, so nothing is holding the old inode.
 
+**Discard OUR trail; keep what payloads own.** `logs/` holds two different
+kinds of thing, and only one of them is telemetry. `captainHook.jsonl` is ours
+and is the file whose mode is wrong. Anything else in there was written by a
+*payload* — `session-pulse.jsonl` is a maintainer's cross-session activity
+ledger going back to the first live deploy — and a payload's durable record is
+not this fix's to destroy. It keeps its own umask mode (no engine change can
+reach it), and the 0700 directory is what shields it; that is the whole reason
+the directory mode is the load-bearing half.
+
 ```sh
+LOGS=~/.captainHook/logs
 # Only when the existing modes are the loose ones — never widen, never surprise
 # a user who tightened something themselves.
-if [ -d ~/.captainHook/logs ] && [ "$(stat -c %a ~/.captainHook/logs)" != 700 ]; then
-  rm -rf ~/.captainHook/logs      # recreated 0700 by the first line the new build writes
+if [ -d "$LOGS" ] && [ "$(stat -c %a "$LOGS")" != 700 ]; then
+  KEEP=$(mktemp -d)
+  # everything EXCEPT our trail survives the swap
+  find "$LOGS" -maxdepth 1 -type f ! -name 'captainHook.jsonl' -exec mv {} "$KEEP"/ \;
+  rm -rf "$LOGS"
+  install -d -m 700 "$LOGS"          # 0700 now, not on first write
+  find "$KEEP" -maxdepth 1 -type f -exec mv {} "$LOGS"/ \;
+  rmdir "$KEEP"
 fi
 ```
 
-This drops the JSONL history, including any `session-pulse.jsonl` or other
-payload-written logs living beside it — say so in the report rather than
-letting it be noticed later. Verify after step 3 has written a line:
+This drops the JSONL trail history — say how many lines in the report rather
+than letting it be noticed later. Verify after step 3 has written a line:
 
 ```sh
 stat -c '%a %n' ~/.captainHook/logs ~/.captainHook/logs/captainHook.jsonl   # want 700, 600
