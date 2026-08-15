@@ -2,7 +2,9 @@
 
 **Status:** Accepted *(2026-08-12; owner accept, same day as drafting from the
 owner's design sessions of 2026-08-11/12. Nothing here is implemented yet —
-build order below, decomposed via `/adr-plan`.)*
+build order below, decomposed via `/adr-plan`.)* *(Amended 2026-08-15 —
+decision 14, the observation surface: a read-only mail endpoint + the Mail
+canvas; plan addendum below. All 11 original slices had landed by then.)*
 **Date:** 2026-08-12
 **Builds on:** [ADR-0003](0003-declarative-harness-registry.md) (the harness
 spec as capability data), [ADR-0007](0007-management-api.md) (TrailCursor /
@@ -463,6 +465,69 @@ shared edit log. The bus must not know or care what backs a member:
     belongs to gate members (the key-redactor) at the tool seam, not to holes
     in the ledger.
 
+14. **The bus is observable, and observation is not delivery** *(amendment
+    2026-08-15, owner-requested after the first members went live)*. The
+    daemon's GUI gains a **Mail** view: a zoomable canvas that draws the whole
+    bus live — every mailbox, every session's cursor, every envelope, arriving
+    and being picked up — and it is **strictly read-only in a way the
+    architecture already guarantees rather than the UI merely promising.**
+    Three parts:
+
+    - **A read endpoint, `GET /api/v1/mail`** — the snapshot: chain status
+      (`VerifyChain` result, head, `gen`, count, modes), the ledger's lines
+      from an optional `?since=<offset>` (offset-resumable, the same shape as
+      the cursor's frontier and the SSE `Last-Event-ID`), and one
+      `MailPendingView` per cursor file on disk (`MailCursors.Pending` — a
+      pure read: it computes frontier / held / expired and writes nothing).
+      Presence of a "connected harness" is **inferred**, not tracked: a
+      session is present if it holds a cursor or has appeared in recent
+      dispatch events, shown with its last-seen; the daemon has no session
+      registry and no heartbeat, and this decision does not add one — the
+      canvas fades a stale session, it never claims liveness.
+    - **The live signal is the trail, unchanged in kind.** `/api/v1/events`
+      (ADR-0007) already tails the file both emitters append; `mail.append`,
+      `mail.deliver`, `mail.expire`, `mail.cursorAdvance` and the three
+      re-anchor events are the entire choreography, and the GUI is one more
+      subscriber to a stat-poll tail that has never had a back-channel to an
+      emitter — a slow canvas gets a `Gap` and re-snapshots; it cannot slow a
+      digest. One enrichment: `mail.append` gains the envelope's `from`
+      (agent / harness / session), `kind`, `priority`, `topic` and
+      `ttlDeliveries` — provenance for the arrival animation, never the
+      `body` (the trail is operational-lifetime and payload-readable; the body
+      belongs to the archival store alone). Both trail emitters are pinned by
+      golden tests, so this is a schema-seam change and lands as one.
+    - **The canvas draws the mechanism, not a mailbox metaphor.** The spine is
+      the ledger — one bus line in append order — because on this bus mail
+      never moves: an envelope is appended once, and *cursors move past it*.
+      Each `to` role hangs off the bus as a lane; each session in that role is
+      a cursor sliding along it, tagged with the seam it lands at; held
+      envelopes show their TTL countdown, expired ones grey. **Semantic zoom**
+      (the zoom level selects the render tier — far: roles + counts + pulse;
+      mid: sessions / cursors / frontiers; near: envelope cards with d10's
+      provenance, chain link, and the envelope's `mail.deliver` records)
+      rather than scaling text into illegibility. Plain SVG with a `viewBox`
+      in the store's slice — no canvas/graph library (ADR-0015's zero-new-deps
+      culture) — and the model behind it is a **pure reducer**
+      `(state, trailLine) → state` seeded from the snapshot, which is what
+      makes the choreography unit-testable without a browser and makes
+      **replay** (feed the same reducer trail lines from an older offset) a
+      scrub bar rather than a feature.
+
+    **Read-only is pinned, not promised**, three ways: (i) `ApiReadModel` is
+    handed `MailStore.Read` / `VerifyChain` / `MailCursors.Pending` and
+    nothing else — `Append` and `Advance` are not reachable from the API
+    graph, so a "mark read" button has nothing to call; (ii) a route-table
+    test asserts nothing under `/api/v1/mail` answers a non-GET (the auth-gate
+    tests' family); (iii) the reducer never derives "delivered" from anything
+    but a `mail.deliver` ledger line — an envelope behind a cursor with no
+    ledger record renders as *before cursor · no record* (the trail is
+    days-to-weeks and gets discarded; the store is the archival truth), never
+    as delivered. Only the digest advances a cursor; the GUI observing a
+    mailbox changes nothing on disk, and this sentence is the invariant.
+    Sending from the GUI (the operator as a bus member) is deliberately **not
+    here** — it is a new write path beside `mail send` and a d5/ADR-0011
+    consent question; it needs its own decision if wanted.
+
 ## Rejected alternatives
 
 | alternative | disposition |
@@ -551,6 +616,17 @@ shared edit log. The bus must not know or care what backs a member:
   bill; on-demand default + policy scoping are the throttles, and each watcher
   carries ADR-0010 N7's reentrancy guard (`--setting-sources ""` pattern) so a
   watcher's own model call never re-enters the bus.
+- **N8 · Two implementations of "pending".** Decision 14's reducer
+  reproduces cursor semantics (frontier / held / TTL-in-deliveries / expired)
+  in TypeScript so the canvas can animate between snapshots; the C#
+  `MailCursors.Pending` remains the only truth. A divergence would draw a
+  mailbox state that does not exist. Mitigation: the reducer's golden
+  sequences are derived from the C# tests' fixtures, and every re-snapshot
+  (`Gap`, `Reset`, reconnect, view open) replaces the reduced state with the
+  daemon's view rather than merging into it — the reducer is an interpolator
+  between authoritative reads, not a second store. The trail-lifetime gap
+  (delivered-but-unrecorded, d14 pin iii) is the same asymmetry stated
+  honestly on screen.
 
 ## Implementation plan
 
@@ -636,6 +712,34 @@ strictly after hardening (a broken guard = runaway model calls on the
 owner's bill); mail tests point at explicit temp dirs, never the live
 `~/.captainHook/` tree; ship bar throughout — suite green twice, `/shipshape`
 before commits, live installation touched only via `/deploy`.
+
+### Addendum — decision 14, the observation surface *(2026-08-15)*
+
+*Seven slices → five phases (one optional). Critical path
+`mail-read-endpoint → mail-reducer → mail-canvas → mail-live-choreography →
+mail-view-docs`; `mail-append-provenance-fields` is parallel to the endpoint.
+Adversarial verify on exactly one slice — the reducer — because it is the one
+place a plausible-but-wrong pass paints a false picture and no screenshot can
+tell; everything else fails VISIBLY under `/ui-loop`. Same drivers as
+ADR-0015's table: visible-vs-silent failure, judgment-heavy vs mechanical.
+Model names are session aliases; effort is the session effort setting.*
+
+| # | slice | model | effort | verify |
+|---|---|---|---|---|
+| 1 | `mail-read-endpoint` — `MailDto`s + `GET /api/v1/mail?since=` in `ApiHost`/`ApiReadModel`/`ApiSchema`, `api.gen.ts` regenerated; presence inference from cursor files ∪ recent dispatch sessions; `Pending` per cursor, never `Advance` | opus[1m] | medium | Route-table pin: no non-GET under `/mail`; the read model's constructor takes no append/advance handle (compile-time absence, asserted by a reflection test naming the forbidden symbols); a `since` round-trip test in the `ApiHostTests` family; store read against a torn tail returns the honest frontier. Fails loudly. |
+| 2 | `mail-append-provenance-fields` — `from`/`kind`/`priority`/`topic`/`ttlDeliveries` on `mail.append`; NOT `body` | opus[1m] or sonnet | low | Golden trail test extended (both emitters render this event only from the engine, but the field set is schema — pin it); grep-pin that `body` never appears in a `mail.*` emit. |
+| 3 | `mail-reducer` — pure TS `(state, line) → state` + snapshot seed; frontier/held/TTL/expired mirrored from `MailCursors.Pending`; presence decay; anomaly surfacing (deliver for an unknown cursor, advance past frontier, reanchor); `Gap`/`Reset` ⇒ resnapshot flag | **fable** | **high** | The one adversarial pass: golden sequences ported from `MailCursorTests`/`MailCursorEdgeTests` fixtures (same inputs ⇒ same pending set as C#), then an independent skeptic attacks reducer ⇄ `Pending` divergence, out-of-order lines, a deliver with no matching append (trail truncated), and the "no record ≠ delivered" rule. `node --test`. |
+| 4 | `mail-canvas` — the SVG bus: ledger spine, role lanes, session cursors, envelope glyphs; semantic-zoom tiers; pointer pan / wheel zoom on a `viewBox` in the store slice; sidebar entry `Mail`; both themes | opus[1m] | **high** | `/ui-loop`: seeded preview daemon with a scripted swarm (two roles, two sessions, held + expired envelopes), snap all three zoom tiers × 2 themes and READ them; a `mail.spec` e2e (zoom in on a lane ⇒ envelope cards; the ledger stays legible at far zoom); axe/contrast pass on the glyph palette. Big surface, fails visibly. |
+| 5 | `mail-live-choreography` — SSE subscription filtered to `mail.*`, one animation per event kind (drop-on-bus / cursor slide with seam tag / grey-out / reanchor jump), presence fade, resnapshot on `Gap`/`Reset`/reconnect | opus[1m] | medium | e2e through the preview daemon's fireHook: `mail send` then a digest at a seam ⇒ the envelope lights and the cursor passes it, asserted on DOM state not timing; `Gap` injected via the sse-backpressure test seam ⇒ resnapshot observed. Snap mid-animation frames read. |
+| 6 | `mail-replay` *(optional)* — scrub bar: reducer fed from `/api/v1/events?Last-Event-ID=<older>` at variable rate; live resumes at the head | opus[1m] | low | Reducer determinism already pinned by 3; one e2e (scrub back ⇒ pending set matches the golden at that offset). Skippable if the live view alone satisfies the field report. |
+| 7 | `mail-view-docs` — flow doc § *The observation surface* (diagram of the bus canvas over the mechanism, ground-truth rows), this ADR's Ground truth rows for d14, ADR-0015 d1 note honored, roadmap tick | opus[1m] | low | `/shipshape`: every symbol named exists; a field report entry from watching the maintainer's real session in `doc/dogfood/`. |
+
+**Phases:** (1) slices 1 + 2, one sitting, independent commits → (2) slice 3
+alone, verify hard before any pixel is drawn — the picture inherits the
+reducer's truth → (3) slice 4 → (4) slice 5 (+ 6 if wanted) → (5) slice 7.
+Standing rules: nothing under `/api/v1/mail` writes, ever; the reducer is an
+interpolator between authoritative snapshots (N8); mail tests point at
+explicit temp dirs; ship bar unchanged.
 
 ## Ground truth *(back-filled decision→code 2026-08-15, all 11 slices landed)*
 

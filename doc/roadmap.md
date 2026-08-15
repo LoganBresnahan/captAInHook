@@ -11,6 +11,34 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
+- [ ] **21. The Mail view — watch the bus live, read-only** — item 20 built
+  the bus; nothing shows it. Per **ADR-0016 d14** (amended 2026-08-15): a
+  sixth GUI view whose body is a zoomable SVG canvas drawing the *mechanism*
+  — the ledger as the spine (mail never moves; cursors move past it), each
+  `to` role a lane, each session a cursor sliding along it tagged with the
+  seam it landed at, held envelopes with TTL countdown, expired greyed;
+  semantic zoom (far: roles + pulse; mid: sessions/cursors/frontiers; near:
+  envelope cards with provenance, chain link, and their `mail.deliver`
+  records). Live from the trail SSE that already exists (`mail.*` events are
+  the whole choreography); snapshot from a new read-only
+  `GET /api/v1/mail?since=`. **Observation is not delivery** — pinned three
+  ways (no append/advance handle in the read model, no non-GET route under
+  `/mail`, "delivered" only from a ledger line); presence is inferred with
+  fade, never claimed; sending from the GUI is explicitly NOT here (a
+  consent decision of its own). ADR-0015 d1 amended for the sixth entry.
+  Build order: ADR-0016 § Implementation plan → Addendum (7 slices → 5
+  phases, one optional; critical path `mail-read-endpoint → mail-reducer →
+  mail-canvas → mail-live-choreography → mail-view-docs`; adversarial verify
+  on the reducer only, **fable / high** — the one place a wrong pass paints a
+  false picture no screenshot can catch; endpoint + provenance-fields
+  opus/medium + opus-or-sonnet/low in one sitting; canvas opus/**high** under
+  `/ui-loop`; choreography opus/medium; replay optional opus/low; docs
+  opus/low). Standing hazards named: N8 — two implementations of "pending",
+  the reducer is an interpolator between authoritative snapshots, never a
+  second store; the trail's days-to-weeks lifetime means older envelopes show
+  *before cursor · no record*, never "delivered".
+  Slices landed: —
+
 - [x] **19. GUI overhaul — sidebar views, template-gallery authoring, the
   screenshot loop** — the GUI works but has a visible defect (handlers table
   overflows its card), a broken one-page layout (trace buried, dead space),

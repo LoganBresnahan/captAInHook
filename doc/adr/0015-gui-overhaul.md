@@ -43,6 +43,10 @@ down per test; there is no persistent seeded preview).
    the SSE stream keeps feeding the store from outside React, so a hidden
    view loses nothing. URL/hash persistence of the active view is deferred —
    the `#t=` token scrub owns the fragment.
+   *(Amended 2026-08-15: a sixth nav entry, **Mail**, per ADR-0016 d14 — a
+   view whose body is a zoomable SVG canvas rather than a panel. The decision
+   holds unchanged: one view at a time, a `view` slice, no router, no
+   graph/canvas library; the canvas's `viewBox` is just more store state.)*
 
 2. **A real token system, polished-terminal direction.** Type scale (mono for
    data, a UI face for chrome), spacing scale, radii, and semantic colors —
