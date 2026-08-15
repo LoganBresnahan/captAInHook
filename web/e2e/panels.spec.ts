@@ -87,10 +87,16 @@ test.describe("read panels", () => {
     await expect(matrix.locator('[data-cell="PostToolUse:replace"]')).toHaveAttribute("data-on", "true");
     await expect(matrix.locator('[data-cell="SessionStart:inject"]')).toHaveAttribute("data-on", "true");
 
-    // Stop declares nothing: one spanning cell saying so, and NO yes/no cells
-    // at all — an all-blank row would read as missing data.
-    const stop = matrix.locator('[data-event-row="Stop"]');
-    await expect(stop.locator("[data-no-effects]")).toHaveText("no loop effects");
-    await expect(stop.locator("[data-cell]")).toHaveCount(0);
+    // Stop carries `decide` and only decide — ADR-0016's reconcile seam (item
+    // 20) is exactly this cell, and mail must never escalate a status message
+    // into a blocked turn on an event that also takes inject.
+    await expect(matrix.locator('[data-cell="Stop:decide"]')).toHaveAttribute("data-on", "true");
+    await expect(matrix.locator('[data-cell="Stop:inject"]')).toHaveAttribute("data-on", "false");
+
+    // SessionEnd declares nothing: one spanning cell saying so, and NO yes/no
+    // cells at all — an all-blank row would read as missing data.
+    const none = matrix.locator('[data-event-row="SessionEnd"]');
+    await expect(none.locator("[data-no-effects]")).toHaveText("no loop effects");
+    await expect(none.locator("[data-cell]")).toHaveCount(0);
   });
 });

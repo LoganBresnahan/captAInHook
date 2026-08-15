@@ -59,6 +59,17 @@ type LogEvent =
     member this.ToPretty() : string =
         let f = this.Fields
         let piece label (v: string) = if isNull v then "" else sprintf " %s=%s" label v
+        // A STRUCTURED data value has no useful ToString: `mail.append`'s
+        // nested `from` printed as `System.Collections.Generic.Dictionary`2[…]`
+        // on the human line while the JSONL beside it carried the real object.
+        // Anything that is not a scalar renders as the same compact JSON the
+        // JSONL uses, so the two renderings never say different things.
+        let prettyValue (v: obj) : string =
+            match v with
+            | null -> "null"
+            | :? string as s -> s
+            | :? System.Collections.IEnumerable -> JsonSerializer.Serialize v
+            | _ -> string v
         String.Concat(
             this.Ts.ToString("HH:mm:ss.fff"), " ",
             this.Lvl.ToUpperInvariant().PadRight(5), " ",
@@ -68,7 +79,7 @@ type LogEvent =
             piece "dispatch" f.DispatchId,
             piece "actor" f.ActorId,
             (if isNull f.Data then ""
-             else f.Data |> Seq.map (fun kv -> sprintf " %s=%O" kv.Key kv.Value) |> String.concat ""),
+             else f.Data |> Seq.map (fun kv -> sprintf " %s=%s" kv.Key (prettyValue kv.Value)) |> String.concat ""),
             (if isNull f.Msg then "" else "  " + f.Msg))
 
 /// Timing helper: starts a stopwatch at construction, emits ONE event with

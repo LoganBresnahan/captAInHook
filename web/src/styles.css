@@ -725,3 +725,199 @@ table.rules td.rule-actions { white-space: nowrap; width: 1%; }
 table.rules td.rule-actions button { padding: var(--s-1) var(--s-2); }
 .policy-hint { font-size: var(--fs-xs); max-width: 62ch; }
 [data-policy-locked] { margin: var(--s-3) 0; }
+
+/* ================= mail: the bus canvas (ADR-0016 d14) =================
+
+   The picture is the mechanism: a fixed ledger spine, a lane per `to` role, a
+   track per session reading it. Everything here is expressed against the same
+   tokens as the rest of the GUI — the canvas is not allowed its own palette,
+   because a status colour that means one thing in an SVG and another in a
+   table is exactly how an operator learns to distrust both.
+
+   TWO CHANNELS, ALWAYS. Every status carries a glyph as well as a colour (and
+   a sentence in its <title>), so the picture survives a monochrome print, a
+   colour-vision difference, and a dark theme that mutes the hue. */
+
+.card.mail { display: flex; flex-direction: column; }   /* content-sized: the canvas is sized to its scene, so a stretched card is dead space */
+.mail-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.mail-head h2 { margin: 0; }
+.mail-readonly {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  padding: 1px var(--s-2);
+}
+.mail-zoom { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
+.mail-zoom button { padding: var(--s-1) var(--s-3); min-width: 36px; }
+.mail-tier {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-dim);
+  min-width: 3.4em;
+}
+.mail-chain { margin-bottom: var(--s-3); }
+.mail-resnapshot {
+  margin: 0 0 var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-1);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+  font-size: var(--fs-sm);
+}
+
+.mail-canvas-wrap { display: flex; flex-direction: column; }
+/* The height is set INLINE from the scene's aspect (see MailPanel): the canvas
+   is sized to its content so the default fit has no dead space to centre in. */
+.mail-canvas {
+  width: 100%;
+  display: block;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  touch-action: none;        /* the canvas owns the gesture, not the scroller */
+  cursor: grab;
+}
+.mail-canvas:active { cursor: grabbing; }
+.mail-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mail-canvas text { font-family: var(--font-mono); fill: var(--text); }
+.mail-hint { margin: var(--s-2) 0 0; font-size: var(--fs-2xs); }
+
+/* ---- the spine (the ledger itself) ---- */
+
+.spine-rail { fill: var(--border-strong); }
+.spine-slot { fill: color-mix(in srgb, var(--accent) 40%, var(--surface)); }
+.spine-slot.slot-unreadable { fill: var(--bad); }
+.spine-slot.slot-torn { fill: var(--warn); }
+.spine-unknown { fill: none; stroke: var(--border-strong); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.spine-label { fill: var(--text-faint); }
+.spine-frontier line { stroke: var(--text-dim); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.spine-frontier text { fill: var(--text-dim); }
+.mail-spine { paint-order: stroke; }
+
+/* ---- lanes and their pinned headers ---- */
+
+.lane-bg { fill: var(--surface); stroke: var(--border); vector-effect: non-scaling-stroke; }
+.lane-head-bg { fill: var(--surface); stroke: var(--border); vector-effect: non-scaling-stroke; }
+.lane-role { fill: var(--text); font-weight: 600; }
+.lane-counts { fill: var(--text-dim); }
+.lane-noreader { fill: var(--text-faint); }
+.lane-session { fill: var(--text-dim); }
+.lane-session.presence-stale, .lane-session.presence-unknown { fill: var(--text-faint); }
+
+/* ---- envelopes ---- */
+
+.mail-glyph { --st: var(--text-faint); cursor: pointer; }
+.glyph-fresh { --st: var(--accent); }
+.glyph-held { --st: var(--warn); }
+.glyph-expired { --st: var(--text-faint); }
+.glyph-delivered { --st: var(--ok); }
+.glyph-passed { --st: var(--border-strong); }
+.glyph-no-reader { --st: var(--text-faint); }
+.glyph-unreadable { --st: var(--bad); }
+.glyph-torn { --st: var(--warn); }
+
+.mail-glyph .glyph-body {
+  fill: color-mix(in srgb, var(--st) 16%, var(--surface));
+  stroke: var(--st);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.glyph-expired .glyph-body,
+.glyph-no-reader .glyph-body { stroke-dasharray: 4 3; }
+.glyph-passed .glyph-body { fill: var(--surface-2); }
+.mail-glyph .glyph-prio { fill: var(--st); opacity: 0.3; }
+.prio-reconcile .glyph-prio { opacity: 0.6; }
+.prio-urgent .glyph-prio { opacity: 1; }
+.mail-glyph .glyph-drop {
+  stroke: var(--border-strong);
+  stroke-dasharray: 2 3;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.mail-glyph .glyph-mark { fill: var(--st); }
+.mail-glyph .card-line-0,
+.mail-glyph .card-line-2,
+.mail-glyph .card-line-3 { fill: var(--text-dim); }
+.mail-glyph.is-selected .glyph-body { stroke-width: 2.5; }
+.mail-glyph:focus-visible { outline: none; }
+.mail-glyph:focus-visible .glyph-body { stroke: var(--accent); stroke-width: 3; }
+
+/* ---- cursors: the only thing on this bus that moves ---- */
+
+.mail-track .track-rail { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.mail-track .track-read { stroke: var(--text-dim); stroke-width: 2; opacity: 0.45; vector-effect: non-scaling-stroke; }
+.mail-track.is-uncertain .track-rail { stroke: var(--warn); stroke-dasharray: 4 3; }
+.track-cursor path { fill: var(--text); }
+.track-cursor .cursor-stem { stroke: var(--text-dim); stroke-dasharray: 3 3; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.track-unknown, .track-flag { fill: var(--warn); }
+.track-mark rect { vector-effect: non-scaling-stroke; }
+.mark-held rect { fill: color-mix(in srgb, var(--warn) 26%, var(--surface)); stroke: var(--warn); }
+.mark-expired rect { fill: var(--surface-2); stroke: var(--text-faint); stroke-dasharray: 3 2; }
+.track-mark text { fill: var(--text-dim); }
+/* Presence is INFERRED, so it fades — it is never claimed. */
+.mail-track.presence-idle { opacity: 0.8; }
+.mail-track.presence-stale { opacity: 0.55; }
+.mail-track.presence-unknown { opacity: 0.5; }
+
+/* ---- legend, detail, anomalies ---- */
+
+.mail-legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+.mail-legend li { display: inline-flex; align-items: center; gap: var(--s-2); }
+.legend-swatch {
+  --st: var(--text-faint);
+  min-width: 1.1em;
+  text-align: center;
+  color: var(--st);
+  border-bottom: 2px solid var(--st);
+  line-height: 1.1;
+}
+
+.mail-detail { margin-top: var(--s-4); border-top: 1px solid var(--border); padding-top: var(--s-3); }
+.mail-detail-head { display: flex; align-items: center; gap: var(--s-3); }
+.mail-detail-head h3 { margin: 0; }
+.mail-detail-head button { margin-left: auto; }
+.mail-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--s-2) var(--s-4);
+  margin: var(--s-3) 0;
+  font-size: var(--fs-sm);
+}
+.mail-detail-grid dt {
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-dim);
+}
+.mail-detail-grid dd { margin: 0; overflow-wrap: anywhere; }
+.mail-topic { margin: var(--s-2) 0 0; }
+.mail-body {
+  margin: var(--s-2) 0 0;
+  padding: var(--s-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+}
+.mail-standing { margin: var(--s-2) 0 0; padding-left: var(--s-4); font-size: var(--fs-sm); }
+.mail-standing li { margin-bottom: var(--s-1); }
+.mail-notes { margin-top: var(--s-4); font-size: var(--fs-xs); }
+.mail-notes ul { margin: 0; padding-left: var(--s-4); }
+.mail-notes li { margin-bottom: var(--s-1); }

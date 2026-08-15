@@ -18,6 +18,31 @@ internal sealed class CapturedLog : IDisposable
 
 public class LoggingTests
 {
+    /// A STRUCTURED data value (the `from` object `mail.append` carries since
+    /// ADR-0016 d14) used to reach the human stderr line as
+    /// `System.Collections.Generic.Dictionary`2[System.String,System.Object]`
+    /// while the JSONL beside it held the real object — the two renderings of
+    /// one event disagreeing about what happened. Nested values now render as
+    /// the same compact JSON the JSONL uses.
+    [Fact]
+    public void ToPretty_RendersNestedDataAsJson_NotATypeName()
+    {
+        var data = new Dictionary<string, object>
+        {
+            ["id"] = "m-01",
+            ["from"] = new Dictionary<string, object> { ["agent"] = "seed", ["harness"] = "claude-code" },
+            ["bytes"] = 373,
+        };
+        var pretty = new LogEvent(
+            new DateTime(2026, 8, 15, 12, 0, 0, DateTimeKind.Utc),
+            "info", "mail", "mail.append", new LogFields { Data = data }).ToPretty();
+
+        Assert.Contains("id=m-01", pretty);
+        Assert.Contains("bytes=373", pretty);
+        Assert.Contains("""from={"agent":"seed","harness":"claude-code"}""", pretty);
+        Assert.DoesNotContain("System.Collections", pretty);
+    }
+
     [Fact]
     public async Task Dispatch_EmitsStartAndHandlerOk_SharingDispatchId()
     {

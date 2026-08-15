@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
 import { build, stageUi, startDaemon } from "../e2e/daemon.ts";
-import { seedFiles, seedTrail, burstTrail } from "./seed.mjs";
+import { seedFiles, seedMail, seedTrail, burstTrail } from "./seed.mjs";
 
 // preview — ONE persistent sandboxed daemon for the GUI dev loop (ADR-0015 d5).
 //
@@ -31,6 +31,10 @@ stageUi();
 
 const daemon = await startDaemon({ port, idleMs: 24 * 60 * 60 * 1000 });
 const seeded = seedFiles(daemon);
+// The bus is seeded through the REAL verbs (`mail send`, then hooks that run
+// the registered `mail digest`) — see seed.mjs. Unlike the trail it needs no
+// live subscription: the Mail view polls a snapshot.
+const bus = seedMail(daemon);
 
 console.log(`
 preview: a seeded, isolated daemon is up.
@@ -41,16 +45,20 @@ preview: a seeded, isolated daemon is up.
     trail     ${daemon.trailPath}
     policy    ${daemon.dispatchPath}
     handlers  ${daemon.handlersPath}
-  seeded   3 handlers · 3 policy rules · ${seeded.fired.length} real hook(s) fired
+    mail      ${daemon.mailDir}
+  seeded   5 handlers · 3 policy rules · ${seeded.fired.length} real hook(s) fired
+           bus: ${bus.roles.join(", ")} across ${Object.keys(bus.sessions).length} sessions
 
 Open the URL (the #t= fragment is the one-time token; it is scrubbed on load),
 THEN type \`trail\` here — the live stream anchors at the end of the trail, so
 lines written before the tab connects never reach it.
 Rebuild the UI in another terminal with:  npm run dev   (vite build --watch)
 
-Commands:  trail | hook <event> | burst [n] | url | quit    Ctrl-C also stops it.
+Commands:  trail | hook <event> [session] | mail <role> [priority] | burst [n] | url | quit
+           (Ctrl-C also stops it. \`hook pre-tool-use ${bus.sessions.alpha}\` moves a real cursor.)
 `);
 
+let handSent = 0;
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (raw) => {
   const [cmd, ...rest] = raw.trim().split(/\s+/);
@@ -59,8 +67,11 @@ rl.on("line", (raw) => {
       case "": break;
       case "hook": {
         const evt = rest[0] ?? "user-prompt-submit";
-        const out = daemon.fireHook(evt);
-        console.log(`hook ${evt} → ${out.trim() || "(no stdout)"}`);
+        // A session id makes the dispatch belong to a session — which is what
+        // gives a `mail digest` registration a per-session cursor to move.
+        const sid = rest[1];
+        const out = daemon.fireHook(evt, sid === undefined ? {} : { session_id: sid });
+        console.log(`hook ${evt}${sid ? ` (${sid})` : ""} → ${out.trim() || "(no stdout)"}`);
         break;
       }
       case "trail": {
@@ -71,6 +82,20 @@ rl.on("line", (raw) => {
         const n = Number(rest[0] ?? 200);
         burstTrail(daemon, n);
         console.log(`appended ${n} trail lines`);
+        break;
+      }
+      // Put one envelope on the bus by hand, then watch a hook read it:
+      //   mail reviewer urgent   →   hook pre-tool-use
+      case "mail": {
+        const to = rest[0] ?? "reviewer";
+        const priority = rest[1] ?? "ambient";
+        handSent += 1;
+        const out = daemon.mailSend({
+          v: 1, id: `hand-${handSent}`, to, kind: "status", priority, ttlDeliveries: 3,
+          from: { agent: "preview", harness: "claude-code" },
+          topic: `hand-sent ${handSent}`, body: `Typed into the preview at message ${handSent}.`,
+        });
+        console.log(out.trim());
         break;
       }
       case "url":

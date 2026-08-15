@@ -162,9 +162,12 @@ test.describe("handlers editor", () => {
     await expect(page.locator('[data-field="budgetMs"]')).toHaveValue("1500");
     await expect(page.locator('[data-field="command"]')).toHaveValue(/payloads\/starter-decide\.sh$/);
     await expect(page.locator('[data-field="events"] label:has-text("PreToolUse") input')).toBeChecked();
-    // …including the per-event verbs beside each checkbox (Stop has none).
+    // …including the per-event verbs beside each checkbox. Stop declares
+    // `decide` since ADR-0016's reconcile seam (item 20), and SessionEnd is the
+    // event that still declares nothing — which the label states in words.
     await expect(page.locator('[data-event-verbs="PreToolUse"]')).toContainText("decide");
-    await expect(page.locator('[data-event-verbs="Stop"]')).toContainText("no loop effects");
+    await expect(page.locator('[data-event-verbs="Stop"]')).toContainText("decide");
+    await expect(page.locator('[data-event-verbs="SessionEnd"]')).toContainText("no loop effects");
 
     // From here it is the ordinary install path, verbatim confirm and all.
     await page.locator("[data-review]").click();

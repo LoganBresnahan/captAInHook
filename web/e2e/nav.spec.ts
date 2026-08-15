@@ -14,8 +14,8 @@ test.describe("navigation", () => {
   test("Trace is the landing view and exactly one view is on at a time", async ({ page }) => {
     await expect(page.locator('[data-island="trace"]')).toBeVisible();
     await expect(page.locator('[data-nav="trace"]')).toHaveAttribute("aria-current", "page");
-    // The other four screens are not merely hidden — they render nothing.
-    for (const island of ["status", "supervision", "policy", "harnesses"])
+    // The other screens are not merely hidden — they render nothing.
+    for (const island of ["status", "mail", "handlers", "policy", "harnesses"])
       await expect(page.locator(`[data-island="${island}"]`)).toHaveCount(0);
 
     await gotoView(page, "status");

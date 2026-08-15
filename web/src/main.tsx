@@ -6,6 +6,7 @@ import { HandlersPanel } from "./HandlersPanel.tsx";
 import { HarnessesPanel } from "./HarnessesPanel.tsx";
 import { PolicyPanel } from "./PolicyPanel.tsx";
 import { TracePanel } from "./TracePanel.tsx";
+import { MailPanel } from "./MailPanel.tsx";
 import { bootstrapToken } from "./auth.ts";
 import { useStore } from "./store.ts";
 import { startEventStream } from "./sse.ts";
@@ -34,6 +35,7 @@ mount("handlers", <HandlersPanel />);
 mount("harnesses", <HarnessesPanel />);
 mount("policy", <PolicyPanel />);
 mount("trace", <TracePanel />);
+mount("mail", <MailPanel />);
 
 // The stream rides the session: start once the bearer proves live, stop when
 // the session dies (the client also self-reports dead on a 401/403 reconnect —

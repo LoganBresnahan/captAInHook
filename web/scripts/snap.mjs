@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { build, stageUi, startDaemon, webDir } from "../e2e/daemon.ts";
-import { seedFiles, seedTrail } from "./seed.mjs";
+import { seedFiles, seedMail, seedTrail } from "./seed.mjs";
 
 // snap — the eyes of the GUI loop (ADR-0015 d5). Starts a seeded, isolated
 // daemon exactly like the preview, drives a headless browser over every view ×
@@ -44,6 +44,26 @@ mkdirSync(outDir, { recursive: true });
 
 const daemon = await startDaemon({ idleMs: 10 * 60 * 1000 });
 seedFiles(daemon);
+// The bus, put there by the real verbs before any browser opens: unlike the
+// trail, the Mail view reads a SNAPSHOT, so it does not need a live tab.
+seedMail(daemon);
+
+/** Views whose picture CHANGES WITH ZOOM, and the extra tiers worth a shot
+ * beyond the one the view opens on (ADR-0016 d14's semantic zoom). */
+const ZOOM_TIERS = { mail: ["far", "near"] };
+
+/** Click the zoom buttons until the canvas reports the wanted tier. Bounded:
+ * the tier readout is the DOM's own statement, so this cannot spin. */
+async function zoomTo(page, tier) {
+  const readout = page.locator(".mail-tier");
+  const want = { far: '[data-zoom="out"]', near: '[data-zoom="in"]' }[tier];
+  for (let i = 0; i < 12; i++) {
+    if ((await readout.getAttribute("data-tier")) === tier) return true;
+    await page.locator(want).click();
+    await page.waitForTimeout(60);
+  }
+  return (await readout.getAttribute("data-tier")) === tier;
+}
 
 const browser = await chromium.launch();
 const written = [];
@@ -76,9 +96,21 @@ try {
         await page.locator(`[data-nav="${view}"]`).click();
         await page.waitForTimeout(150);   // let the island paint before the shutter
       }
-      const file = join(outDir, `${tag ? `${tag}-` : ""}${view}-${theme}.png`);
-      await page.screenshot({ path: file, fullPage: true });
-      written.push(file);
+      const shoot = async (suffix) => {
+        const file = join(outDir, `${tag ? `${tag}-` : ""}${view}${suffix}-${theme}.png`);
+        await page.screenshot({ path: file, fullPage: true });
+        written.push(file);
+      };
+      await shoot("");
+      // A view with SEMANTIC ZOOM is three different drawings, and only one of
+      // them is on screen at a time — so one shot per view would leave two
+      // thirds of the Mail canvas unreviewed. Drive the real buttons (never a
+      // synthetic viewBox) so what the camera sees is what a click produces.
+      for (const tier of ZOOM_TIERS[view] ?? []) {
+        if (await zoomTo(page, tier)) await shoot(`-${tier}`);
+        else console.warn(`snap: could not reach the '${tier}' zoom tier on ${view}`);
+      }
+      if (ZOOM_TIERS[view]) await page.locator('[data-zoom="fit"]').click();
     }
     await ctx.close();
   }

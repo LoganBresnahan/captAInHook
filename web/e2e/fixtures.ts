@@ -27,7 +27,7 @@ export const test = base.extend<{ daemon: Daemon }>({
  * last exception, so this helper has no special cases at all. */
 export async function gotoView(
   page: Page,
-  view: "trace" | "handlers" | "policy" | "harnesses" | "status",
+  view: "trace" | "mail" | "handlers" | "policy" | "harnesses" | "status",
 ): Promise<void> {
   await page.locator(`[data-nav="${view}"]`).click();
   await expect(page.locator(`[data-island="${view}"]`)).toBeVisible();

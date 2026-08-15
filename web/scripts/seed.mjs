@@ -1,5 +1,6 @@
-import { writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
 
 // Seed data for the dev-loop sandbox (ADR-0015 d5). The preview and snapshot
 // scripts both start an EMPTY isolated daemon; an empty daemon shows empty
@@ -63,6 +64,26 @@ const TRAIL_SEED = [
   { comp: "daemon", evt: "handlerError", level: "error", dispatchId: "4b12ff08", msg: "payload wrote malformed JSON: unexpected token" },
 ];
 
+/**
+ * `env` for a digest registration that runs the DEV-TREE engine.
+ *
+ * ExecHandler clears the child's environment and rebuilds it from a fixed
+ * allowlist (ADR-0010 d5) that deliberately excludes `DOTNET_ROOT` — so a
+ * framework-dependent apphost spawned as a payload cannot find a .NET runtime
+ * installed anywhere but the machine default, and answers nothing. The DEPLOYED
+ * engine never hits this (it is self-contained single-file, ADR-0012), which is
+ * why only the sandbox needs to say it; `env{}` is the file's own mechanism for
+ * exactly this, and it beats the allowlist by design.
+ */
+function dotnetRootEnv() {
+  const root = process.env.DOTNET_ROOT
+    ?? (() => {
+      try { return dirname(realpathSync(execFileSync("sh", ["-c", "command -v dotnet"], { encoding: "utf8" }).trim())); }
+      catch { return null; }
+    })();
+  return root === null ? {} : { DOTNET_ROOT: root };
+}
+
 /** Write the seeded payload scripts; returns { name → absolute path }. */
 function writePayloads(sandbox) {
   const dir = join(sandbox, "payloads");
@@ -107,6 +128,26 @@ export function seedFiles(daemon) {
         events: ["PreToolUse", "Stop"], mode: "resident", failMode: "open",
         budgetMs: 2000, readinessTimeoutMs: 5000,
       },
+      // The bus's readers (ADR-0016 d7): a role is READ by registering the
+      // engine's own `mail digest` verb as a handler. The two seams are
+      // deliberately different, because that difference is what the Mail canvas
+      // is for — `reviewer` reads at an URGENT seam, so only urgent mail
+      // delivers there and everything else piles up held (and then expires),
+      // while `builder` reads at an AMBIENT seam, which delivers everything it
+      // can and leaves nothing behind. A picture seeded with one seam would
+      // show one shape of cursor and teach nothing.
+      {
+        name: "mail-reviewer", command: daemon.enginePath,
+        args: ["mail", "digest", "--role", "reviewer", "--seam", "urgent"],
+        events: ["PreToolUse"], mode: "oneshot", failMode: "open", budgetMs: 4000,
+        env: dotnetRootEnv(),
+      },
+      {
+        name: "mail-builder", command: daemon.enginePath,
+        args: ["mail", "digest", "--role", "builder", "--seam", "ambient"],
+        events: ["UserPromptSubmit"], mode: "oneshot", failMode: "open", budgetMs: 4000,
+        env: dotnetRootEnv(),
+      },
     ],
   }, null, 2) + "\n");
 
@@ -129,6 +170,101 @@ export function seedFiles(daemon) {
     try { daemon.fireHook(evt); fired.push(evt); } catch { /* a seed hook is best-effort */ }
   }
   return { payloads: p, fired };
+}
+
+// ---- the bus (ADR-0016 d14 — what the Mail canvas draws) --------------------
+//
+// A scripted SWARM rather than a hand-written store: every envelope goes on the
+// bus through the real `mail send` verb and every cursor is moved by a real
+// `mail digest` at a real fired hook, so the seeded picture is one the engine
+// could actually produce. Hand-writing mail.jsonl and a cursor file would be
+// faster and would let the canvas look good against a state the digest can
+// never reach — the same trap the payload smoke tests exist to avoid.
+//
+// The choreography below is chosen so that ONE snapshot contains every standing
+// the canvas can draw: delivered-and-passed, fresh, held mid-TTL, expired, mail
+// with no reader at all, two sessions at different positions on one role, and a
+// role whose cursor sits exactly at the frontier.
+const MAIL_SESSIONS = { alpha: "sess-alpha-4f21", beta: "sess-beta-9c07" };
+
+const envelope = (id, to, over) => ({
+  v: 1, id, to, kind: "status", priority: "ambient", ttlDeliveries: 3,
+  from: { agent: "seed", harness: "claude-code", session: MAIL_SESSIONS.alpha },
+  topic: "seed", body: "seeded envelope", ...over,
+});
+
+/**
+ * Put the swarm on the sandbox bus and move its cursors. Call AFTER seedFiles
+ * (whose hooks register the two digest handlers) and before the page is
+ * screenshotted; the Mail view polls the snapshot, so unlike the trail this
+ * does not have to wait for a live subscription.
+ *
+ * @param {import("../e2e/daemon.ts").DaemonHandle} daemon
+ */
+export function seedMail(daemon) {
+  const send = (id, to, over) => daemon.mailSend(envelope(id, to, over));
+  const { alpha, beta } = MAIL_SESSIONS;
+
+  // Three roles' worth of mail, none of it read yet.
+  send("drift-report-01", "reviewer", {
+    kind: "status", priority: "ambient", ttlDeliveries: 1, topic: "nightly drift",
+    body: "3 files drifted from the formatter's output overnight.",
+  });
+  send("api-review-02", "reviewer", {
+    kind: "request", priority: "reconcile", ttlDeliveries: 3, topic: "review the read port",
+    body: "Please re-read MailReadPort before the next deploy: the write half must stay unreachable.",
+  });
+  send("build-broken-03", "reviewer", {
+    kind: "alert", priority: "urgent", ttlDeliveries: 2, topic: "build is red",
+    body: "main is red on linux-x64: the AOT publish leg failed at clang.",
+  });
+  send("plan-slice-04", "builder", {
+    kind: "request", priority: "ambient", ttlDeliveries: 3, topic: "next slice",
+    body: "Take the canvas slice next; the reducer is verified and waiting.",
+  });
+  send("ledger-note-05", "builder", {
+    kind: "status", priority: "ambient", ttlDeliveries: 3, topic: "ledger",
+    body: "The ledger is the spine — mail never moves, cursors do.",
+  });
+  // A role NOBODY reads: the store keeps it, and the canvas must say so rather
+  // than draw an empty lane that looks like a rendering failure.
+  send("archive-06", "archivist", {
+    kind: "status", priority: "ambient", ttlDeliveries: 5, topic: "retention",
+    from: { agent: "cron", harness: "none" },   // a write-only member: no session
+    body: "Nothing reads this role yet — store-and-forward keeps it anyway.",
+  });
+
+  // alpha reads `reviewer` at the urgent seam: the alert delivers, the other two
+  // are passed over and stamped (the ttl-1 one is spent the moment it is held).
+  daemon.fireHook("pre-tool-use", { session_id: alpha });
+  // alpha reads `builder` at an ambient seam: everything pending delivers, so
+  // its cursor lands exactly on the frontier with nothing held.
+  daemon.fireHook("user-prompt-submit", { session_id: alpha });
+
+  // Fresh mail lands after those reads — the canvas's "ahead of the cursor".
+  send("build-broken-07", "reviewer", {
+    kind: "alert", priority: "urgent", ttlDeliveries: 2, topic: "build is red (still)",
+    body: "Still red after the retry; the clang toolchain is missing on the runner.",
+  });
+  // beta joins the SAME role: first contact anchors at 0, so it sees everything
+  // retained and ends up at a different position from alpha, holding what alpha
+  // has already dropped. Two cursors on one lane is the case a role-only trail
+  // could not attribute (the reducer slice's find).
+  daemon.fireHook("pre-tool-use", { session_id: beta });
+
+  send("style-nit-08", "reviewer", {
+    kind: "status", priority: "ambient", ttlDeliveries: 3, topic: "naming",
+    body: "`slotPx` reads better than `pxPerSlot` in the tier math.",
+  });
+  // alpha's second read: it delivers the newer alert, ages what it still holds,
+  // and drops the envelope that expired at the first one.
+  daemon.fireHook("pre-tool-use", { session_id: alpha });
+
+  send("deploy-window-09", "builder", {
+    kind: "request", priority: "reconcile", ttlDeliveries: 4, topic: "deploy window",
+    body: "Ship after the suite is green twice — the flaky guard, not a formality.",
+  });
+  return { sessions: MAIL_SESSIONS, roles: ["reviewer", "builder", "archivist"] };
 }
 
 /** Append the varied synthetic trail — call it with a live page already

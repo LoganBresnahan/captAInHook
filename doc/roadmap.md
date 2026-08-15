@@ -191,6 +191,81 @@ run live*. The framework underneath is what exists today.
   avoid entirely if `MailDto` grows the trail's current SSE id so the stream
   can open exactly at the snapshot; decide there. Not wired into the store or
   the SSE fold — that is slice 5's seam; `ui/` is unchanged by construction.)
+  `mail-canvas` (2026-08-15; phase 3, slice 4 — the sixth GUI view, and the
+  first picture of the bus: `web/src/MailPanel.tsx` over the pure geometry in
+  `web/src/mailCanvas.ts`, drawing the MECHANISM rather than a mailbox. The
+  ledger is a fixed spine in append order (mail never moves), each `to` role a
+  lane hanging off it by a drop line, each session reading that role a TRACK
+  with its cursor as a marker — and the mail it passed over marked underneath
+  with the cursor's own arithmetic (`n of ttl`, spent when the opportunities
+  reach it). A role nobody reads still gets a lane, saying `no reader`; a
+  malformed line and an unterminated tail live on the spine alone, because
+  neither names a recipient. **Two as-built amendments to d14**, both forced by
+  drawing it. (1) The pan/zoom is ONE AXIS, not a `viewBox`: the sketch's
+  uniformly-scaled box scales the CHROME with the content, so the pinned role
+  gutter is either a fixed patch of scene — which shrinks under its own
+  constant-size labels until one lane's text prints inside the next, observed —
+  or a fixed patch of screen, which then grows over the ledger it is supposed to
+  sit beside; there is no width that is both. The bus is one-dimensional, so
+  `MailView = {x, z}` scrolls and scales the LEDGER and nothing else: every
+  vertical measure, font and stroke is a CSS pixel, the svg's viewBox is 1:1
+  with its box, and a bus with more roles makes a taller canvas the page
+  scrolls rather than a vertical pan to get lost in. (2) The fit opens on
+  whatever tier the bus's SIZE implies — a nine-envelope store on cards, a
+  hundred-and-twenty-envelope store on role pulses — and never magnifies past
+  natural scale; the tier is a fact about the bus, not a preference. Semantic
+  zoom is measured in px-per-slot (far < 40 ≤ mid < 132 ≤ near = a slot owning
+  at least its natural width, which is exactly when a four-line card fits at
+  constant text size), and the x axis is SLOT-uniform rather than
+  byte-uniform — one 128KiB envelope would otherwise swallow a ledger of a
+  hundred small ones, and every question this view answers is ordinal — while
+  still mapping offsets EXACTLY at line boundaries, where cursors, frontiers
+  and deliveries actually sit. A `?since=` snapshot and any hole draw as an
+  explicit `never seen` break rather than being closed up. **The canvas computes
+  no status of its own**: every glyph's standing is `lineStatus` per cursor
+  (the lane shows the most-pending of them when two sessions disagree) and
+  every mark is `projectCursor`'s, which 37 tests in `mailCanvas.test.ts` pin
+  scenario by scenario against all 16 engine-generated goldens — glyph in its
+  recipient's lane at its own offset, cursor where the reducer holds it, mark
+  under ITS envelope with the reducer's arithmetic, nothing laid out past the
+  scene it declares. **Delivered is absent from this slice, honestly**: it comes
+  from a `mail.deliver` line and the snapshot cannot carry one, so an envelope
+  behind a cursor reads *before cursor · no record* until slice 5 folds the
+  trail; the legend says so and the cursor's own `lastDeliveredId` is shown
+  instead of inferring. Detail card (click any envelope) is the only place a
+  BODY appears — bodies reach the browser through the snapshot alone. Colour is
+  never the only channel: a status glyph, an sr-only/`<title>` sentence, a
+  legend, and an `aria-label` summarising the whole scene; presence FADES the
+  track and is never claimed. The seed became a scripted SWARM — three roles,
+  two sessions on one of them, held + spent + fresh + a role with no reader —
+  put on the bus through the REAL `mail send` and moved by REAL `mail digest`
+  registrations at real fired hooks, so the seeded picture is one the engine
+  could actually produce; `fireHook` grew a payload argument (a session id is
+  what gives a digest a per-session cursor) and the sandbox now redirects
+  `CAPTAINHOOK_MAIL_DIR` — **it did not before, so any mail work in a spec or
+  the preview would have written the operator's live bus** (CLAUDE.md's
+  pollution warning, one env var from being violated). Three defects the
+  screenshots caught and fixed in-slice: a card's fourth line printing below its
+  own body, the pinned gutter overprinting the first envelope of every lane, and
+  the far tier stacking three constant-size label lines into a lane that had
+  shrunk below them. Two the e2e caught: pointer capture taken on pointerdown
+  retargeted the following click, so a canvas that panned could never SELECT
+  (capture is now taken only past a 3px travel), and `[data-tier]` on both the
+  readout and the canvas. `snap.mjs` learned per-view zoom tiers — a view with
+  semantic zoom is three drawings and one shot would leave two thirds
+  unreviewed — driven through the real buttons; all three tiers × both themes
+  snapped and read. Also repaired, pre-existing and unrelated: two e2e specs
+  still asserted `Stop` declares no loop effects, which stopped being true when
+  item 20's reconcile seam gave it `decide` (`e134ec0`); and the human stderr
+  line rendered `mail.append`'s nested `from` as
+  `System.Collections.Generic.Dictionary\`2[…]` while the JSONL beside it
+  carried the real object — `LogEvent.ToPretty` now renders any structured value
+  as the same compact JSON, pinned. C# 948 (947 + the pretty pin) green twice;
+  web units 211 (from 175, of which 36 are `mailCanvas.test.ts`), e2e 32 (from
+  28) green — twice, after the one flake it opened with was run down and fixed:
+  the spec zoomed before the first snapshot landed, and an EMPTY bus fits at
+  natural scale, so the tier readout said "near" while there was nothing near to
+  look at.)
 
 - [x] **19. GUI overhaul — sidebar views, template-gallery authoring, the
   screenshot loop** — the GUI works but has a visible defect (handlers table

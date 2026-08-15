@@ -46,6 +46,13 @@ export type Daemon = {
    * never the live one (ADR-0011 — the fixture gap was read-only harmless
    * before the write verb existed, and load-bearing after). */
   handlersPath: string;
+  /** The isolated mail store dir (ADR-0016). `mail send` and every registered
+   * `mail digest` child resolve THIS — the live bus at ~/.captainHook/mail is
+   * never opened, let alone appended to, by a spec or a preview. */
+  mailDir: string;
+  /** The engine binary, for a caller that needs to run a verb in the sandbox's
+   * own environment (the seed registers `mail digest` handlers against it). */
+  enginePath: string;
   /** Read the current trail bytes (for assertions about what was written). */
   readTrail: () => string;
   /** Append one JSONL trail line the live trace will ingest. */
@@ -53,8 +60,15 @@ export type Daemon = {
   /** Fire one real hook through the daemon (the engine's shim mode inside the
    * SAME sandbox env), returning its stdout. What drives the per-dispatch
    * stat-gate — an API handlers write reconciles on the NEXT hook, and this
-   * is how a spec makes "next hook" happen. */
-  fireHook: (event: string) => string;
+   * is how a spec makes "next hook" happen. `payload` is the harness's own
+   * hook JSON: pass `{ session_id }` to dispatch AS a session, which is what
+   * gives a `mail digest` registration a per-session cursor to move. */
+  fireHook: (event: string, payload?: unknown) => string;
+  /** Put one envelope on the sandbox bus through the REAL `mail send` verb —
+   * strict parse, chained append, the whole write path. Returns its stdout
+   * (`mail: appended <id> to '<role>' at offset <n>`); throws on refusal, so a
+   * malformed seed envelope fails loudly instead of seeding nothing. */
+  mailSend: (envelope: unknown) => string;
 };
 
 /** A started daemon plus the handles only a lifecycle owner needs. */
@@ -126,6 +140,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
   const trailPath = join(sandbox, "trail.jsonl");
   const dispatchPath = join(sandbox, "dispatch.json");
   const handlersPath = join(sandbox, "handlers.json");
+  const mailDir = join(sandbox, "mail");
   writeFileSync(trailPath, "");   // exists-but-empty: the tail starts clean
 
   const port = opts.port ?? await freePort();
@@ -139,6 +154,12 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
     CAPTAINHOOK_HARNESS_DIR: join(sandbox, "no-harness"),
     CAPTAINHOOK_DISPATCH_FILE: dispatchPath,
     CAPTAINHOOK_HANDLERS_FILE: handlersPath,
+    // The bus, isolated like everything else (ADR-0016; CLAUDE.md's pollution
+    // warning). The store dir is created by the first append, so pointing at a
+    // path that does not exist yet is the empty-bus state, not an error — and
+    // `mail digest` children inherit this name through ExecHandler's env
+    // allowlist, so a payload cannot read the operator's real mailbox either.
+    CAPTAINHOOK_MAIL_DIR: mailDir,
   };
   // Capture the daemon's own stderr so a startup failure is diagnosable, not
   // a blind "api.json never appeared". Stderr is chatty in a dev run; the
@@ -245,13 +266,19 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
     trailPath,
     dispatchPath,
     handlersPath,
+    mailDir,
+    enginePath,
     sandbox,
     pid: proc.pid,
     readTrail: () => { try { return readFileSync(trailPath, "utf8"); } catch { return ""; } },
     appendTrail: (obj) => writeFileSync(trailPath, JSON.stringify(obj) + "\n", { flag: "a" }),
-    fireHook: (event) =>
+    fireHook: (event, payload) =>
       execFileSync(enginePath, ["hook", event], {
-        env: sandboxEnv, input: "{}", encoding: "utf8", timeout: 15_000,
+        env: sandboxEnv, input: JSON.stringify(payload ?? {}), encoding: "utf8", timeout: 15_000,
+      }),
+    mailSend: (envelope) =>
+      execFileSync(enginePath, ["mail", "send"], {
+        env: sandboxEnv, input: JSON.stringify(envelope), encoding: "utf8", timeout: 15_000,
       }),
     stop,
   };

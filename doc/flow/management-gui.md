@@ -58,8 +58,10 @@ giant `<App>` tree and prop drilling the owner set out to avoid, while landing o
 the ecosystem tool rather than a bespoke bus.
 
 **Navigation is one more store field, not a router (ADR-0015 d1).** A persistent
-console rail lists the five views (Trace — the landing view — Handlers, Policy,
-Harnesses, Status); clicking one writes `view`, and every screen island returns
+console rail lists the six views (Trace — the landing view — Mail, Handlers,
+Policy, Harnesses, Status; the sixth arrived with ADR-0016 d14 and cost the
+navigation nothing but two entries in `VIEWS`/`VIEW_LABELS`, which is the whole
+point of a store field over a router); clicking one writes `view`, and every screen island returns
 `null` unless `view` names it, so the region holds exactly one screen. The gate
 sits AFTER each island's hooks, so a hidden island keeps polling and comes back
 current instead of blank — and, because rendering null does not unmount, the
@@ -446,15 +448,19 @@ the engine — and the config's one retry stays for genuine contention.
 | status hierarchy: reference strip vs live tiles | `web/src/StatusPanel.tsx` (`Tile`, `data-identity-strip`, `data-status-field`, `data-tiles`, `.tile.lead` — one lead per view, `.tone-mark` so color is never alone) |
 | shared read hook (fetch-on-live, 401⇒session-dead) | `web/src/api.ts` (`useApiJson`) |
 | pure display logic | `web/src/format.ts` (`dispatchHue`, `uptime`, `clockTime`, `traceMatches`) |
-| islands + mount table | `web/src/{App,StatusPanel,HandlersPanel,HarnessesPanel,PolicyPanel,TracePanel}.tsx`, `main.tsx`, `index.html` (rail + one view region) |
+| islands + mount table | `web/src/{App,StatusPanel,HandlersPanel,HarnessesPanel,PolicyPanel,TracePanel,MailPanel}.tsx`, `main.tsx`, `index.html` (rail + one view region) |
+| the Mail canvas — the bus, watched (ADR-0016 d14; the mechanism itself is `doc/flow/mailbox-bus.md`) | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`; `data-island="mail"`, `data-lane`, `data-glyph`, `data-track`, `data-mark`, `data-envelope-card`, `data-tier`) — polls `GET /api/v1/mail` and has no other verb |
+| the canvas's geometry, pure | `web/src/mailCanvas.ts` (`buildScene`, `xForOffset`, `tierFor`, `fitView`, `mapX`/`unmapX`, `zoomView`, `clampView`, `canvasHeight`, `cardLines`, `sceneSummary`; `MailView` = one-axis pan/zoom) — no DOM, no clock; pinned against the reducer by `web/src/mailCanvas.test.ts` over the engine-generated golden corpus |
+| the reduced bus in the store | `web/src/store.ts` (`mail`, `mailUi`, `seedMailSnapshot`, `setMailView`, `setMailSelected`) over `web/src/mail.ts` — an interpolator between snapshots (N8), never a second store |
 | the nav rail + session notice | `web/src/App.tsx` (`Nav` — `data-nav` buttons, `aria-current`; `SessionNotice` — `data-notice-session`) |
 | design tokens (color/type/space/radius, both themes) | `web/src/styles.css` `:root` + its `prefers-color-scheme: dark` block; the console rail is dark in BOTH themes by design |
 | DTO→schema→TS codegen | `web/scripts/gen-types.mjs`, `web/schema/api.schema.json`, `web/src/api.gen.ts` |
 | deploy staging (third artifact) | `.claude/skills/deploy/SKILL.md` (§1 `cp -r ui`, §3 `/ui` shell check) |
 | engine-side pins | `ApiUiRouteHttpTests`, `UiResolveGuardTests`, `UiShellGateTests` (route + guard + inert shell), `ApiSchemaTests` (codegen drift), `UiVerbTests` (verb + fragment + shim refusal) — `dotnet/captainHookTests/{ApiUiRouteTests,ApiSchemaTests,UiVerbTests}.cs` |
 | frontend unit pins | `web/src/{store,sse,policy,format,handlers,templates}.test.ts` (`node --test`, zero deps) |
-| sandbox daemon (spawn, isolation, readiness, drain, build+stage) | `web/e2e/daemon.ts` (`startDaemon`, `DaemonHandle.stop`, `buildAndStage`) — one module, three consumers |
-| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,nav,panels,trace,policy,handlers}.spec.ts`; `gotoView` (the ONE nav helper every spec navigates through) |
+| sandbox daemon (spawn, isolation, readiness, drain, build+stage) | `web/e2e/daemon.ts` (`startDaemon`, `DaemonHandle.stop`, `buildAndStage`, `fireHook(event, payload)`, `mailSend`) — one module, three consumers; the sandbox redirects `CAPTAINHOOK_MAIL_DIR` too, so no spec or preview can touch the live bus |
+| seeded sandbox state (handlers, policy, trail, and the bus) | `web/scripts/seed.mjs` (`seedFiles`, `seedMail`, `seedTrail`, `burstTrail`) — the swarm goes on the bus through the real `mail send` + registered `mail digest`, never by hand-writing the store |
+| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,nav,panels,trace,policy,handlers,mail}.spec.ts`; `gotoView` (the ONE nav helper every spec navigates through) |
 | screenshot loop (preview + snap + seed) | `web/scripts/{preview,snap,seed}.mjs` (`npm run ui:preview`, `npm run snap`) → `web/.screens/`; the loop itself in `.claude/skills/ui-loop/SKILL.md`. `build()`/`stageUi()` are separate on purpose — `--no-build` skips COMPILING, never staging, or a watch-mode snap shoots the previous build |
 | trace perf harness (the measurement behind rejecting virtualization) | `web/scripts/perf.mjs` (`npm run perf`) — long tasks at the cap, filter latency, the content-visibility A/B |
 | decision record | `doc/adr/0008-management-gui.md`; the SSE resume-cursor contract `doc/adr/0009-trail-rotation.md`; the handlers editor + trust surface `doc/adr/0011-hook-trust-model.md` |

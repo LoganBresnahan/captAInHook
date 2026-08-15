@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import type { StatusDto, PolicyDto, HandlersDto, HarnessesDto } from "./api.gen.ts";
+import type { StatusDto, PolicyDto, HandlersDto, HarnessesDto, MailDto } from "./api.gen.ts";
+import { emptyMailState, seedMail, type MailState } from "./mail.ts";
+import type { MailView } from "./mailCanvas.ts";
 
 // zustand-store (ADR-0008 decision 8): ONE provider-less store outside the
 // React tree; each island subscribes to the slice it reads
@@ -34,17 +36,19 @@ export type SessionState = "none" | "checking" | "live" | "dead";
 
 // ---- navigation ---------------------------------------------------------------
 
-/** The five views (ADR-0015 d1). Navigation is a store field, NOT a router: the
- * island architecture already gives each screen its own root, so "which view is
- * active" is one more piece of shared state — every island renders `null` unless
- * its view is active. Trace is the landing view; the URL is deliberately not
- * involved (the `#t=` token scrub owns the fragment, d1). */
-export const VIEWS = ["trace", "handlers", "policy", "harnesses", "status"] as const;
+/** The views (ADR-0015 d1, sixth entry added by ADR-0016 d14). Navigation is a
+ * store field, NOT a router: the island architecture already gives each screen
+ * its own root, so "which view is active" is one more piece of shared state —
+ * every island renders `null` unless its view is active. Trace is the landing
+ * view; the URL is deliberately not involved (the `#t=` token scrub owns the
+ * fragment, d1). */
+export const VIEWS = ["trace", "mail", "handlers", "policy", "harnesses", "status"] as const;
 export type View = (typeof VIEWS)[number];
 
 /** Human labels for the nav — the only place a view's display name lives. */
 export const VIEW_LABELS: Record<View, string> = {
   trace: "Trace",
+  mail: "Mail",
   handlers: "Handlers",
   policy: "Policy",
   harnesses: "Harnesses",
@@ -92,6 +96,20 @@ export type PolicyVerdict =
 
 // ---- the store ---------------------------------------------------------------
 
+// ---- the mail slice (ADR-0016 d14) ------------------------------------------
+
+/** What the Mail canvas is looking at. The pan/zoom lives in the STORE rather
+ * than in the island's own state for the same reason `view` does: leaving the
+ * screen renders the island null, and a pan/zoom the operator set up would be
+ * thrown away by an unmount that never happens for any other view's state.
+ * `null` means "follow the scene" — the fit the canvas computes from its own
+ * measured width, which is not knowable here. */
+export type MailUi = {
+  canvas: MailView | null;
+  /** The ledger offset whose envelope is open in the detail card, if any. */
+  selected: number | null;
+};
+
 export type Store = {
   // which screen is on (ADR-0015 d1) — the whole of navigation
   view: View;
@@ -99,6 +117,13 @@ export type Store = {
   trace: TraceEntry[];
   traceTruncated: number;
   status: StatusDto | null;
+  /** The reduced bus (ADR-0016 d14). Seeded from GET /api/v1/mail — an
+   * INTERPOLATOR between authoritative snapshots, never a second store (N8),
+   * which is why a snapshot REPLACES it rather than merging into it. Slice 5
+   * adds the trail fold beside this seam; nothing here writes to the bus, and
+   * there is no verb in this store that could. */
+  mail: MailState;
+  mailUi: MailUi;
   policy: PolicyDto | null;
   policyVerdict: PolicyVerdict | null;
   handlers: HandlersDto | null;
@@ -114,6 +139,13 @@ export type Store = {
 
   // fetch-result setters — plain state lands, no logic
   setStatus: (s: StatusDto) => void;
+  /** Re-seed the bus from a snapshot. `atMs` is the browser's MONOTONIC clock
+   * (`performance.now()`), never `Date.now()`: the reducer decays presence
+   * against the caller's clock, and this machine's wall clock steps
+   * (doc/platform.md § Wall-clock steps). */
+  seedMailSnapshot: (dto: MailDto) => void;
+  setMailView: (v: MailView | null) => void;
+  setMailSelected: (offset: number | null) => void;
   setPolicy: (p: PolicyDto) => void;
   setPolicyVerdict: (v: PolicyVerdict | null) => void;
   setHandlers: (h: HandlersDto) => void;
@@ -155,6 +187,8 @@ export const useStore = create<Store>((set) => ({
   trace: [],
   traceTruncated: 0,
   status: null,
+  mail: emptyMailState(),
+  mailUi: { canvas: null, selected: null },
   policy: null,
   policyVerdict: null,
   handlers: null,
@@ -171,6 +205,10 @@ export const useStore = create<Store>((set) => ({
   setView: (view) => set({ view }),
 
   setStatus: (status) => set({ status }),
+  seedMailSnapshot: (dto) =>
+    set((s) => ({ mail: seedMail(dto, performance.now(), s.mail) })),
+  setMailView: (canvas) => set((s) => ({ mailUi: { ...s.mailUi, canvas } })),
+  setMailSelected: (selected) => set((s) => ({ mailUi: { ...s.mailUi, selected } })),
   setPolicy: (policy) => set({ policy }),
   setPolicyVerdict: (policyVerdict) => set({ policyVerdict }),
   setHandlers: (handlers) => set({ handlers }),
