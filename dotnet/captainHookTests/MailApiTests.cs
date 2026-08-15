@@ -462,6 +462,54 @@ public class MailApiTests
         Assert.Contains("VerifyChain", members);
     }
 
+    /// The DAEMON wiring, end to end through a real one: the mail dir seam
+    /// reaches the read model, and the presence stamp fires where dispatch
+    /// actually happens. A hook arrives over the UDS carrying a session id,
+    /// and that session shows up on the bus snapshot as present — with no
+    /// registry, no heartbeat, and no cursor of its own yet.
+    [Fact]
+    public async Task Mail_ThroughARealDaemon_SeesTheStore_AndTheDispatchedSession()
+    {
+        using var rt = new TempRuntimeDir();
+        using var tmp = new MailStoreTempDir();
+        CursorFixtures.AppendTo(tmp, "m-01");
+
+        var apiPort = FreeTcpPort();
+        using var stop = new CancellationTokenSource();
+        var daemon = Task.Run(() => DaemonHost.RunAsync(
+            rt.Paths, NoHarnessDir(), stop.Token, apiPort: apiPort, mailDir: tmp.Dir));
+        try
+        {
+            await PollUntilAsync(async () =>
+                await CaptainHook.Wire.ShimClient.TryForwardAsync(rt.Paths.SocketPath,
+                    new CaptainHook.Wire.HookRequest("probe000", "session-start", "claude-code", "{}"u8.ToArray()))
+                    is CaptainHook.Wire.ForwardOutcome.Answered,
+                TimeSpan.FromSeconds(15), "daemon starts listening");
+
+            Assert.IsType<CaptainHook.Wire.ForwardOutcome.Answered>(
+                await CaptainHook.Wire.ShimClient.TryForwardAsync(rt.Paths.SocketPath,
+                    new CaptainHook.Wire.HookRequest("live0001", "user-prompt-submit", "claude-code",
+                        """{"session_id":"s-live"}"""u8.ToArray())));
+
+            var token = ApiDiscovery.TryRead(rt.Paths.ApiJsonPath)!.Token;
+            var (status, body) = await ApiGetAsync(apiPort, token, "/api/v1/mail");
+            Assert.Equal(HttpStatusCode.OK, status);
+
+            var m = JsonDocument.Parse(body).RootElement;
+            Assert.Equal(tmp.Dir, m.GetProperty("dir").GetString());
+            Assert.Single(m.GetProperty("lines").EnumerateArray());
+            var live = Assert.Single(m.GetProperty("presence").EnumerateArray().ToList(),
+                p => p.GetProperty("session").GetString() == "s-live");
+            Assert.True(live.GetProperty("lastDispatchAgeMs").GetInt64() >= 0);
+            Assert.Empty(live.GetProperty("roles").EnumerateArray());   // nothing delivered to it yet
+        }
+        finally
+        {
+            stop.Cancel();
+            Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));
+        }
+    }
+
     /// An absent mail directory is not an error: the bus simply has nothing on
     /// it yet, and asking must not CREATE it (the endpoint is a read).
     [Fact]
