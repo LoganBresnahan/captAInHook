@@ -154,4 +154,72 @@ public class TrailAppendTests : IDisposable
         WireJsonl.Append(orphan, "made");            // this one DOES create the tree
         Assert.Equal(["made"], File.ReadAllLines(orphan));
     }
+
+    private const UnixFileMode File0600 = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    private const UnixFileMode Dir0700 =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    /// ADR-0016 d13: the trail is one of the three stores and is owner-only
+    /// like the other two. It was the one that missed the rule — neither
+    /// emitter set a create mode, so it landed at the process umask (0644 on a
+    /// default install) while `api.json`, the mail store, the cursors, and the
+    /// rendezvous files were all explicitly locked.
+    ///
+    /// The mode is earned by CONTENTS, not by the file's name: `exec.stderr`
+    /// captures payload stderr verbatim, so a trail holds whatever an arbitrary
+    /// user process wrote to its diagnostics.
+    ///
+    /// Pinned per emitter and asserted EQUAL, because the two are separate
+    /// implementations (the F# leaf may not reference the wire lib) and
+    /// whichever one happens to create the file first decides the mode. A fix
+    /// to one is only half a fix, and this is the test that says so.
+    [Theory]
+    [InlineData(true)]    // the shim's emitter creates it
+    [InlineData(false)]   // the daemon's F# mirror creates it
+    public void TrailIsCreated_OwnerOnly_ByEitherEmitter(bool shim)
+    {
+        // A directory neither exists nor is pre-made: the emitter's own create
+        // path is what is under test, umask and all.
+        var fresh = Path.Combine(_dir, shim ? "shim-side" : "daemon-side", "logs");
+        var trail = Path.Combine(fresh, "captainHook.jsonl");
+
+        if (shim)
+        {
+            WireJsonl.Append(trail, """{"ts":"x"}""");
+        }
+        else
+        {
+            // The F# primitive creates only the FILE (its caller, Log's sink,
+            // owns the directory) — so make the directory the way that sink
+            // does, then let the primitive create the file.
+            Directory.CreateDirectory(fresh, Dir0700);
+            Assert.True(CaptainHook.Actors.PosixTrail.append(trail, "{\"ts\":\"x\"}\n"));
+        }
+
+        Assert.Equal(File0600, File.GetUnixFileMode(trail));
+        Assert.Equal(Dir0700, File.GetUnixFileMode(fresh));
+    }
+
+    /// The half the engine cannot fix, and the reason the DIRECTORY mode is the
+    /// load-bearing one: a payload writing its own log beside ours creates that
+    /// file at the payload's umask, and no change to either emitter can reach
+    /// it. A 0700 directory is what keeps it unreadable anyway.
+    [Fact]
+    public void A0700LogDir_ShieldsFilesTheEngineNeverCreated()
+    {
+        var logs = Path.Combine(_dir, "shielded", "logs");
+        WireJsonl.Append(Path.Combine(logs, "captainHook.jsonl"), """{"ts":"x"}""");
+
+        // Something else — a shell payload's `printf >>` — drops a file in.
+        var payloadLog = Path.Combine(logs, "session-pulse.jsonl");
+        File.WriteAllText(payloadLog, "{\"session\":\"s\"}\n");
+
+        // Its own mode is the umask's business and may well be world-readable…
+        Assert.Equal(Dir0700, File.GetUnixFileMode(logs));
+        // …but nothing outside the owner can traverse the directory to reach it.
+        Assert.False(File.GetUnixFileMode(logs).HasFlag(UnixFileMode.OtherExecute));
+        Assert.False(File.GetUnixFileMode(logs).HasFlag(UnixFileMode.GroupExecute));
+        Assert.True(File.Exists(payloadLog));
+    }
 }

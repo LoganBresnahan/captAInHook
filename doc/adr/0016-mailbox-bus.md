@@ -447,13 +447,16 @@ shared edit log. The bus must not know or care what backs a member:
     telemetry (ADR-0009's rotation, days-to-weeks); the **mail store** is the
     inter-agent influence record — the longest-lived thing on disk, retained
     on a provenance clock, rotated by `gen` with archived generations kept by
-    default. All three are `0600` like `api.json`. *(As-built 2026-08-15: the
-    cursors and the mail store are — the mode is set explicitly at creation.
-    The **trail is not**: neither emitter sets `UnixCreateMode`, so it lands at
-    the process umask, `0644` on a default install. Recorded in
-    doc/flow/mailbox-bus.md § three lifetimes; closing it touches both
-    byte-identical-pinned emitters plus existing files, so it is a code change
-    and is left as one.)* And a boundary stated
+    default. All three are `0600` like `api.json`. *(As-built 2026-08-15: true
+    of the cursors and the mail store from the start; the **trail** was the one
+    store that missed it — neither emitter set `UnixCreateMode`, so it landed at
+    the process umask (`0644` live). Closed the same day: both emitters create
+    the file 0600 and `logs/` 0700, the directory mode being the half that also
+    covers payload-written logs the engine never creates. Create-mode applies on
+    CREATE only, so a pre-fix tree is discarded at deploy rather than chmod'ed —
+    cheap, given the trail's days-to-weeks lifetime. Pinned per emitter and
+    asserted EQUAL by `TrailAppendTests`, since whichever emitter reaches a
+    fresh trail first decides the mode.)* And a boundary stated
     plainly instead of engineered around: **the bus is a recorded medium by
     design** — there is no "never-record" envelope flag (rejected below), so
     the rule for members is *don't put secrets in mail*; secret-scrubbing

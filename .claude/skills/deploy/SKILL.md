@@ -112,6 +112,35 @@ changed this session, the committed `ui/` must have been rebuilt in that commit
 (`cd web && npm run build`) — deploy never runs npm (Node is dev-only,
 ADR-0008); it ships what is committed.
 
+### 1c. Discard a pre-0600 trail (ADR-0016 d13)
+
+Both emitters now create the trail `0600` and `logs/` `0700` — but
+`UnixCreateMode` applies **on create only**, and `Directory.CreateDirectory` is
+a no-op on a directory that already exists. A tree from before that fix keeps
+its umask modes (`0644`/`0755`) forever, so the deploy is where the old one goes.
+
+Deleting rather than `chmod`-ing is deliberate: the trail is operational
+telemetry with a days-to-weeks life (d13), the archival store is `mail/` and is
+untouched by this, and a fresh file created by the new build is self-evidently
+correct where a chmod'ed one only looks it. Both emitters open-write-close per
+line and hold no fd, so nothing is holding the old inode.
+
+```sh
+# Only when the existing modes are the loose ones — never widen, never surprise
+# a user who tightened something themselves.
+if [ -d ~/.captainHook/logs ] && [ "$(stat -c %a ~/.captainHook/logs)" != 700 ]; then
+  rm -rf ~/.captainHook/logs      # recreated 0700 by the first line the new build writes
+fi
+```
+
+This drops the JSONL history, including any `session-pulse.jsonl` or other
+payload-written logs living beside it — say so in the report rather than
+letting it be noticed later. Verify after step 3 has written a line:
+
+```sh
+stat -c '%a %n' ~/.captainHook/logs ~/.captainHook/logs/captainHook.jsonl   # want 700, 600
+```
+
 ## 2. Wire settings.json (idempotent check)
 
 Every captAInHook hook command in `~/.claude/settings.json` must be exactly:

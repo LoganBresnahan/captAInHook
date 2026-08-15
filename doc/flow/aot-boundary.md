@@ -77,6 +77,13 @@ mirrored in `Logging.fs`) because no BCL append path sets `O_APPEND` and
 the leaf may not reference the wire lib. A P/Invoke is AOT-native — this
 is not a rule-2 violation — but the two copies must stay in step, and
 `TrailAppendTests` drives BOTH across one file to say so.
+That now includes the file's **permissions**. Neither copy can pass a mode
+to `open(2)` (the two-argument form is deliberate — Apple arm64 passes a
+variadic tail differently), so each creates the absent file through the BCL
+with `UnixCreateMode` 0600 and its caller makes `logs/` 0700 (ADR-0016 d13).
+Whichever emitter reaches a fresh trail first decides the mode, so a fix to
+one is only half a fix — pinned per emitter, and asserted equal, by
+`TrailAppendTests.TrailIsCreated_OwnerOnly_ByEitherEmitter`.
 
 **6. Content identity ignores the shim, and that is correct.**
 The rendezvous hash covers the deploy dir's managed DLLs only; a native

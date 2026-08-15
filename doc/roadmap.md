@@ -1646,6 +1646,40 @@ run live*. The framework underneath is what exists today.
   NOT deployed: the live `~/.captainHook/bin` runs the phase-5 build, so
   `/deploy` is the next bus-facing action whenever the maintainer wants the
   members on their own daemon.
+  **Follow-on: `trail-owner-only` (2026-08-15)** — the one gap the capstone's
+  mechanical pass turned up, closed the same day. d13 says all three stores are
+  0600; the cursors and mail store always were, but neither trail emitter set a
+  create mode, so the trail inherited the process umask — `0644` on the live
+  install, in `logs/` at `0755`. It earns the mode on its CONTENTS rather than
+  its name: `exec.stderr` captures payload stderr verbatim, so a trail holds
+  whatever an arbitrary user process wrote, and `api.json` (bearer token), the
+  mail store, the cursors, and the rendezvous files were all already locked —
+  the trail was simply the one that missed the rule. Fixed at the ONLY place it
+  can be fixed: neither `PosixTrail` can pass a mode to `open(2)` (the
+  two-argument form is deliberate — Apple arm64 passes a variadic tail
+  differently), so each funnels absent-file creation through one BCL call, and
+  that call now carries `UnixCreateMode` 0600 with its caller making `logs/`
+  0700. **The DIRECTORY mode is the load-bearing half** — it is the only thing
+  covering files the engine never creates (a payload's own `session-pulse.jsonl`
+  is shell `printf >>` at that payload's umask; no engine change reaches it),
+  and that boundary is pinned rather than assumed. Mirrored in both leaves
+  per the aot-boundary rule-5 duplication (the F# lib may not reference the wire
+  lib), which is exactly why the pin is per-emitter and asserted EQUAL: whichever
+  reaches a fresh trail first decides the mode, so a fix to one is only half a
+  fix — **mutation-proven**, reverting the F# side alone lands 0644 and fails the
+  daemon-side case while the shim case still passes. Create-mode applies on
+  CREATE only and `CreateDirectory` no-ops on an existing dir, so nothing
+  retightens: a pre-fix tree is DISCARDED at deploy (`/deploy` § 1c, guarded to
+  fire only on the loose modes) rather than chmod'ed under a user who may have
+  widened it deliberately — cheap, since the trail's lifetime class is
+  days-to-weeks and the archival store is `mail/`, untouched. The cost is stated
+  in the deploy step: the JSONL history goes, payload-written logs beside it
+  included. Wire lib's warning-free bar kept (the two CA1416s suppressed
+  LOCALLY, with the reason — the type is libc P/Invoke throughout, so Windows,
+  already out of scope per ADR-0012, has never had a working trail). 3 tests
+  (`TrailAppendTests`); no ADR — this implements d13 rather than deciding
+  anything, and d13's as-built note now records it closed. Suite 909 → 912 green
+  twice.
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm

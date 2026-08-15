@@ -31,6 +31,23 @@ internal static class PosixTrail
     private const int ENOENT = 2;
     private const int EINTR = 4;
 
+    /// The trail's own permissions (ADR-0016 d13). 0600 file / 0700 directory —
+    /// the same owner-only shape the mail store, the cursors, `api.json`, and
+    /// the rendezvous files already carry; the trail was the one store that
+    /// missed the rule and inherited the process umask (0644 in practice)
+    /// instead. It earns the mode on its contents rather than its name: payload
+    /// stderr is captured verbatim into it (`exec.stderr`), so what a trail
+    /// holds is whatever an arbitrary user process wrote.
+    ///
+    /// The DIRECTORY mode is the load-bearing half — it is the only thing that
+    /// covers files the engine does not create (a payload's own
+    /// `session-pulse.jsonl` is written by shell `printf >>` at that payload's
+    /// umask, and no engine change can reach it).
+    internal const UnixFileMode TrailFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    internal const UnixFileMode TrailDirMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
     // The TWO-argument form of open(2), deliberately. open() is variadic
     // (`open(const char*, int, ...)`) and on Apple arm64 the variadic tail uses
     // a DIFFERENT calling convention than fixed args — a three-arg P/Invoke
@@ -60,7 +77,34 @@ internal static class PosixTrail
             // Absent file: create it through the BCL (which owns directory
             // creation and permissions anyway) and open exactly once more.
             if (Marshal.GetLastPInvokeError() != ENOENT) return false;
-            try { using (File.Open(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)) { } }
+            try
+            {
+                // 0600 AT CREATION (ADR-0016 d13: the trail is one of the three
+                // stores, all owner-only). This is the ONLY place the trail file
+                // comes into existence on this side — the two-argument open(2)
+                // above cannot carry a mode — so the create-mode belongs here or
+                // nowhere. UnixCreateMode applies on CREATE only, which is why
+                // the deploy discards a pre-existing loose trail rather than
+                // chmod'ing it. Mirrored in Logging.fs's PosixTrail; the two
+                // emitters share the trail FILE, not code, so whichever creates
+                // it first must produce the same mode.
+                // CA1416: UnixCreateMode is POSIX-only, and so is every line of
+                // this type — it P/Invokes libc for open/write/close, so on
+                // Windows the very next call throws DllNotFoundException. The
+                // trail has never worked there and Windows is out of scope
+                // (ADR-0012); a platform guard would only add a branch that
+                // cannot be reached on any supported target. Kept LOCAL so the
+                // assembly's warning-free bar (its AOT analyzers) still holds.
+#pragma warning disable CA1416
+                using var fs = new FileStream(path, new FileStreamOptions
+                {
+                    Mode = FileMode.OpenOrCreate,
+                    Access = FileAccess.Write,
+                    Share = FileShare.ReadWrite,
+                    UnixCreateMode = TrailFileMode,
+                });
+#pragma warning restore CA1416
+            }
             catch (Exception) { return false; }
             fd = sys_open(cPath, O_WRONLY | O_APPEND | O_CLOEXEC);
             if (fd < 0) return false;

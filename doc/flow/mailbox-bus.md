@@ -252,17 +252,29 @@ and only after the answer is on stdout.
 | store | lifetime | mode as built |
 |---|---|---|
 | cursors (`cursor.<role>.<session>.json`) | ephemeral — delivery position only; deletable anytime (a deleted cursor just re-anchors) | 0600, enforced |
-| trail (`logs/captainHook.jsonl`) | operational telemetry, days-to-weeks | ⚠ **process umask (0644 in practice)** — see below |
+| trail (`logs/captainHook.jsonl`) | operational telemetry, days-to-weeks | 0600 file / 0700 dir, enforced at creation |
 | mail (`mail/mail.jsonl`) | **archival** — the inter-agent influence record, the longest-lived thing on disk | 0700 dir / 0600 file, enforced |
 
-⚠ **A gap between d13 and the code, recorded rather than repeated.** ADR-0016
-d13 states all three stores are `0600` like `api.json`. Cursors and the mail
-store are — `MailStore`/`MailCursors` set the mode explicitly. The **trail is
-not**: neither emitter (`Actors.Log`'s appender, `WireJsonl`'s) sets
-`UnixCreateMode`, so it is created at the process umask and is `0644` on a
-default install. Closing it means touching both emitters — whose renderings are
-pinned byte-identical — plus deciding what to do about existing files, so it is
-a code change, not a docs edit, and is left as one.
+All three are owner-only, but the trail got there last: until 2026-08-15 neither
+emitter set a create mode, so it landed at the process umask (`0644` on a
+default install) while `api.json` — which holds the API bearer token — the mail
+store, the cursors, and the rendezvous files were all explicitly locked. It
+earns the mode on its **contents**, not its name: `exec.stderr` captures payload
+stderr verbatim, so a trail holds whatever an arbitrary user process wrote to
+its diagnostics.
+
+The **directory** mode is the load-bearing half, because it is the only one that
+covers files the engine never creates — a payload writing its own log beside
+ours (`session-pulse.jsonl`, by shell `printf >>`) does so at that payload's
+umask, and no engine change can reach it. A `0700` directory keeps it
+unreachable anyway.
+
+Two consequences of *how* the mode is set, both deliberate: `UnixCreateMode`
+applies on CREATE only, and `Directory.CreateDirectory` is a no-op on an
+existing directory — so neither call retightens anything. A tree from before the
+fix is **discarded at deploy** (`/deploy` § 1c) rather than chmod'ed under a
+user who may have widened it on purpose, which the trail's days-to-weeks
+lifetime makes cheap.
 
 The bus is a **recorded medium by design**: there is no "never-record" envelope
 flag, so the rule for members is *don't put secrets in mail*. Secret-scrubbing

@@ -101,7 +101,15 @@ public static class WireJsonl
         try
         {
             var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            // 0700 on the log directory (ADR-0016 d13). CreateDirectory is a
+            // no-op on an existing directory and does NOT retighten one, which
+            // is deliberate: an already-loose logs/ is discarded at deploy, not
+            // silently chmod'ed under a user who may have widened it on purpose.
+            // CA1416: see PosixTrail — the mode overload is POSIX-only, the
+            // append underneath it is libc, and Windows is out of scope.
+#pragma warning disable CA1416
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir, PosixTrail.TrailDirMode);
+#pragma warning restore CA1416
             PosixTrail.Append(path, line + Environment.NewLine);
         }
         catch { /* never the hook's problem */ }

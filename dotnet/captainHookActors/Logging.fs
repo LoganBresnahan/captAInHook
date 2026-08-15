@@ -117,6 +117,20 @@ module internal PosixTrail =
     let private ENOENT = 2
     let private EINTR = 4
 
+    /// The trail's own permissions (ADR-0016 d13) — 0600 file / 0700 directory,
+    /// the owner-only shape the mail store, cursors, `api.json`, and the
+    /// rendezvous files already carry. The trail was the one store that missed
+    /// the rule and inherited the process umask (0644 in practice), and it
+    /// earns the mode on its CONTENTS: payload stderr is captured verbatim
+    /// (`exec.stderr`), so a trail holds whatever an arbitrary user process
+    /// wrote. Mirrored in captainHookWire's PosixTrail — the two emitters share
+    /// the trail FILE, not code, so whichever creates it first must produce the
+    /// same mode, and a fix to one is only half a fix.
+    let internal trailFileMode = UnixFileMode.UserRead ||| UnixFileMode.UserWrite
+
+    let internal trailDirMode =
+        UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute
+
     // The TWO-argument form of open(2), deliberately: open() is variadic, and
     // on Apple arm64 the variadic tail uses a different calling convention than
     // fixed args, so a three-arg declaration would pass `mode` in the wrong
@@ -142,7 +156,17 @@ module internal PosixTrail =
         if fd < 0 && Marshal.GetLastPInvokeError() = ENOENT then
             // Absent file: the BCL owns creation (and the directory), then one retry.
             try
-                (new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)).Dispose()
+                // 0600 AT CREATION: the two-argument open(2) above cannot carry
+                // a mode, so this BCL create is the only place on this side
+                // where the trail comes into existence. UnixCreateMode applies
+                // on CREATE only — a pre-existing loose trail is discarded at
+                // deploy rather than chmod'ed.
+                let opts = FileStreamOptions()
+                opts.Mode <- FileMode.OpenOrCreate
+                opts.Access <- FileAccess.Write
+                opts.Share <- FileShare.ReadWrite
+                opts.UnixCreateMode <- trailFileMode
+                (new FileStream(path, opts)).Dispose()
                 fd <- sys_open (cPath, flags)
             with _ -> ()
 
@@ -207,7 +231,13 @@ type Log private () =
                 if not fileReady then
                     filePath <- defaultFilePath ()
                     let dir = Path.GetDirectoryName filePath
-                    if not (String.IsNullOrEmpty dir) then Directory.CreateDirectory dir |> ignore
+                    // 0700 on the log directory — the half that also covers
+                    // files the engine never creates (a payload writing its own
+                    // log beside ours does so at its umask). A no-op on an
+                    // existing directory: an already-loose logs/ is discarded at
+                    // deploy, never silently retightened under the user.
+                    if not (String.IsNullOrEmpty dir) then
+                        Directory.CreateDirectory(dir, PosixTrail.trailDirMode) |> ignore
                     fileReady <- true
                 PosixTrail.append filePath (e.ToJson() + Environment.NewLine) |> ignore
             with _ -> ())
