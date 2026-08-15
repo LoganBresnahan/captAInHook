@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using CaptainHook.Actors;
 using CaptainHook.Mail;
 
 namespace CaptainHook.Tests;
@@ -856,5 +858,95 @@ public class MailStoreConcurrencyTests
         Assert.Equal(MailFixtures.Sha256Hex(first.Line), second.Prev);
         Assert.Equal(2, store.Read().Count);
         Assert.Empty(store.VerifyChain());
+    }
+}
+
+// ---- what an append tells the trail (ADR-0016 d14) --------------------------
+
+/// Slice `mail-append-provenance-fields`: the mail canvas animates arrivals off
+/// the trail, so `mail.append` must characterize the envelope — and must not
+/// carry its BODY. The trail is operational-lifetime and payload-readable
+/// (`exec.stderr` already lands arbitrary process output in it); the store is
+/// the archival record with the lifetime and the modes for content. Everything
+/// here is therefore two assertions at once: this field is present, and the
+/// body is nowhere.
+public class MailAppendProvenanceTests
+{
+    private static JsonElement Data(LogEvent e) =>
+        JsonDocument.Parse(e.ToJson()).RootElement.GetProperty("data").Clone();
+
+    [Fact]
+    public void Append_CarriesProvenance_AndNeverTheBody()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+
+        const string secret = "the-body-text-that-must-not-travel";
+        MailFixtures.AppendOk(tmp.Store(), MailFixtures.Envelope(
+            id: "m-01", to: "reviewer", body: secret, priority: MailPriority.Urgent, ttl: 7));
+
+        var ev = Assert.Single(log.Events, e => e.Evt == "mail.append");
+        var data = Data(ev);
+        Assert.Equal("m-01", data.GetProperty("id").GetString());
+        Assert.Equal("reviewer", data.GetProperty("to").GetString());
+        Assert.Equal(0, data.GetProperty("offset").GetInt64());
+        Assert.Equal("status", data.GetProperty("kind").GetString());
+        Assert.Equal("build", data.GetProperty("topic").GetString());
+        Assert.Equal("urgent", data.GetProperty("priority").GetString());
+        Assert.Equal(7, data.GetProperty("ttlDeliveries").GetInt32());
+
+        var from = data.GetProperty("from");
+        Assert.Equal("intent-watcher", from.GetProperty("agent").GetString());
+        Assert.Equal("claude-code", from.GetProperty("harness").GetString());
+        Assert.Equal("s-77", from.GetProperty("session").GetString());
+
+        // The pin: not the field, not the text, in ANY event this append
+        // emitted — a future field that quietly inlines the envelope fails
+        // here rather than in someone's trail.
+        foreach (var e in log.Events)
+        {
+            Assert.DoesNotContain(secret, e.ToJson());
+            Assert.DoesNotContain("\"body\"", e.ToJson());
+        }
+    }
+
+    /// A write-only member has no session (d5), so the field is OMITTED rather
+    /// than spelled null — the trail's absent-means-omit rule, which is also
+    /// what keeps every consumer from testing for it.
+    [Fact]
+    public void Append_OmitsAnAbsentSenderSession()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+
+        MailFixtures.AppendOk(tmp.Store(), MailFixtures.Envelope(session: null));
+
+        var from = Data(Assert.Single(log.Events, e => e.Evt == "mail.append")).GetProperty("from");
+        Assert.False(from.TryGetProperty("session", out _));
+        Assert.Equal("intent-watcher", from.GetProperty("agent").GetString());
+    }
+
+    /// Id and topic are SENDER-CONTROLLED up to the 128KiB line cap, so a trail
+    /// line would inherit that without a clamp — the same clamp the digest head
+    /// applies, so the two surfaces spell a clamped id identically and join.
+    [Fact]
+    public void Append_ClampsTheSenderControlledStrings()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+
+        var long1 = new string('i', 5_000);
+        var long2 = new string('t', 5_000);
+        var e = MailFixtures.Envelope() with { Id = long1, Topic = long2 };
+        MailFixtures.AppendOk(tmp.Store(), e);
+
+        var data = Data(Assert.Single(log.Events, ev => ev.Evt == "mail.append"));
+        Assert.Equal(MailEnvelope.ClampField(long1), data.GetProperty("id").GetString());
+        Assert.Equal(MailEnvelope.HeadFieldChars + 1, data.GetProperty("id").GetString()!.Length);
+        Assert.EndsWith("…", data.GetProperty("topic").GetString());
+
+        // The STORE is untouched by the display clamp — the record keeps what
+        // the sender wrote, in full.
+        Assert.Equal(long1, tmp.Store().Read().Single().Envelope!.Id);
     }
 }

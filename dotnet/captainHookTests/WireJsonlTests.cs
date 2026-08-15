@@ -81,6 +81,42 @@ public class WireJsonlTests
         Assert.Equal(fsharp, wire);
     }
 
+    /// `mail.append`'s provenance field set (ADR-0016 d14) as ONE golden line.
+    /// Only the engine emits mail events today — the shim has no mail code and
+    /// aot-boundary rule 1 keeps it that way — but the trail is ONE SCHEMA
+    /// across two emitters, and a consumer (the mail canvas's reducer) is about
+    /// to read these keys by name. So the shape is pinned literally here, where
+    /// a field rename shows up as a byte diff, rather than trusted to the call
+    /// site. The `from` object is the nested-dict wire case in its real use;
+    /// there is deliberately no `body` key to pin — see MailAppendProvenanceTests.
+    [Fact]
+    public void MailAppendProvenance_IdenticalBytes_AndCarriesNoBody()
+    {
+        var (fsharp, wire) = RenderBoth("debug", "mail", "mail.append",
+            data: new Dictionary<string, object>
+            {
+                ["id"] = "m-01",
+                ["to"] = "reviewer",
+                ["offset"] = 4_096L,
+                ["from"] = new Dictionary<string, object>
+                {
+                    ["agent"] = "intent-watcher", ["harness"] = "claude-code", ["session"] = "s-77",
+                },
+                ["kind"] = "status",
+                ["topic"] = "build",
+                ["priority"] = "urgent",
+                ["ttlDeliveries"] = 3,
+            });
+
+        Assert.Equal(fsharp, wire);
+        Assert.Equal(
+            """
+            {"ts":"2026-07-06T03:04:05.789Z","lvl":"debug","src":"mail","evt":"mail.append","data":{"id":"m-01","to":"reviewer","offset":4096,"from":{"agent":"intent-watcher","harness":"claude-code","session":"s-77"},"kind":"status","topic":"build","priority":"urgent","ttlDeliveries":3}}
+            """,
+            wire);
+        Assert.DoesNotContain("body", wire);
+    }
+
     [Fact]
     public void DataValueKinds_IdenticalBytes()
     {

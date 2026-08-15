@@ -251,11 +251,37 @@ public sealed class MailStore(string dir)
                     Data = new Dictionary<string, object> { ["path"] = FilePath, ["offset"] = tornStart },
                 });
 
+            // PROVENANCE, NOT CONTENT (ADR-0016 d14). The trail is the live
+            // signal the mail canvas animates from, and an arrival it cannot
+            // characterize is a dot with no story: who sent it, what class it
+            // is, how urgently it asked to be delivered, and how many
+            // opportunities it survives. All of that rides here — and the
+            // `body` NEVER does. The trail is operational-lifetime and
+            // payload-readable (exec.stderr already puts arbitrary process
+            // output in it); the body belongs to the archival store alone,
+            // which is the one surface with the lifetime and the modes for it.
+            // The two sender-controlled strings are clamped by the same
+            // spelling the digest head uses, so an id here and an id in a
+            // rendered digest are the same string.
+            var from = new Dictionary<string, object> { ["agent"] = envelope.From.Agent };
+            from["harness"] = envelope.From.Harness;
+            // Absent-means-omit, the trail's rule: a write-only member has no
+            // session, and spelling that null would make every consumer test
+            // for it.
+            if (envelope.From.Session is { } session) from["session"] = session;
+
             Log.Debug("mail", "mail.append", new LogFields
             {
                 Data = new Dictionary<string, object>
                 {
-                    ["id"] = envelope.Id, ["to"] = envelope.To, ["offset"] = offset,
+                    ["id"] = MailEnvelope.ClampField(envelope.Id),
+                    ["to"] = envelope.To,
+                    ["offset"] = offset,
+                    ["from"] = from,
+                    ["kind"] = Wire(envelope.Kind),
+                    ["topic"] = MailEnvelope.ClampField(envelope.Topic),
+                    ["priority"] = Wire(envelope.Priority),
+                    ["ttlDeliveries"] = envelope.TtlDeliveries,
                 },
             });
 

@@ -430,18 +430,10 @@ public static class MailDigest
     }
 
     /// Display clamp for sender-controlled head fields — the head must be
-    /// bounded whatever a sender wrote (an id or topic can legally run to
-    /// the 128KiB line cap). Never applied to bodies; a clamped field keeps
-    /// enough of its prefix to look up the store line.
-    private const int HeadFieldChars = 120;
-
-    private static string Clamp(string s)
-    {
-        if (s.Length <= HeadFieldChars) return s;
-        var cut = HeadFieldChars;
-        if (char.IsHighSurrogate(s[cut - 1])) cut--;
-        return s[..cut] + "…";
-    }
+    /// bounded whatever a sender wrote (an id or topic can legally run to the
+    /// 128KiB line cap). Shared with the store's `mail.append` provenance so
+    /// the two surfaces clamp identically and their ids join verbatim.
+    private static string Clamp(string s) => MailEnvelope.ClampField(s);
 
     /// Run the verb: oneshot (one envelope line, one answer, exit) unless
     /// `--resident`, which speaks ADR-0010 d3's lock-step protocol —

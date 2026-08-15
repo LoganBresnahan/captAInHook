@@ -83,6 +83,27 @@ run live*. The framework underneath is what exists today.
   plain object nodes only — probed, a titled `["object","null"]` union makes
   the generator reference a type it never declares. 26 tests
   (`MailApiTests`); suite 912 → 938 green twice.)
+  `mail-append-provenance-fields` (2026-08-15; phase 1, slice 2 —
+  `mail.append` gains `from` (nested agent/harness/session, absent-means-omit
+  for the write-only member's missing session), `kind`, `topic`, `priority`
+  and `ttlDeliveries`, so the canvas's arrival animation can CHARACTERIZE an
+  envelope instead of drawing an anonymous dot. The `body` deliberately does
+  NOT travel: the trail is operational-lifetime and payload-readable —
+  `exec.stderr` already lands arbitrary process output in it — while the store
+  has the lifetime and the modes for content, and the pin is a runtime one
+  (every event an append emits is scanned for both the body text and the key,
+  so a future field that inlines the envelope fails in the suite rather than
+  in someone's trail). The two sender-controlled strings are CLAMPED: an id or
+  topic may legally run to the 128KiB line cap, and the clamp is now one
+  spelling — `MailEnvelope.ClampField`, lifted out of the digest head's
+  private copy — so a clamped id on the ledger and in a rendered digest are the
+  same string and join verbatim; the store keeps what the sender wrote, in
+  full. Pinned as a golden CROSS-EMITTER line in `WireJsonlTests` (both
+  renderings byte-identical, the literal line asserted, no `body` key)
+  even though only the engine emits mail today: the trail is one schema across
+  two emitters and a reducer is about to read these keys by name, so a rename
+  should surface as a byte diff, not a silent field the canvas stops finding.
+  4 tests; suite 938 → 942 green twice. **Phase 1 complete.**)
 
 - [x] **19. GUI overhaul — sidebar views, template-gallery authoring, the
   screenshot loop** — the GUI works but has a visible defect (handlers table

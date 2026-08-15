@@ -307,6 +307,26 @@ public sealed record MailEnvelope(
         catch (InvalidOperationException) { return null; }
     }
 
+    /// Bound for a SENDER-CONTROLLED field on a display or telemetry surface —
+    /// an id or a topic may legally run to the store's 128KiB line cap, and
+    /// neither a digest head nor a trail line may inherit that. Keeps enough
+    /// prefix to look the store line up, never splits a surrogate pair, and is
+    /// NEVER applied to a body (the store is the record; a clamped body would
+    /// be the store rewriting what a sender said).
+    ///
+    /// One spelling, two surfaces (the digest head and `mail.append`), so a
+    /// clamped id in the trail and a clamped id in a rendered digest are the
+    /// same string and join to each other verbatim.
+    public const int HeadFieldChars = 120;
+
+    public static string ClampField(string s)
+    {
+        if (s.Length <= HeadFieldChars) return s;
+        var cut = HeadFieldChars;
+        if (char.IsHighSurrogate(s[cut - 1])) cut--;
+        return s[..cut] + "…";
+    }
+
     /// Quote strings, raw-render everything else — `got "maybe"` for a bad
     /// string but `got 2` / `got true` for a bad type. An unreadable string falls
     /// back to its raw escaped text (GetRawText never unescapes, so it cannot
