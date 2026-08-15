@@ -447,7 +447,13 @@ shared edit log. The bus must not know or care what backs a member:
     telemetry (ADR-0009's rotation, days-to-weeks); the **mail store** is the
     inter-agent influence record — the longest-lived thing on disk, retained
     on a provenance clock, rotated by `gen` with archived generations kept by
-    default. All three are `0600` like `api.json`. And a boundary stated
+    default. All three are `0600` like `api.json`. *(As-built 2026-08-15: the
+    cursors and the mail store are — the mode is set explicitly at creation.
+    The **trail is not**: neither emitter sets `UnixCreateMode`, so it lands at
+    the process umask, `0644` on a default install. Recorded in
+    doc/flow/mailbox-bus.md § three lifetimes; closing it touches both
+    byte-identical-pinned emitters plus existing files, so it is a code change
+    and is left as one.)* And a boundary stated
     plainly instead of engineered around: **the bus is a recorded medium by
     design** — there is no "never-record" envelope flag (rejected below), so
     the rule for members is *don't put secrets in mail*; secret-scrubbing
@@ -628,17 +634,23 @@ owner's bill); mail tests point at explicit temp dirs, never the live
 `~/.captainHook/` tree; ship bar throughout — suite green twice, `/shipshape`
 before commits, live installation touched only via `/deploy`.
 
-## Ground truth *(prospective — to be back-filled decision→code as slices land)*
+## Ground truth *(back-filled decision→code 2026-08-15, all 11 slices landed)*
 
-| decision | will live in |
+Mechanics live in **[doc/flow/mailbox-bus.md](../flow/mailbox-bus.md)**; this
+table is the decision→code index. Where the as-built shape departs from the
+sketch above, the departure is named in the decision's own annotation.
+
+| decision | lives in |
 |---|---|
-| d2/d3/d4 — envelope, TTL, store, cursor | `dotnet/captainHook/Mail/` (model + strict parser + store + cursor); tests beside the `DispatchPolicy` parse-table precedent; the interleaving / hostile-store campaign in `MailCursorEdgeTests.cs` (exactly-once races, chain-changed guard, deletion-race corner) |
-| d5 — planner + seam mapping | the `mail digest` command's planner; delivery capability = `handlers.json` registration × `HarnessSpec.events` verbs |
-| d5 — Stop seam data | `dotnet/captainHook/harnesses/claude-code.json` (`Stop.effects`), adapter set per ADR-0003 if needed |
-| d7 — CLI verbs | `Program.cs` verb routing → `Mail/`; exec-wire answers per ADR-0010's closed grammar |
-| d8 — profile/activation | `~/.captainHook/handlers.json` + `dispatch.json` (no new surface) |
-| d10 — provenance rendering + `mail.deliver` | `MailDigest.Render`/`ItemBlock` + their golden tests; `MailDigest.LogDelivery` emits `mail.deliver` (src `mail`) from the one advanced-the-cursor branch — the trail's one schema, engine-only, so both-emitter rules do not apply. `MailDigestLedgerTests` + the daemon smoke's sandbox-trail read (a spawned child's own sink) |
-| d11 — hash chain + flock append | `Mail/` store appender + a chain-verify helper; tamper/truncation tests |
-| d12 — policy content hash | the shared policy gate's `policy.reload` emit + `ApiPolicyWriter` |
-| d13 — lifetimes + perms | `Mail/` store creation (0600, `gen` rotation); retention prose in the flow doc |
+| d2 — envelope + strict parser | `MailEnvelope` (`TryParse`/`TryParseLine`, `MailSender`, `MailKind`, `MailPriority`) in `dotnet/captainHook/Mail/MailEnvelope.cs`; `MailEnvelopeTests.cs` (26). `ts` is stamped by the verb, format-unvalidated by design |
+| d3 — TTL as delivery opportunities | `MailCursors.Pending` — `deliveries − seenAt + 1 ≥ ttlDeliveries`; no wall clock appears anywhere, asserted on the bytes (`MailCursorTests.cs`) |
+| d4 — the cursor | `MailCursor`/`MailHeld`/`MailCursors` in `Mail/MailCursor.cs`. **As-built departure**: a bare offset cannot express out-of-file-order delivery, so the cursor is a read FRONTIER plus a bounded `held` exception list, with `head` as the chain-native rotation check beside `gen` |
+| d5 — planner, seam mapping, Stop seam | `MailDigest.Plan`/`VehicleFor` (pure; `MailSeam`, `MailVehicle`) in `dotnet/captainHook/Mail/MailDigest.cs`; seam class is REGISTRATION data (`--seam`), not an event name. Stop's `{"effects":["decide"]}` in `harnesses/claude-code.json` + `DecidesAtTopLevel`/`TopLevelDecision` in `Core/Harness.cs` — the conditional this decision left open FIRED (the nested shape parses as nothing at turn end) |
+| d7 — CLI verbs | `Mode.MailSend` on the wire argv contract (`dotnet/captainHookWire/Cli.cs`, `mail <subverb>`), routed in `dotnet/captainHook/Program.cs` to `MailSend.Run` / `MailDigest.Run`; refused by the shim (aot-boundary rule 11) |
+| d8 — profile/activation | no new surface, as designed: members in `~/.captainHook/handlers.json`, per-agent scoping in `dispatch.json` via handler×`project` rules (`Core/DispatchPolicy.cs`, pre-fan-out exclusion in `Dispatcher.DispatchAsync`). **As-built sharpening**: this is not merely how a swarm is *activated* — it is the only thing that gives two agents on one machine two ROLES, since `handlers.json` is global and `--role` is static |
+| d10 — provenance + `mail.deliver` | `MailDigest.Render`/`ItemBlock` + golden tests; `MailDigest.LogDelivery` from the one advanced-the-cursor branch, after the answer is written. **As-built**: the sketch's nested `recipient: {role, session}` ships as a first-class `sessionId` column (nesting would hide mail delivery from every existing session filter), `role` in data |
+| d11 — hash chain + flock append | `MailStore.Append`/`Read`/`VerifyChain`/`HeadHash`/`HashOf`; `Genesis` = 64 zeros, `prev` = SHA-256 of the previous line's bytes excluding its LF, `MaxLineBytes` 128KiB. **Settled in the format sign-off**: rotation starts a NEW chain (no cross-file `prev`); torn tails terminated, never repaired. `MailStoreTests.cs` (43), `MailCursorEdgeTests.cs` (15) |
+| d12 — policy content hash | `PolicyContent.Of` stamped onto `policy.reload` and a new `policy.write` (`Core/DispatchPolicy.cs`, `Api/ApiPolicyWriter`) — over the LOADER's view, so an API write and its reload hash identically |
+| d13 — lifetimes + perms | store dir 0700 / lines 0600 / cursors 0600 (`MailStore`, `MailCursors`), role+session percent-encoded in cursor filenames; `gen` reserves rotation (N4 open). Retention prose in the flow doc; the cursor-deletion race is a STATED cost, not a defect to guard |
+| first members | `examples/payloads/starter-mail-observer.sh` (write-only class), `starter-mail-watcher.sh` (on-demand LLM class, reentrancy guard proven by a stub `claude`); `MailDogfoodTests.cs` (5); field report `doc/dogfood/2026-08-14-first-bus-members.md` |
 | mechanics | `doc/flow/mailbox-bus.md` |

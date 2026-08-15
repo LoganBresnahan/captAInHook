@@ -1047,7 +1047,7 @@ run live*. The framework underneath is what exists today.
 
 ## Later
 
-- [ ] **20. The mailbox bus — cross-harness agent communication** — the hub
+- [x] **20. The mailbox bus — cross-harness agent communication** — the hub
   reframe: N external agent loops (Claude Code + any hook-bearing harness),
   one daemon as the store-and-forward bus. Mail is written by appending an
   envelope to a durable disk store; it is *delivered* only at seams the
@@ -1595,6 +1595,57 @@ run live*. The framework underneath is what exists today.
   the record). Field report:
   doc/dogfood/2026-08-14-first-bus-members.md. 5 tests
   (`MailDogfoodTests.cs`); suite 904 → 909 green twice.)
+  `swarm-profile-and-flow-doc` (2026-08-15; phase 6, the close — docs only.
+  **`doc/flow/mailbox-bus.md`**: the request-lifecycle diagram from "any process
+  can send" through store → cursor → planner → advance-before-emit → the
+  recipient's loop, plus why-prose for the two asymmetric halves (writing is
+  universal, reading is seam-bound), the seam-class matrix as REGISTRATION data,
+  why the cursor is a frontier plus a held exception list rather than a bare
+  offset, the delivery-counted TTL, the four accepted deviations each in its
+  stated direction, what the chain does and does NOT prove (rotation starts a
+  new chain; deleting an archived generation is chain-invisible), the seven
+  loud re-anchor reasons, provenance vs the `mail.deliver` ledger's opposite
+  direction, and d13's three lifetimes. **The profile-as-policy prose the phase
+  is named for says the sharper thing the dogfood found**: per-project handler
+  rules are not merely how a swarm is *activated* — they are the only thing
+  that gives two agents on one machine two ROLES, since `handlers.json` is
+  global and `--role` is static, and a shared role would hand every member its
+  own traffic back (nothing in the digest filters by sender). ADR-0016's
+  prospective Ground truth back-filled decision→code with the as-built
+  departures named at d4 (frontier+held), d8 (scoping IS role identity), d10
+  (`sessionId` as a first-class column, not nested), and d11 (rotation restarts
+  the chain). Both tables verified MECHANICALLY on the item-19 precedent — a
+  throwaway checker parsing every Ground truth row and asserting each named
+  file exists and each backticked symbol appears in that row's files: 21 file
+  refs + 58 symbols/events in the flow doc, 12 + 44 in the ADR, all clear after
+  it caught three real gaps (the d5 row naming no `MailDigest.cs`, two
+  repo-relative paths that resolved nowhere) plus the substring-matching weak
+  spots hand-checked. Every trail event in the table was checked against an
+  actual emit site in `Mail/`. Writing the lifetimes table against the real
+  tree also caught **a d13 claim the code does not implement**: the ADR says
+  all three stores are 0600, and the cursors and mail store are — but neither
+  trail emitter sets `UnixCreateMode`, so the trail lands at the process umask
+  (`0644` live). Recorded in both the flow doc and a d13 as-built note rather
+  than quietly repeated, and deliberately NOT fixed in a docs slice: closing it
+  touches both byte-identical-pinned emitters plus existing files, so it is a
+  code change and is left as one. **Item 20 complete: all 11 slices, all 6
+  phases.**)
+  **Item complete 2026-08-15** — the daemon is a store-and-forward bus for N
+  agent loops, built with ZERO core: two CLI verbs (`mail send` / `mail
+  digest`), payloads, and data. Mail is durable and hash-chained, positions are
+  per-(role, session) frontiers whose advance-before-emit is simultaneously the
+  at-most-once guarantee and the Stop-loop guard, delivery happens only at seams
+  the recipient's harness declares, and every delivery lands on the ledger with
+  the hash of the bytes actually shown. Swarm activation is a dispatch-policy
+  flip, exactly as designed — and that same mechanism turned out to be what
+  gives two agents two identities at all. First members shipped and dogfooded
+  live (`starter-mail-observer.sh`, `starter-mail-watcher.sh`), the reentrancy
+  guard proven by a stub that refuses. Final tally: 184 mail test methods across
+  7 files, suite 909 green twice; ADR-0011's script-write trigger still UNFIRED,
+  ask/reply correlation still deferred with `inReplyTo` reserved.
+  NOT deployed: the live `~/.captainHook/bin` runs the phase-5 build, so
+  `/deploy` is the next bus-facing action whenever the maintainer wants the
+  members on their own daemon.
 - ~~**7. Desktop shell**~~ — **dropped 2026-07-19** (owner decision): staying
   browser-only. The localhost web GUI is first-class on WSL2 and answers the
   need; no Photino/Tauri wrapper. (This *is* the "staying browser-only" arm
