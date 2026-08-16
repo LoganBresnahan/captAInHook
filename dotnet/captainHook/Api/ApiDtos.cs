@@ -80,8 +80,34 @@ public sealed record HandlerDto(
 /// than splice. `Frontier` is the end of the last COMPLETE line: an append in
 /// flight is visible in `Lines` (as `Terminated: false`) and deliberately NOT
 /// behind the frontier, exactly as a cursor read sees it.
+///
+/// `TrailEventId` is the SSE id space's answer to a hazard the reducer would
+/// otherwise have to absorb on every mount. A live view needs BOTH this
+/// snapshot and the `mail.*` stream, and whatever happens between acquiring
+/// them is either lost or duplicated. Snapshot-then-subscribe LOSES: a fresh
+/// subscription anchors at the trail's current end (ADR-0007 d5), so events in
+/// the window are gone, and a vanished `mail.cursorAdvance` leaves an envelope
+/// pending forever with nothing flagged — the one silent-wrong picture no
+/// screenshot catches. Subscribe-then-snapshot cannot lose, but replays the
+/// window; the reducer survives that (`deliveries` is a per-cursor sequence
+/// number, a `mail.deliver` record's identity is its content), except that a
+/// replayed FIRST advance is indistinguishable from a deleted-and-restarted
+/// cursor lineage, so the honest answer there is a flag and a re-snapshot —
+/// fired routinely, since the window is exactly where a first advance replays.
+/// So the snapshot carries the trail offset it was taken at, and the client
+/// subscribes with `Last-Event-ID: <trailEventId>`: the id IS the byte offset
+/// after a line, so the resume starts exactly where this picture's knowledge
+/// ends — zero loss, zero duplicate. It is read BEFORE the store below, which
+/// makes the residual window (two in-process reads, microseconds) able to
+/// duplicate but never to lose, and the replay rules go back to being what they
+/// were written for: reconnects, gaps, rotation. Null when the daemon serves no
+/// trail (no stream to align to) — a client that finds it absent must fall back
+/// to subscribe-then-snapshot and fold the overlap as replay, NEVER to 0, which
+/// in this id space means "resume from the first byte" and would replay the
+/// whole trail as live.
 public sealed record MailDto(
     string Dir, MailChainDto Chain, long Since, bool SinceAligned, long Frontier,
+    long? TrailEventId,
     IReadOnlyList<MailLineDto> Lines,
     IReadOnlyList<MailCursorDto> Cursors,
     IReadOnlyList<MailPresenceDto> Presence);

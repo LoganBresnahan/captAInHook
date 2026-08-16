@@ -24,12 +24,13 @@ public class MailApiTests
     private static readonly Effect Noop = new Effect.Noop();
 
     private static ApiReadModel Model(
-        MailReadPort? mail, SessionPresence? presence = null) =>
+        MailReadPort? mail, SessionPresence? presence = null, string? trailPath = null) =>
         new("testver", new ServeStats(),
             new Dispatcher(new Registry().On("UserPromptSubmit", TestHandler.Returning("greeter", Noop)),
                            TimeSpan.FromSeconds(2)),
             new ReloadingHarnessRegistry(NoHarnessDir()), new ReloadingPolicy(null), null,
-            clock: () => 6000, startTick: 1000, handlersPath: null, mail: mail, presence: presence);
+            clock: () => 6000, startTick: 1000, handlersPath: null, mail: mail, presence: presence,
+            trailPath: trailPath);
 
     private static async Task<JsonElement> MailJson(ApiHost api, string query = "")
     {
@@ -334,6 +335,118 @@ public class MailApiTests
         using var api = ApiHost.Start(FreeTcpPort(), readModel: Model(mail: null));
         var (status, _) = await ApiGetAsync(api.Port, api.Token, "/api/v1/mail");
         Assert.Equal(HttpStatusCode.NotFound, status);
+    }
+
+    // ---- the snapshot's place in the stream --------------------------------
+
+    /// The whole point of `trailEventId`, end to end: a client that takes this
+    /// snapshot and subscribes at the id it carries sees every event after it
+    /// and NOT ONE it already has. Zero loss and zero duplicate are asserted as
+    /// the same fact — the frames that arrive are exactly the lines appended
+    /// after the snapshot, in order — because either failure is invisible on
+    /// screen. A lost `mail.cursorAdvance` leaves an envelope drawn pending
+    /// forever; a duplicated one is only survivable because the reducer works
+    /// to survive it, and the point of the stamp is that it does not have to.
+    [Fact]
+    public async Task Mail_TrailEventId_ResumesExactlyWhereTheSnapshotEnds()
+    {
+        using var tmp = new MailStoreTempDir();
+        using var trail = new TempTrail();
+        CursorFixtures.AppendTo(tmp, "m-01");
+
+        // The world before the picture: events the snapshot already accounts
+        // for, and which the client must therefore never be shown again.
+        trail.Append("""{"ev":"mail.append","id":"m-01"}""", """{"ev":"exec.spawn"}""");
+
+        using var api = ApiHost.Start(FreeTcpPort(),
+            readModel: Model(MailReadPort.Over(tmp.Dir), trailPath: trail.Path),
+            sse: new SseOptions(trail.Path, Poll: TimeSpan.FromMilliseconds(30),
+                                Heartbeat: TimeSpan.FromMinutes(10)));
+
+        var mail = await MailJson(api);
+        var stamp = mail.GetProperty("trailEventId").GetInt64();
+        Assert.Equal(new FileInfo(trail.Path).Length, stamp);
+
+        // The choreography the picture must not miss, appended in the window
+        // where a subscribe-after-snapshot client would have lost it.
+        trail.Append("""{"ev":"mail.cursorAdvance","role":"main"}""",
+                     """{"ev":"mail.deliver","id":"m-01"}""");
+
+        await using var client = new SseClient();
+        Assert.Equal(HttpStatusCode.OK, await client.OpenAsync(api.Port, api.Token, lastEventId: stamp));
+
+        var first = await client.ReadFrameAsync(TimeSpan.FromSeconds(10));
+        var second = await client.ReadFrameAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("""{"ev":"mail.cursorAdvance","role":"main"}""", first?.Data);
+        Assert.Equal("""{"ev":"mail.deliver","id":"m-01"}""", second?.Data);
+
+        // And nothing behind the stamp: the two pre-snapshot lines never come.
+        trail.Append("""{"ev":"sentinel"}""");
+        var third = await client.ReadFrameAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("""{"ev":"sentinel"}""", third?.Data);
+    }
+
+    /// The fallback contract, and the reason the field is NULLABLE rather than
+    /// defaulted: a daemon serving no trail has no id space to align to, and
+    /// the client must fall back to subscribe-then-snapshot and fold the
+    /// overlap as replay. It must NOT read a missing stamp as 0 — in this id
+    /// space 0 is the first byte, so that reading replays the entire trail as
+    /// live. Absent means absent.
+    [Fact]
+    public async Task Mail_TrailEventId_IsNullWhenNoTrailIsServed()
+    {
+        using var tmp = new MailStoreTempDir();
+        CursorFixtures.AppendTo(tmp, "m-01");
+        using var api = ApiHost.Start(FreeTcpPort(), readModel: Model(MailReadPort.Over(tmp.Dir)));
+
+        var mail = await MailJson(api);
+        Assert.Equal(JsonValueKind.Null, mail.GetProperty("trailEventId").ValueKind);
+    }
+
+    /// A trail file that does not exist yet is "nothing yet", never an error —
+    /// the same answer `TrailSubscription` gives a subscriber arriving before
+    /// the first line is written. Here 0 is the honest stamp rather than a
+    /// dangerous default: there are no bytes for it to replay.
+    [Fact]
+    public async Task Mail_TrailEventId_IsZeroWhenTheTrailDoesNotExistYet()
+    {
+        using var tmp = new MailStoreTempDir();
+        using var trail = new TempTrail();          // path reserved, file never created
+        CursorFixtures.AppendTo(tmp, "m-01");
+        Assert.False(File.Exists(trail.Path));
+
+        using var api = ApiHost.Start(FreeTcpPort(),
+            readModel: Model(MailReadPort.Over(tmp.Dir), trailPath: trail.Path));
+
+        var mail = await MailJson(api);
+        Assert.Equal(0, mail.GetProperty("trailEventId").GetInt64());
+    }
+
+    /// The stamp is read BEFORE the store, and that order is the difference
+    /// between a duplicate and a loss: an append landing between the two reads
+    /// is either in the snapshot AND replayed (recoverable — the reducer drops
+    /// it by sequence number) or in NEITHER (unrecoverable, and silent). The
+    /// window is two in-process reads wide, so no drive can observe it
+    /// deterministically without a real sleep; this is a SOURCE pin, on the
+    /// precedent of the `Api/` naming pin above — reflection cannot see
+    /// statement order any more than it can see a captured closure. It is
+    /// deliberately weak on its own and strong about the one thing that
+    /// matters: which line comes first.
+    [Fact]
+    public void Mail_TrailStamp_IsTakenBeforeTheStoreIsRead()
+    {
+        var src = File.ReadAllText(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "captainHook", "Api", "ApiReadModel.cs")));
+        var body = src[src.IndexOf("public MailDto? Mail(long since)", StringComparison.Ordinal)..];
+
+        var stamp = body.IndexOf("TrailLength(_trailPath)", StringComparison.Ordinal);
+        var read = body.IndexOf("_mail.Read()", StringComparison.Ordinal);
+
+        Assert.True(stamp >= 0, "the trail stamp moved or was renamed — this pin must move with it");
+        Assert.True(read >= 0, "the store read moved or was renamed — this pin must move with it");
+        Assert.True(stamp < read,
+            "the trail stamp must precede the store read: taken after, an append in the window is in "
+            + "neither the snapshot nor the stream, and no client can recover what it was never told");
     }
 
     /// PIN (i), the graph: no type the read model DECLARES — constructor

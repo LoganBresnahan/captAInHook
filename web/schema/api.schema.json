@@ -424,6 +424,12 @@
         "frontier": {
           "type": "integer"
         },
+        "trailEventId": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "lines": {
           "type": "array",
           "items": {
@@ -688,6 +694,7 @@
         "since",
         "sinceAligned",
         "frontier",
+        "trailEventId",
         "lines",
         "cursors",
         "presence"

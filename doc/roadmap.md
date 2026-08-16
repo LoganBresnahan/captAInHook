@@ -191,6 +191,40 @@ run live*. The framework underneath is what exists today.
   avoid entirely if `MailDto` grows the trail's current SSE id so the stream
   can open exactly at the snapshot; decide there. Not wired into the store or
   the SSE fold — that is slice 5's seam; `ui/` is unchanged by construction.)
+  `mail-stream-alignment` (2026-08-15; the hazard above, DECIDED and landed
+  ahead of slice 5 because the answer is an engine field rather than a client
+  tactic — as-built amendment to d14. Snapshot-then-subscribe LOSES (a fresh
+  subscription anchors at the trail's end, ADR-0007 d5, so the window's events
+  are gone and a vanished `mail.cursorAdvance` draws an envelope pending
+  forever with nothing flagged); subscribe-then-snapshot cannot lose but
+  replays, and the reducer survives replay except for the one honest
+  ambiguity — a replayed FIRST advance is indistinguishable from a
+  deleted-and-restarted lineage, so it flags and asks for a re-snapshot, and
+  the window is exactly where a first advance replays. So `MailDto` carries
+  **`TrailEventId`**, the trail's end at snapshot time, and the client
+  subscribes at `Last-Event-ID: <it>`: the SSE id IS the byte offset after a
+  line, so the resume starts exactly where the picture's knowledge ends — zero
+  loss, zero duplicate, asserted as one fact. Sound rather than merely
+  convenient on two counts. The stamp is read **before** the store, so the
+  residual window — two in-process reads, not a network round trip — can only
+  ever duplicate and never lose; the direction of the error is one statement's
+  placement, and since neither reflection nor a drive can see statement order
+  without a real sleep, a SOURCE pin holds it there (the `Api/` naming pin's
+  precedent, and deliberately weak on its own). And the field is nullable and
+  **never defaulted**: 0 in this id space means "from the first byte", so a
+  client reading absent-as-0 would replay the entire trail as live — absent
+  means "no trail served, fall back to subscribe-then-snapshot", and the
+  reducer carries the null through rather than coalescing it. Rotation and
+  truncation needed nothing new: `TrailCursor` already resets and emits
+  `Reset` (id 0), which the reducer already re-seeds on. `DaemonHost` now
+  resolves the SSE options ONCE and hands the same path to the stream and the
+  read model — an offset into a different file is not an alignment. The replay
+  rules are unchanged; they stop being load-bearing on first paint and go back
+  to covering reconnects, gaps and a replaced trail. 4 tests (`MailApiTests` —
+  resume-exactness end to end through a real host and SSE client, the null and
+  zero contracts, the read-order pin), 3 web units; `MailState.trailEventId`
+  carries it so slice 5's resnapshot re-anchors the stream as well as the
+  picture. C# 948 → 952 green twice; web units 211 → 214.)
   `mail-canvas` (2026-08-15; phase 3, slice 4 — the sixth GUI view, and the
   first picture of the bus: `web/src/MailPanel.tsx` over the pure geometry in
   `web/src/mailCanvas.ts`, drawing the MECHANISM rather than a mailbox. The

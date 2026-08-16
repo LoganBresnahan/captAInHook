@@ -148,11 +148,18 @@ public static class DaemonHost
         var presence = new SessionPresence(clk);
         var mailPort = MailReadPort.Over(MailStore.ResolveDir(mailDir));
 
+        // Resolved HERE rather than at the ApiHost call below, because the mail
+        // snapshot and the SSE stream must name the SAME trail file: the
+        // snapshot stamps that file's end as the id a client resumes from, and
+        // an offset into a different file is not an alignment, it is a lie.
+        // One expression, read by both.
+        var sseOptions = sse ?? new SseOptions(WireJsonl.DefaultLogPath());
+
         // The read model projects the SAME resolvers/registry/dispatcher the
         // dispatch path runs, so the API's read view cannot drift (ADR-0007 d3).
         var readModel = new ApiReadModel(
             paths.Version, stats, dispatcher, harnesses, policy, policyPath, clk, startTick, handlersPath,
-            mailPort, presence);
+            mailPort, presence, sseOptions.TrailPath);
 
         // The write surface (ADR-0007 d4) edits the SAME policyPath the read model
         // reports and `policy` (ReloadingPolicy) stat-gates — so a PUT lands on the
@@ -175,7 +182,7 @@ public static class DaemonHost
         using var api = apiPort is int apiP
             ? ApiHost.StartRetrying(apiP, fastWindow: drainBudget, rendezvous: paths,
                 readModel: readModel, writer: policyWriter,
-                sse: sse ?? new SseOptions(WireJsonl.DefaultLogPath()),
+                sse: sseOptions,
                 onRequest: () => Volatile.Write(ref lastActive[0], clk()),
                 // The GUI shell (ADR-0008 d2): serve the ui/ dir staged beside
                 // the executables by /deploy — absent (no GUI shipped yet) every

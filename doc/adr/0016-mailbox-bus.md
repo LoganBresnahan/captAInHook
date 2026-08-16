@@ -552,6 +552,40 @@ shared edit log. The bus must not know or care what backs a member:
     `web/src/mail.ts`; N8's mitigation is mechanical — see its ground truth
     row.
 
+    *As-built amendment (2026-08-15, ahead of slice `mail-live-choreography`).*
+    The reducer's drive left one question open for slice 5 and it is answered
+    here, because the answer is an engine field rather than a client tactic.
+    A live view needs both the snapshot and the `mail.*` stream, and the gap
+    between acquiring them is either **lost** or **duplicated**. Snapshot-then-
+    subscribe loses: a fresh subscription anchors at the trail's current end
+    (ADR-0007 d5), so the window's events are simply gone, and a vanished
+    `mail.cursorAdvance` leaves an envelope drawn pending forever with nothing
+    flagged — precisely the silent-wrong picture d14 exists to prevent.
+    Subscribe-then-snapshot cannot lose but replays the window, which the
+    reducer survives by design (`deliveries` is a per-cursor sequence number;
+    a `mail.deliver` record's identity is its content) with one honest
+    exception: a replayed FIRST advance is indistinguishable from a
+    deleted-and-restarted cursor lineage, so the reducer flags `uncertain` and
+    asks for a re-snapshot — and the window is exactly where a first advance
+    replays, making the flag routine rather than exceptional.
+    So **`MailDto` carries `TrailEventId`**, the trail's end at the moment the
+    snapshot was taken, and the client subscribes with `Last-Event-ID: <it>`.
+    The SSE id IS the byte offset after a line, so the resume begins exactly
+    where the picture's knowledge ends: zero loss, zero duplicate. Two
+    properties make it sound rather than merely convenient. (1) The stamp is
+    read **before** the store, so the residual window — two in-process reads,
+    not a network round trip — can only ever produce a duplicate, never a
+    loss; the direction of the error is a statement's placement, and a source
+    pin holds it there. (2) The field is **nullable and never defaulted**: a
+    daemon serving no trail has no id space to align to, and the caller must
+    fall back to subscribe-then-snapshot, because 0 in this space means "from
+    the first byte" and would replay the entire trail as live. Rotation and
+    truncation need nothing new — `TrailCursor` already resets and emits
+    `Reset` (id 0), which the reducer already re-seeds on. The replay rules
+    stay exactly as written; they simply stop being load-bearing on first
+    paint and go back to covering what they were written for: reconnects,
+    gaps, and a replaced trail.
+
 ## Rejected alternatives
 
 | alternative | disposition |

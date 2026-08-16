@@ -27,15 +27,17 @@ public sealed class ApiReadModel
     private readonly long _startTick;
     private readonly MailReadPort? _mail;          // null => GET /mail 404s (no bus to observe)
     private readonly SessionPresence? _presence;   // null => presence is cursor-files only
+    private readonly string? _trailPath;           // null => MailDto.TrailEventId is null (no stream to align to)
 
     public ApiReadModel(
         string version, ServeStats stats, Dispatcher dispatcher,
         ReloadingHarnessRegistry harnesses, ReloadingPolicy policy, string? policyPath,
         Func<long> clock, long startTick, string? handlersPath = null,
-        MailReadPort? mail = null, SessionPresence? presence = null)
+        MailReadPort? mail = null, SessionPresence? presence = null, string? trailPath = null)
     {
         _mail = mail;
         _presence = presence;
+        _trailPath = trailPath;
         _version = version;
         _stats = stats;
         _dispatcher = dispatcher;
@@ -195,6 +197,16 @@ public sealed class ApiReadModel
     {
         if (_mail is null) return null;
 
+        // FIRST, before a single byte of the store — the order is the whole
+        // point. This offset and the store read below straddle a window in
+        // which an append can land; taking the trail's end first means such an
+        // append is in the snapshot AND replays from the stream (a duplicate,
+        // which the reducer drops by sequence number), where the other order
+        // would put it in neither (a loss, which nothing can recover). The
+        // window is two in-process reads wide; the direction of its error is
+        // this line's placement.
+        var trailEventId = _trailPath is null ? (long?)null : TrailLength(_trailPath);
+
         var lines = _mail.Read();
         // The frontier stops BEFORE an unterminated tail — MailCursors.Pending's
         // rule, applied identically here so the picture and the delivery agree
@@ -241,7 +253,21 @@ public sealed class ApiReadModel
             .Select(id => Cursor(_mail.Pending(id.Role, id.Session)))
             .ToList();
 
-        return new MailDto(_mail.Dir, chain, since, aligned, frontier, lineDtos, cursors, Presence(cursors));
+        return new MailDto(_mail.Dir, chain, since, aligned, frontier, trailEventId,
+            lineDtos, cursors, Presence(cursors));
+    }
+
+    /// The trail's current end — the same stat `TrailSubscription` takes when a
+    /// subscriber arrives with no `Last-Event-ID`, and deliberately the same
+    /// failure answer: an unreadable or not-yet-created trail is "nothing yet",
+    /// never an error. A trail that does not exist has length 0, which in this
+    /// id space is also "resume from the beginning" — and that is correct here
+    /// rather than dangerous, because there are no bytes to replay.
+    private static long TrailLength(string path)
+    {
+        try { return new FileInfo(path).Length; }
+        catch (IOException) { return 0; }
+        catch (UnauthorizedAccessException) { return 0; }
     }
 
     private static MailCursorDto Cursor(MailPendingView v) => new(

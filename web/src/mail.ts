@@ -220,6 +220,16 @@ export type MailState = {
   since: number;
   /** End of the COMPLETE lines the reducer knows — where the next append must land. */
   frontier: number;
+  /** Where this picture sits in the TRAIL's id space — the `Last-Event-ID` a
+   * stream should open at to receive exactly the events this snapshot does not
+   * already account for. Set by `seedMail` from the snapshot and never touched
+   * by reduction (it is a fact about the snapshot, not about the reduced state);
+   * a re-seed replaces it, which is what makes a resnapshot re-anchor the stream
+   * as well as the picture. Null = the daemon serves no trail, so there is no id
+   * space to align to and the caller must subscribe FIRST and fold the overlap
+   * as replay — never treat it as 0, which means "from the first byte" and would
+   * replay the whole trail as live. */
+  trailEventId: number | null;
   /** Offset of the unterminated last line, when there is one (it is also the last entry of `lines`). */
   torn: number | null;
   chain: { ok: boolean; head: string | null; gen: number; faults: number; dirMode: string | null; fileMode: string | null };
@@ -294,6 +304,7 @@ export function emptyMailState(): MailState {
     seeded: false,
     since: 0,
     frontier: 0,
+    trailEventId: null,
     torn: null,
     chain: { ok: true, head: null, gen: 1, faults: 0, dirMode: null, fileMode: null },
     dir: null,
@@ -383,6 +394,9 @@ export function seedMail(dto: MailDto, atMs: number, prev?: MailState): MailStat
     seeded: true,
     since: dto.since,
     frontier: dto.frontier,
+    // Carried verbatim, including null: an absent stamp is a real answer (no
+    // trail served) and must not be defaulted to 0 by anything downstream.
+    trailEventId: dto.trailEventId,
     torn,
     chain: {
       ok: dto.chain.ok, head: dto.chain.head, gen: dto.chain.gen, faults: dto.chain.faults.length,

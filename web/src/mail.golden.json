@@ -22,6 +22,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 0,
+        "trailEventId": null,
         "lines": [],
         "cursors": [],
         "presence": []
@@ -46,6 +47,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 909,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -145,6 +147,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 910,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -241,6 +244,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 910,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -364,6 +368,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 605,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -474,6 +479,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 1209,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -621,6 +627,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -720,6 +727,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 906,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -865,6 +873,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -963,6 +972,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 906,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -1092,6 +1102,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 302,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -1180,6 +1191,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 622,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -1298,6 +1310,7 @@
         "since": 605,
         "sinceAligned": true,
         "frontier": 908,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 605,
@@ -1388,6 +1401,7 @@
         "since": 605,
         "sinceAligned": true,
         "frontier": 1210,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 605,
@@ -1489,6 +1503,7 @@
         "since": 605,
         "sinceAligned": true,
         "frontier": 908,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 605,
@@ -1579,6 +1594,7 @@
         "since": 605,
         "sinceAligned": true,
         "frontier": 908,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 605,
@@ -1654,6 +1670,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -1751,6 +1768,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 906,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -1874,6 +1892,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -1971,6 +1990,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2062,6 +2082,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2133,6 +2154,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2249,6 +2271,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2321,6 +2344,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2429,6 +2453,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2534,6 +2559,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 604,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2635,6 +2661,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 906,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2756,6 +2783,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 302,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2831,6 +2859,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 608,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
@@ -2903,6 +2932,7 @@
         "since": 0,
         "sinceAligned": true,
         "frontier": 608,
+        "trailEventId": null,
         "lines": [
           {
             "offset": 0,
