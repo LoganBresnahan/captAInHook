@@ -46,8 +46,11 @@ test.describe("stream health — real dispatches over an aged trail", () => {
     await expect(lines.filter({ hasText: "dispatch.done" })).toHaveCount(2);
 
     // Frames received is what proves delivery — and it agrees with the rows.
+    // Rows FIRST, then frames: they are read at two instants, and a frame
+    // landing between them must only ever widen the inequality.
+    const rowsSeen = await lines.count();
     const frames = Number(await stats.getAttribute("data-frames"));
-    expect(frames).toBeGreaterThanOrEqual(await lines.count());
+    expect(frames).toBeGreaterThanOrEqual(rowsSeen);
     await expect(stats).toContainText("last");            // "· last N s ago" — a frame was stamped
     // And nothing from the aged history leaked past the from-now anchor.
     await expect(lines.filter({ hasText: "aged history line" })).toHaveCount(0);

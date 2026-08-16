@@ -753,8 +753,14 @@ public sealed class ApiHost : IDisposable
             var subscription = new TrailSubscription(
                 _sse!.TrailPath, lastId, _sse.Poll, _sse.Heartbeat, _sse.Capacity);
 
-            // Reconnect hint — the first flush; the client's fetch resolves here.
-            await WriteFrameAsync(output, "retry: 1000\n\n", _stop.Token);
+            // The hello — the first flush; the client's fetch resolves here. It
+            // carries the reconnect hint AND the subscription's anchor as `id:`,
+            // so a client that never receives a single line still holds a
+            // resume cursor: an id-bearing record with no data sets Last-Event-ID
+            // and dispatches nothing (the SSE spec's own semantics; the GUI
+            // client mirrors them). Without it, a stall before the first line
+            // reconnected "from now" and silently lost the stall window.
+            await WriteFrameAsync(output, $"retry: 1000\nid: {subscription.Anchor}\n\n", _stop.Token);
 
             await subscription.RunAsync(
                 (e, ct) => WriteFrameAsync(output, Frame(e), ct), _stop.Token);

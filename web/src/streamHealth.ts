@@ -22,7 +22,7 @@ export function emptyTraceReason(
   if (stream !== "live")
     return { kind: "idle", text: "Waiting for the stream to connect." };
   const dispatchedSince = served !== null && stats.servedAtConnect !== null ? served - stats.servedAtConnect : 0;
-  if (stats.frames === 0 && dispatchedSince > 0)
+  if (stats.framesSinceConnect === 0 && dispatchedSince > 0)
     return {
       kind: "starved",
       text: `Connected, but no frames have arrived — the daemon reports ${dispatchedSince.toLocaleString()} dispatch${dispatchedSince === 1 ? "" : "es"} since this stream connected. The stream is not delivering to this page.`,

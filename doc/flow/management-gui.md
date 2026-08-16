@@ -282,10 +282,20 @@ evidence at all. Both are fixed by making the client keep score:
           ⇒ state "stalled", reader.cancel(), reconnect AT ONCE from the
           cursor (no backoff — the socket was open; the server was not
           answering on it). New headers ⇒ "live"; a failed connect ⇒ the
-          normal "retrying" path.
- store    StreamStats per stream: connects, frames, lastFrameAt (monotonic),
-          liveSince, servedAtConnect (the daemon's `served` as last polled
-          when the stream went live). foldFrame / setStream keep it.
+          normal "retrying" path. The CONNECT is bounded by the same window
+          (a per-attempt AbortController chained to the caller's): a fetch
+          that never returns headers is a transient — retrying + backoff —
+          not a stall, since nothing was open to stall. And the cursor is
+          never null once headers arrive: the server's hello carries the
+          anchor as `id:` (management-api.md), so a stall before the first
+          line resumes exactly, not from-now.
+ store    StreamStats per stream: connects, frames (lifetime),
+          framesSinceConnect (reset on live — what starvation is judged on),
+          lastFrameAt (monotonic), liveSince, servedAtConnect — the daemon's
+          `served` as of the FIRST status poll AFTER the connect (`pinServed`),
+          never the poll before it, which can be 3 s stale and would count a
+          dispatch that predates the from-now anchor as "since connect".
+          foldFrame / setStream / setStatus keep it.
  screen   trace-meta: "N lines · N frames received · last 3 s ago [· 2 connects]"
           empty state (streamHealth.ts, PURE): filtered / stalled / retrying /
           idle / quiet / STARVED — the last is "connected, the daemon reports
@@ -316,6 +326,15 @@ this) and the client's window at 3 s (`sessionStorage["captainhook.stallMs"]`,
 the mirror seam). `playwright.config.ts` runs every spec in **Chromium and
 Firefox** — the client streams via `fetch` + `ReadableStream`, and one engine
 proves one engine.
+
+The commit that shipped this (`1ee7218`) was itself the first real exchange
+on the bus: reviewed by a second Claude Code window holding the `reviewer`
+role (ADR-0016 d8 as-built: a second `mail digest --role reviewer` handler,
+scoped to that window's cwd by `dispatch.json` handler×project rules), whose
+`review-1ee7218-reply` found the pre-first-line cursor loss, the unbounded
+pre-headers connect, the lifetime-vs-since-connect starvation test and the
+stale `servedAtConnect` baseline — every one fixed and pinned in the follow-up
+commit, and answered on the bus. The Mail view drew the whole loop.
 
 ## The policy editor is a rule builder over the same one write (ADR-0015 d4)
 
@@ -488,7 +507,7 @@ the engine — and the config's one retry stays for genuine contention.
 | token bootstrap (fragment→sessionStorage→scrub→bearer) | `web/src/auth.ts` (`bootstrapToken`, `apiFetch`, `currentToken`, `clearToken`) |
 | the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `foldMail`, `SseFrame`, `MailStreamState`, `PolicyVerdict`, `TRACE_CAP`; navigation: `view`, `setView`, `VIEWS`, `VIEW_LABELS`) |
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`; `initialCursor` opens a stream at a given position rather than "from now"; `stallMs`/`timer` the watchdog and its seam, `DEFAULT_STALL_MS`, `stallWindowMs`, `"stalled"` in `StreamState`) |
-| stream telemetry + the honest empty state | `web/src/store.ts` (`StreamStats`, `emptyStreamStats`, `noteFrame`, `noteState`, `streamStats`, `mailStreamStats`), `web/src/streamHealth.ts` (`emptyTraceReason` — filtered/stalled/retrying/idle/quiet/**starved**), `web/src/tick.ts` (`useTick`), `format.ts` (`agoLabel`); `TracePanel` `.trace-stats[data-frames][data-connects]`, `[data-trace-empty=<kind>]`; `MailPanel` `.mail-stream-stats`; pinned by `streamHealth.test.ts`, the watchdog by `sse.test.ts` + `mailStream.test.ts` |
+| stream telemetry + the honest empty state | `web/src/store.ts` (`StreamStats`, `emptyStreamStats`, `noteFrame`, `noteState`, `pinServed`, `streamStats`, `mailStreamStats`), `web/src/streamHealth.ts` (`emptyTraceReason` — filtered/stalled/retrying/idle/quiet/**starved**), `web/src/tick.ts` (`useTick`), `format.ts` (`agoLabel`); `TracePanel` `.trace-stats[data-frames][data-connects]`, `[data-trace-empty=<kind>]`; `MailPanel` `.mail-stream-stats`; pinned by `streamHealth.test.ts`, the watchdog by `sse.test.ts` + `mailStream.test.ts` |
 | same-URL concurrency (Firefox cache lock) | `web/src/auth.ts` `apiFetch` sends `cache: "no-store"` on every call; `stream-health.spec.ts` "two subscriptions on one URL"; daemon knob `ApiHost.ResolveHeartbeat` / `CAPTAINHOOK_SSE_HEARTBEAT_MS` (`Program.cs`; `ApiHostTests.ResolveHeartbeat`) |
 | policy write client (ETag lifecycle) + the rule builder's round trip | `web/src/policy.ts` (`submitPolicy`; `parsePolicyRows`, `serializePolicyRows`, `sameMeaning`, `PolicyRow`/`PolicyRows`) |
 | rule builder UI (rows, order, raw toggle + raw-draft adoption, raw-lock) | `web/src/PolicyPanel.tsx` (`RuleBuilder`, `data-rule-*`, `data-policy-mode`, `data-policy-locked`, `data-draft-unrepresentable`) |

@@ -126,7 +126,15 @@ so only the file gets the whole story. `TrailCursor` is **schema-blind** — it
 ships opaque newline-delimited bytes, shrinking N4's third-consumer coupling to
 "the trail is newline-delimited". The SSE **event id is the byte offset**, so
 `Last-Event-ID` resumes without loss; no header ⇒ start at the file's current
-end ("from now").
+end ("from now"). **The hello record carries that anchor** (2026-08-16):
+the first flush is `retry: 1000\nid: <anchor>\n\n` — an id-bearing, data-less
+record, which per the SSE spec sets the client's `Last-Event-ID` and
+dispatches nothing — so a subscriber holds a resume cursor from its very
+first byte. Before this, a client that wedged before any line arrived had no
+cursor and reconnected from-now, silently skipping everything written during
+the stall (found by the reviewer session on the bus, `review-1ee7218-reply`).
+`TrailSubscription.Anchor`; pinned by
+`ApiSseHttpTests.Events_Hello_CarriesTheAnchorAsAnId_SoAStallBeforeAnyLineStillResumesExactly`.
 
 Backpressure is ADR-0004 d6 as reserved: a **bounded Channel per subscriber**,
 drop-oldest **counted by hand**, with the gap and reset markers traveling

@@ -189,28 +189,44 @@ export async function runEventStream(o: RunOptions): Promise<RunResult> {
     first = false;
     stalled = false;
 
+    // The connect deadline (reviewer finding on 1ee7218, review-1ee7218-reply):
+    // the body watchdog below arms only once headers arrive, so a connect that
+    // hangs BEFORE headers — the very shape of the Firefox same-URL lock this
+    // client now sidesteps — had no timer, no backoff, no retry. Each attempt
+    // gets its own abort, chained to the caller's; the same stall window
+    // bounds it, and a timed-out connect is a transient (retrying + backoff),
+    // not a stall: nothing was ever open to stall.
+    const attempt = new AbortController();
+    const onOuterAbort = () => attempt.abort();
+    o.signal.addEventListener("abort", onOuterAbort, { once: true });
+    const disarmConnect = timer(stallMs, () => attempt.abort());
     let resp: Response;
     try {
       resp = await o.fetchFn(path, {
-        signal: o.signal,
+        signal: attempt.signal,
         headers: {
           Accept: "text/event-stream",
           ...(cursor !== null ? { "Last-Event-ID": cursor } : {}),
         },
       });
     } catch {
+      disarmConnect();
+      o.signal.removeEventListener("abort", onOuterAbort);
       if (o.signal.aborted) return "stopped";
       continue;
     }
+    disarmConnect();
 
     if (resp.status === 401 || resp.status === 403) {
       // The dead credential (decision 4): stop retrying entirely. Reached on
       // the reconnect after a cutover dropped us — never misread as a blip.
+      o.signal.removeEventListener("abort", onOuterAbort);
       o.onState("dead");
       return "dead";
     }
     if (!resp.ok || resp.body === null) {
       try { await resp.body?.cancel(); } catch { /* already gone */ }
+      o.signal.removeEventListener("abort", onOuterAbort);
       continue;   // 503 while draining, or any odd answer: a transient
     }
 
@@ -256,6 +272,7 @@ export async function runEventStream(o: RunOptions): Promise<RunResult> {
       // lifetime-critical openStreams counter (adversarial verify, 2026-07-09:
       // one throwing onFrame pinned openStreams at 2 on a live daemon).
       try { await reader.cancel(); } catch { /* already torn */ }
+      o.signal.removeEventListener("abort", onOuterAbort);
     }
     if (o.signal.aborted) return "stopped";
     if (stalled) o.onState("stalled");

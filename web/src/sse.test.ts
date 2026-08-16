@@ -309,3 +309,58 @@ test("heartbeat bytes keep a quiet stream LIVE — every chunk re-arms the watch
   conn.end();
   assert.equal(await done, "stopped");
 });
+
+test("the hello's anchor id is a cursor: a stall before ANY line still resumes exactly there (review 1ee7218 #1)", async () => {
+  const t = fakeTimer();
+  const attempts: Attempt[] = [];
+  const frames: SseFrame[] = [];
+  const ctrl = new AbortController();
+  const first = openResponse("retry: 1000\nid: 3352\n\n");   // the server's hello: hint + anchor, no data
+  const done = runEventStream({
+    fetchFn: (_p, init) => {
+      attempts.push({ lastEventId: new Headers(init?.headers).get("Last-Event-ID") });
+      if (attempts.length === 1) return Promise.resolve(first.resp);
+      ctrl.abort();
+      return Promise.reject(new Error("aborted"));
+    },
+    onFrame: (f) => frames.push(f),
+    onState: () => {},
+    signal: ctrl.signal,
+    sleep: () => Promise.resolve(),
+    timer: t.timer,
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(frames.length, 0);                                  // the hello dispatches nothing
+  t.fire();                                                        // stall with no line ever received
+  await done;
+  assert.equal(attempts[1].lastEventId, "3352");                  // …and the reconnect is NOT from-now
+});
+
+test("a connect that hangs before headers is bounded by the same window and retried (review 1ee7218 #2)", async () => {
+  const t = fakeTimer();
+  const attempts: Attempt[] = [];
+  const states: string[] = [];
+  const ctrl = new AbortController();
+  const done = runEventStream({
+    fetchFn: (_p, init) => {
+      attempts.push({ lastEventId: new Headers(init?.headers).get("Last-Event-ID") });
+      if (attempts.length === 1)
+        return new Promise<Response>((_, reject) => init!.signal!.addEventListener("abort", () => reject(new Error("aborted"))));
+      ctrl.abort();
+      return Promise.reject(new Error("aborted"));
+    },
+    onFrame: () => {},
+    onState: (s) => states.push(s),
+    signal: ctrl.signal,
+    sleep: () => Promise.resolve(),
+    timer: t.timer,
+    initialCursor: "77",
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(t.armed.filter((a) => !a.disarmed).length, 1);    // the connect deadline is armed
+  t.fire();                                                        // headers never came
+  await done;
+  assert.equal(attempts.length, 2);                                // it retried…
+  assert.deepEqual(states, ["retrying"]);                          // …as a transient, not a stall
+  assert.equal(attempts[1].lastEventId, "77");                     // …from the cursor it had
+});

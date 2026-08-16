@@ -43,14 +43,24 @@ export type StreamState = "idle" | "live" | "retrying" | "stalled" | "dead";
  * times since this stream connected and 0 frames arrived". */
 export type StreamStats = {
   connects: number;
+  /** Lifetime frames on this stream. */
   frames: number;
+  /** Frames since the CURRENT connect — the number starvation is judged on
+   * (reviewer finding on 1ee7218: lifetime frames could only ever starve on
+   * the first connect; a stream that dies after a reconnect never said so). */
+  framesSinceConnect: number;
   lastFrameAt: number | null;
   liveSince: number | null;
+  /** The daemon's `served` as of the first status poll AFTER this connect —
+   * pinned lazily, not from the last poll before it, because that poll can be
+   * up to 3 s stale and a dispatch that predates the from-now anchor would
+   * count as "since connect" and pin a healthy quiet stream at STARVED
+   * forever (same review). null until that poll lands. */
   servedAtConnect: number | null;
 };
 
 export const emptyStreamStats = (): StreamStats =>
-  ({ connects: 0, frames: 0, lastFrameAt: null, liveSince: null, servedAtConnect: null });
+  ({ connects: 0, frames: 0, framesSinceConnect: 0, lastFrameAt: null, liveSince: null, servedAtConnect: null });
 
 /** The tab's credential state (token-handoff-bootstrap). Distinct from
  * StreamState: fetch-once panels care about the session even with no stream. */
@@ -272,7 +282,12 @@ export const useStore = create<Store>((set) => ({
 
   setView: (view) => set({ view }),
 
-  setStatus: (status) => set({ status }),
+  setStatus: (status) =>
+    set((s) => ({
+      status,
+      streamStats: pinServed(s.streamStats, status.served),
+      mailStreamStats: pinServed(s.mailStreamStats, status.served),
+    })),
   seedMailSnapshot: (dto) =>
     set((s) => ({ mail: seedMail(dto, performance.now(), s.mail) })),
   foldMailFrame: (frame) =>
@@ -281,7 +296,7 @@ export const useStore = create<Store>((set) => ({
       return { mail: foldMail(s.mail, frame, now), mailStreamStats: noteFrame(s.mailStreamStats, now) };
     }),
   setMailStream: (mailStream) =>
-    set((s) => ({ mailStream, mailStreamStats: noteState(s.mailStreamStats, mailStream, s.status?.served ?? null, performance.now()) })),
+    set((s) => ({ mailStream, mailStreamStats: noteState(s.mailStreamStats, mailStream, performance.now()) })),
   setMailView: (canvas) => set((s) => ({ mailUi: { ...s.mailUi, canvas } })),
   setMailSelected: (selected) => set((s) => ({ mailUi: { ...s.mailUi, selected } })),
   setPolicy: (policy) => set({ policy }),
@@ -290,21 +305,31 @@ export const useStore = create<Store>((set) => ({
   setHarnesses: (harnesses) => set({ harnesses }),
   setSession: (session) => set({ session }),
   setStream: (stream) =>
-    set((s) => ({ stream, streamStats: noteState(s.streamStats, stream, s.status?.served ?? null, performance.now()) })),
+    set((s) => ({ stream, streamStats: noteState(s.streamStats, stream, performance.now()) })),
 }));
 
 // ---- stream telemetry (pure, tested) ----------------------------------------
 
-/** One frame folded: count it and stamp it. */
+/** One frame folded: count it (lifetime and since-connect) and stamp it. */
 export function noteFrame(st: StreamStats, now: number): StreamStats {
-  return { ...st, frames: st.frames + 1, lastFrameAt: now };
+  return { ...st, frames: st.frames + 1, framesSinceConnect: st.framesSinceConnect + 1, lastFrameAt: now };
 }
 
 /** A state transition. Going LIVE is a (re)connect: it counts, stamps
- * `liveSince`, and pins the daemon's `served` as of now so the panel can later
- * say how many dispatches this connection has watched go by. Every other state
- * leaves the counters alone — a stall or a retry does not erase what arrived. */
-export function noteState(st: StreamStats, state: string, served: number | null, now: number): StreamStats {
+ * `liveSince`, resets the since-connect frame count, and CLEARS
+ * `servedAtConnect` for `pinServed` to fill from the next status poll. Every
+ * other state leaves the counters alone — a stall or a retry does not erase
+ * what arrived. */
+export function noteState(st: StreamStats, state: string, now: number): StreamStats {
   if (state !== "live") return st;
-  return { ...st, connects: st.connects + 1, liveSince: now, servedAtConnect: served };
+  return { ...st, connects: st.connects + 1, liveSince: now, framesSinceConnect: 0, servedAtConnect: null };
+}
+
+/** A status poll landed: if a connect is waiting for its baseline, this is it.
+ * A poll that arrives after frames already flowed still pins — the count is
+ * only compared when framesSinceConnect is 0, so it can under-count starvation
+ * by the dispatches inside that first window, never over-count. */
+export function pinServed(st: StreamStats, served: number): StreamStats {
+  if (st.liveSince === null || st.servedAtConnect !== null) return st;
+  return { ...st, servedAtConnect: served };
 }

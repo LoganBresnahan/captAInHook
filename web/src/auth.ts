@@ -59,5 +59,5 @@ export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = currentToken();
   const headers = new Headers(init?.headers);
   if (token !== null) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(path, { cache: "no-store", ...init, headers });
+  return fetch(path, { ...init, cache: init?.cache ?? "no-store", headers });
 }

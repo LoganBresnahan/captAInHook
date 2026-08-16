@@ -713,12 +713,26 @@ internal sealed class SseClient : IAsyncDisposable
 
     public string? ContentType => _resp?.Content.Headers.ContentType?.MediaType;
 
+    /// The raw lines of the FIRST record on the stream — the hello. Read once,
+    /// immediately after OpenAsync, before any ReadFrameAsync.
+    public async Task<string[]> ReadHelloAsync(TimeSpan timeout)
+    {
+        var lines = new List<string>();
+        while (true)
+        {
+            var line = await _reader!.ReadLineAsync().WaitAsync(timeout);
+            if (line is null || line.Length == 0) return lines.ToArray();
+            lines.Add(line);
+        }
+    }
+
     /// The next full SSE frame (id/event/data), skipping comment heartbeats.
     /// Null when the stream ends.
     public async Task<(string? Id, string? Event, string? Data)?> ReadFrameAsync(TimeSpan timeout)
     {
         string? id = null, evt = null, data = null;
         var sawField = false;
+        var sawRetry = false;   // the hello record (retry: + anchor id:) is not a frame
         while (true)
         {
             string? line;
@@ -729,6 +743,7 @@ internal sealed class SseClient : IAsyncDisposable
             if (line.StartsWith(':')) continue;         // comment (heartbeat)
             if (line.Length == 0)
             {
+                if (sawRetry) { id = null; evt = null; data = null; sawField = false; sawRetry = false; continue; }
                 if (sawField) return (id, evt, data);   // frame boundary
                 continue;
             }
@@ -736,7 +751,7 @@ internal sealed class SseClient : IAsyncDisposable
             if (line.StartsWith("id: ")) id = line[4..];
             else if (line.StartsWith("event: ")) evt = line[7..];
             else if (line.StartsWith("data: ")) data = line[6..];
-            else if (line.StartsWith("retry: ")) sawField = false;   // the hello hint, not a frame
+            else if (line.StartsWith("retry: ")) sawRetry = true;   // the hello record, not a frame
         }
     }
 
@@ -800,6 +815,39 @@ public class ApiSseHttpTests
         Assert.Equal("c", (await second.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value.Data);
         trail.Append("d");
         Assert.Equal("d", (await second.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value.Data);
+    }
+
+    [Fact]
+    public async Task Events_Hello_CarriesTheAnchorAsAnId_SoAStallBeforeAnyLineStillResumesExactly()
+    {
+        // The reviewer's finding on 1ee7218 (review-1ee7218-reply): a client
+        // that never received a line had no cursor, so a stall reconnected
+        // "from now" and silently lost the stall window. The hello now says
+        // where the subscription starts, as an id-bearing, data-less record —
+        // sets Last-Event-ID, dispatches nothing.
+        using var trail = new TempTrail();
+        trail.Append("old-1", "old-2");
+        var anchor = new FileInfo(trail.Path).Length;
+        using var api = ApiHost.Start(FreeTcpPort(), sse: FastSse(trail));
+
+        long helloId;
+        await using (var first = new SseClient())
+        {
+            Assert.Equal(HttpStatusCode.OK, await first.OpenAsync(api.Port, api.Token));   // from-now
+            var hello = await first.ReadHelloAsync(TimeSpan.FromSeconds(10));
+            Assert.Contains("retry: 1000", hello);
+            var idLine = Assert.Single(hello, l => l.StartsWith("id: "));
+            helloId = long.Parse(idLine[4..]);
+            Assert.Equal(anchor, helloId);           // the file's end at connect — nothing older replays
+            Assert.DoesNotContain(hello, l => l.StartsWith("data:"));   // it dispatches nothing
+        }
+        // The stall window: lines written while the (now closed) first client
+        // could not read. A reconnect at the HELLO id recovers exactly them.
+        trail.Append("during-stall-1", "during-stall-2");
+        await using var second = new SseClient();
+        await second.OpenAsync(api.Port, api.Token, lastEventId: helloId);
+        Assert.Equal("during-stall-1", (await second.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value.Data);
+        Assert.Equal("during-stall-2", (await second.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value.Data);
     }
 
     [Fact]

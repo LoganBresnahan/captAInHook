@@ -297,11 +297,21 @@ public sealed class TrailSubscription
         TimeSpan? poll = null, TimeSpan? heartbeat = null, int? capacity = null)
     {
         var start = lastEventId ?? CurrentLength(path);
+        Anchor = start;
         _cursor = new TrailCursor(path, start, alignForward: lastEventId is > 0);
         _poll = poll ?? TimeSpan.FromMilliseconds(200);
         _heartbeat = heartbeat ?? TimeSpan.FromSeconds(15);
         _capacity = Math.Max(1, capacity ?? 256);
     }
+
+    /// Where this subscription starts reading — the client's own Last-Event-ID
+    /// echoed, or the file's end for a from-now connect. ApiHost ships it in the
+    /// hello record (`retry:` + `id:`) so the client holds a resume cursor from
+    /// its very first byte: before 2026-08-16 a stream that wedged before any
+    /// line arrived had no cursor at all, and its reconnect re-anchored "from
+    /// now" — silently skipping everything written during the stall (found by
+    /// the reviewer session on the bus, review-1ee7218-reply).
+    public long Anchor { get; }
 
     /// Evictions not yet surfaced as a gap marker — test observability.
     internal long DroppedSoFar => Volatile.Read(ref _dropped);
