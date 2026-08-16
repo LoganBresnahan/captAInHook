@@ -221,3 +221,42 @@ test("every stream frame reaches the fold, gaps and resets included", async () =
   // what turns them into a resnapshot request and then into a resync.
   assert.deepEqual(frames[1], { kind: "gap", dropped: 3 });
 });
+
+// ---- the stall watchdog reaches the bus's own badge (2026-08-16) -----------------
+
+test("a stalled mail stream says STALLED on the mail badge and resumes at the same stamp, no re-seed", async () => {
+  const enc = new TextEncoder();
+  let armedCb: (() => void) | null = null;
+  const timer = (_ms: number, cb: () => void) => { armedCb = cb; return () => { if (armedCb === cb) armedCb = null; }; };
+  const calls: Call[] = [];
+  const seeded: MailDto[] = [];
+  const states: MailStreamState[] = [];
+  const ctrl = new AbortController();
+  let streams = 0;
+  const open = new Response(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(enc.encode("retry: 1000\n\n")); } }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  const done = runMailStream({
+    fetchFn: (path, init) => {
+      calls.push({ path, lastEventId: new Headers(init?.headers).get("Last-Event-ID") });
+      if (path.startsWith("/api/v1/mail")) return Promise.resolve(new Response(JSON.stringify(snapshot("4242")), { status: 200 }));
+      streams++;
+      if (streams === 1) return Promise.resolve(open);
+      ctrl.abort();
+      return Promise.reject(new Error("aborted"));
+    },
+    seed: (dto) => seeded.push(dto),
+    fold: () => {},
+    setState: (s) => states.push(s),
+    onResnapshotRequest: () => () => {},
+    sleep: () => Promise.resolve(),
+    timer,
+    signal: ctrl.signal,
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.notEqual(armedCb, null);
+  armedCb!();                                                     // the stall window elapses
+  await done;
+  assert.equal(seeded.length, 1);                                 // a stall is NOT a resync: the picture stands
+  assert.deepEqual(states, ["live", "stalled"]);
+  assert.deepEqual(streamCalls(calls).map((c) => c.lastEventId), ["4242", "4242"]);   // resumed at the same stamp
+});

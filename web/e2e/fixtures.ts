@@ -9,9 +9,16 @@ import { startDaemon, type Daemon } from "./daemon.ts";
 
 export type { Daemon } from "./daemon.ts";
 
-export const test = base.extend<{ daemon: Daemon }>({
-  daemon: async ({}, use) => {
-    const daemon = await startDaemon();
+/** Per-describe daemon shape (Playwright option fixtures, set with
+ * `test.use({...})`): an aged trail and/or a fast heartbeat. Defaults are the
+ * plain daemon every other spec has always had. */
+export type DaemonShape = { agedTrailBytes: number; heartbeatMs: number | undefined };
+
+export const test = base.extend<{ daemon: Daemon } & DaemonShape>({
+  agedTrailBytes: [0, { option: true }],
+  heartbeatMs: [undefined, { option: true }],
+  daemon: async ({ agedTrailBytes, heartbeatMs }, use) => {
+    const daemon = await startDaemon({ agedTrailBytes, heartbeatMs });
     try {
       await use(daemon);
     } finally {

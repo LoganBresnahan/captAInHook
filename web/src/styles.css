@@ -510,6 +510,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .stream-live { color: var(--ok); }
 .stream-retrying { color: var(--warn); }
+.stream-stalled { color: var(--bad); }
 .stream-dead { color: var(--bad); }
 .stream-idle { color: var(--text-dim); }
 /* The Mail stream's two extra states. `resyncing` borrows warn because it IS a
@@ -757,6 +758,7 @@ table.rules td.rule-actions button { padding: var(--s-1) var(--s-2); }
   border-radius: var(--r-1);
   padding: 1px var(--s-2);
 }
+.mail-stream-stats { font-family: var(--font-mono); font-size: var(--fs-2xs); }
 .mail-zoom { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
 .mail-zoom button { padding: var(--s-1) var(--s-3); min-width: 36px; }
 .mail-tier {

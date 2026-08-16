@@ -46,9 +46,15 @@ switch (inv.Mode)
         // Management API port (ADR-0007 decision 2): 4665 unless
         // CAPTAINHOOK_API_PORT moves it; 0 disables. Resolution is silent
         // like IDLE_MS above — malformed falls back to the default.
+        // SSE heartbeat cadence (CAPTAINHOOK_SSE_HEARTBEAT_MS): a test knob so the
+        // GUI's stall watchdog can be pinned end-to-end in seconds; unset ⇒ the
+        // tail's own default, and the trail path stays the one resolver everyone
+        // shares (DaemonHost pins snapshot and stream to the SAME file).
+        var heartbeat = ApiHost.ResolveHeartbeat(Environment.GetEnvironmentVariable("CAPTAINHOOK_SSE_HEARTBEAT_MS"));
         return await DaemonHost.RunAsync(idleWindow: idle, policyPath: DispatchPolicy.ResolvePath(),
             apiPort: ApiHost.ResolvePort(Environment.GetEnvironmentVariable("CAPTAINHOOK_API_PORT")),
-            handlersPath: ExecHandlersFile.ResolvePath());
+            handlersPath: ExecHandlersFile.ResolvePath(),
+            sse: heartbeat is null ? null : new SseOptions(WireJsonl.DefaultLogPath(), Heartbeat: heartbeat));
     }
 
     case Mode.Ui:

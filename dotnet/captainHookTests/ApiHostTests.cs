@@ -161,6 +161,18 @@ public class ApiPortResolveTests
 
     [Fact]
     public void TheDefaultIsHookOnAPhoneKeypad() => Assert.Equal(4665, ApiHost.DefaultPort);
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("0", null)]         // non-positive: the tail's own default, never a zero-interval spin
+    [InlineData("-5", null)]
+    [InlineData("abc", null)]
+    [InlineData("250", 250)]
+    [InlineData("15000", 15000)]
+    public void ResolveHeartbeat(string? raw, int? expectedMs) =>
+        Assert.Equal(expectedMs is null ? (TimeSpan?)null : TimeSpan.FromMilliseconds(expectedMs.Value),
+            ApiHost.ResolveHeartbeat(raw));
 }
 
 // port-config-and-cutover: the retry-bind half of the N1 singleton-port story.

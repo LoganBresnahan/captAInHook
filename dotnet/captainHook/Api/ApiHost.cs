@@ -130,6 +130,21 @@ public sealed class ApiHost : IDisposable
         return port is > 0 and <= 65535 ? port : DefaultPort;
     }
 
+    /// Daemon-start SSE heartbeat cadence for Program.cs (CAPTAINHOOK_SSE_HEARTBEAT_MS;
+    /// 2026-08-16). Unset/malformed/non-positive ⇒ null = TrailSubscription's
+    /// default (15 s). Exists for the e2e suite: the GUI's stall watchdog
+    /// (web/src/sse.ts) declares a socket wedged after ~2.5 heartbeats without
+    /// a byte, so pinning that path in seconds rather than a minute needs a
+    /// daemon whose heartbeat is faster than production's. Same silent-fallback
+    /// idiom as ResolvePort — a typo here must never change what the daemon
+    /// serves, only how often it says "still here".
+    public static TimeSpan? ResolveHeartbeat(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (!long.TryParse(raw, out var ms) || ms <= 0) return null;
+        return TimeSpan.FromMilliseconds(ms);
+    }
+
     /// Bind loopback-only on `port` NOW or throw — for callers that know the
     /// port is free (tests). Production goes through StartRetrying. `rendezvous`
     /// (when supplied) is where the 0600 api.json is written on bind and removed

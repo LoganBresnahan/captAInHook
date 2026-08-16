@@ -240,6 +240,7 @@ where a hand edit would follow it.
 | daemon wiring (read model + writer + sse + `onRequest` idle stamp; supersession probe) | `dotnet/captainHook/Core/DaemonHost.cs` |
 | serve counters (Interlocked) | `dotnet/captainHook/Core/ServeStats.cs` |
 | port resolution (`4665`, `CAPTAINHOOK_API_PORT`, `0` disables) | `ApiHost.ResolvePort`, threaded via `Program.cs` |
+| SSE heartbeat cadence (`CAPTAINHOOK_SSE_HEARTBEAT_MS`; unset ⇒ `TrailSubscription`'s 15 s) | `ApiHost.ResolveHeartbeat`, threaded via `Program.cs` into `SseOptions.Heartbeat`; a daemon-start test knob so the GUI's stall watchdog can be pinned end-to-end in seconds (`ApiHostTests.ResolveHeartbeat`, `web/e2e/stream-health.spec.ts`) |
 | discovery path | `RendezvousPaths.ApiJsonPath` (`captainHookWire/Rendezvous.cs`) |
 | endpoints | `GET /api/v1/{status,policy,harnesses,handlers,events}`, `PUT /api/v1/{policy,handlers}`, else 404 |
 | log events | `api.listening`, `api.stopped`, `api.bindContended`, `api.bindBlocked`, `api.discoveryFailed`, `api.tailError`, `api.handlerError`, `api.loopCrashed`; `daemon.superseded` (src `api`/`daemon`); `policy.write` (src **`policy`** — pairs with `policy.reload`) |

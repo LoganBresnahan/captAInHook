@@ -85,7 +85,34 @@ export type StartDaemonOptions = {
   idleMs?: number;
   /** Explicit API port; default picks a free one. */
   port?: number;
+  /** Pre-seed the trail with at least this many bytes of realistic history
+   * BEFORE the daemon starts (2026-08-16): the live installation's trail is
+   * megabytes and months old, and a from-now anchor over that file is a
+   * different seek from one over an empty file. 0/undefined ⇒ empty. */
+  agedTrailBytes?: number;
+  /** SSE heartbeat cadence (CAPTAINHOOK_SSE_HEARTBEAT_MS); undefined ⇒ the
+   * daemon's default 15 s. The stall specs shorten it so the GUI's watchdog
+   * (client-side window, likewise shortened) can be exercised in seconds. */
+  heartbeatMs?: number;
 };
+
+/** Realistic aged trail lines — the engine's own field names (`lvl`/`src`, the
+ * WireJsonl schema), each a complete line, so the tail's line-boundary logic
+ * runs over exactly what production writes. */
+export function agedTrail(minBytes: number): string {
+  const parts: string[] = [];
+  let bytes = 0, i = 0;
+  while (bytes < minBytes) {
+    const did = (0x10000000 + i).toString(16).slice(-8);
+    const line = JSON.stringify({
+      ts: new Date(Date.UTC(2026, 6, 1, 0, 0, i % 60)).toISOString(), lvl: "info", src: "dispatcher",
+      evt: i % 2 === 0 ? "dispatch.start" : "dispatch.done", dispatchId: did, durMs: 12 + (i % 40),
+      msg: `aged history line ${i}`,
+    }) + "\n";
+    parts.push(line); bytes += line.length; i++;
+  }
+  return parts.join("");
+}
 
 /** An ephemeral free loopback port (bind-0, read, release). */
 export function freePort(): Promise<number> {
@@ -142,6 +169,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
   const handlersPath = join(sandbox, "handlers.json");
   const mailDir = join(sandbox, "mail");
   writeFileSync(trailPath, "");   // exists-but-empty: the tail starts clean
+  if (opts.agedTrailBytes) writeFileSync(trailPath, agedTrail(opts.agedTrailBytes), { flag: "a" });
 
   const port = opts.port ?? await freePort();
   // One env for the daemon AND for fireHook's shim-mode runs — the shim must
@@ -171,6 +199,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
       ...sandboxEnv,
       CAPTAINHOOK_API_PORT: String(port),
       CAPTAINHOOK_IDLE_MS: String(opts.idleMs ?? 600_000),   // out-live the run; stop() kills it
+      ...(opts.heartbeatMs !== undefined ? { CAPTAINHOOK_SSE_HEARTBEAT_MS: String(opts.heartbeatMs) } : {}),
       CAPTAINHOOK_LOG_STDERR: "on",    // to daemon.err, for diagnosis on a stall
       // Give the daemon a thread-pool FLOOR: warming handlers spawns F#
       // supervised actors, and under the browser's CPU load the pool grows

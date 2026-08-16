@@ -94,7 +94,11 @@ test.describe("mail", () => {
 
   test("clicking an envelope opens its record — body, provenance, and each reader's standing", async ({ page }) => {
     const mail = page.locator('[data-island="mail"]');
-    await mail.locator('[data-lane="builder"] [data-glyph]').first().click();
+    // Click the BODY rect, not the button <g>: the group also holds the thin
+    // drop-line to the spine, so its bounding-box centre can fall on bare lane
+    // between line and card — where Firefox's hit-test finds the lane, not the
+    // glyph. A user clicks the card; so does the spec.
+    await mail.locator('[data-lane="builder"] [data-glyph] .glyph-body').first().click();
 
     const detail = mail.locator("[data-mail-detail]");
     await expect(detail).toBeVisible();
@@ -106,7 +110,7 @@ test.describe("mail", () => {
     await expect(detail.locator("[data-standing]")).toHaveCount(1);
 
     // An envelope nobody reads says so instead of inventing a standing.
-    await mail.locator('[data-lane="archivist"] [data-glyph]').first().click();
+    await mail.locator('[data-lane="archivist"] [data-glyph] .glyph-body').first().click();
     await expect(detail.locator("[data-detail-noreader]")).toBeVisible();
   });
 

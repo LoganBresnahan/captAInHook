@@ -42,10 +42,22 @@ export function clearToken(): void {
 
 /** Same-origin API fetch with the bearer attached. Throws TypeError on network
  * failure exactly like fetch; authorization failures come back as 401/403
- * responses the caller maps to the dead-credential UX (decision 4). */
+ * responses the caller maps to the dead-credential UX (decision 4).
+ *
+ * `cache: "no-store"` on EVERY call (2026-08-16, the dogfood finding). Not for
+ * freshness — the API is bearer-gated live state and the server already says
+ * no-store — but because Firefox serializes concurrent requests to the SAME
+ * URL behind its HTTP-cache entry lock, held for the whole body: while one
+ * `/api/v1/events` stream is open, a second `fetch("/api/v1/events")` (the
+ * Mail view's own subscription, or a reconnect racing the socket it replaces)
+ * never receives headers, and the page cannot tell it from a quiet stream.
+ * Measured live: plain ⇒ neither of two new streams got headers in 2.5 s
+ * beside the app's; no-store ⇒ both in ~5 ms. Chromium never held the lock.
+ * "no-store" bypasses the cache machinery entirely, so it is the same
+ * request on the wire everywhere and only Firefox behaves differently. */
 export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = currentToken();
   const headers = new Headers(init?.headers);
   if (token !== null) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(path, { ...init, headers });
+  return fetch(path, { cache: "no-store", ...init, headers });
 }

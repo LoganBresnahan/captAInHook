@@ -38,5 +38,12 @@ export default defineConfig({
     screenshot: "only-on-failure",
     actionTimeout: 10_000,
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // Two engines (2026-08-16): the client streams the trail via fetch +
+  // ReadableStream rather than EventSource, and chunk delivery is where
+  // engines differ most — a single engine proves a single engine.
+  // `npx playwright install chromium firefox` pulls both.
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
+  ],
 });

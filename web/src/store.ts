@@ -27,8 +27,30 @@ export type SseFrame =
 /** The trace island's connection banner. The client owns the transitions:
  * live ⇄ retrying on network drops, dead on 401/403 — a rotated credential the
  * browser cannot refresh (decision 4: stop retrying, say re-run
- * `captainHook ui`). */
-export type StreamState = "idle" | "live" | "retrying" | "dead";
+ * `captainHook ui`). `stalled` is the watchdog's verdict (2026-08-16): the
+ * socket is open but NOTHING — not even the server's 15 s heartbeat comment —
+ * has arrived within the stall window, so "live" would be a lie; the client
+ * tears the read down and reconnects from its cursor. */
+export type StreamState = "idle" | "live" | "retrying" | "stalled" | "dead";
+
+/** What a stream has actually DONE, beside what state it claims (2026-08-16,
+ * the dogfood finding: a badge reading "streaming" over a panel that never
+ * received a frame was unfalsifiable from the screen). All times are the
+ * browser's MONOTONIC clock (`performance.now()`), the same rule as the mail
+ * reducer's presence decay. `servedAtConnect` is the daemon's `served`
+ * counter as last polled when this stream went live — the panel compares it
+ * against the current count to say, honestly, "the daemon has dispatched N
+ * times since this stream connected and 0 frames arrived". */
+export type StreamStats = {
+  connects: number;
+  frames: number;
+  lastFrameAt: number | null;
+  liveSince: number | null;
+  servedAtConnect: number | null;
+};
+
+export const emptyStreamStats = (): StreamStats =>
+  ({ connects: 0, frames: 0, lastFrameAt: null, liveSince: null, servedAtConnect: null });
 
 /** The tab's credential state (token-handoff-bootstrap). Distinct from
  * StreamState: fetch-once panels care about the session even with no stream. */
@@ -121,7 +143,7 @@ export type MailUi = {
  * findings) and the driver is re-seeding and re-anchoring. `snapshotOnly` is
  * the honest end state when the daemon serves no trail at all — the picture is
  * real but frozen, and the view says so rather than implying it is live. */
-export type MailStreamState = "idle" | "live" | "retrying" | "resyncing" | "snapshotOnly" | "dead";
+export type MailStreamState = "idle" | "live" | "retrying" | "stalled" | "resyncing" | "snapshotOnly" | "dead";
 
 export type Store = {
   // which screen is on (ADR-0015 d1) — the whole of navigation
@@ -138,6 +160,7 @@ export type Store = {
   mail: MailState;
   mailUi: MailUi;
   mailStream: MailStreamState;
+  mailStreamStats: StreamStats;
   policy: PolicyDto | null;
   policyVerdict: PolicyVerdict | null;
   handlers: HandlersDto | null;
@@ -145,6 +168,7 @@ export type Store = {
   // cross-cutting
   session: SessionState;
   stream: StreamState;
+  streamStats: StreamStats;
 
   // the ONE place stream state ever mutates (decision 8)
   foldFrame: (frame: SseFrame) => void;
@@ -231,17 +255,19 @@ export const useStore = create<Store>((set) => ({
   mail: emptyMailState(),
   mailUi: { canvas: null, selected: null },
   mailStream: "idle",
+  mailStreamStats: emptyStreamStats(),
   policy: null,
   policyVerdict: null,
   handlers: null,
   harnesses: null,
   session: "none",
   stream: "idle",
+  streamStats: emptyStreamStats(),
 
   foldFrame: (frame) =>
     set((s) => {
       const { trace, truncated } = foldTrace(s.trace, s.traceTruncated, frame);
-      return { trace, traceTruncated: truncated };
+      return { trace, traceTruncated: truncated, streamStats: noteFrame(s.streamStats, performance.now()) };
     }),
 
   setView: (view) => set({ view }),
@@ -250,8 +276,12 @@ export const useStore = create<Store>((set) => ({
   seedMailSnapshot: (dto) =>
     set((s) => ({ mail: seedMail(dto, performance.now(), s.mail) })),
   foldMailFrame: (frame) =>
-    set((s) => ({ mail: foldMail(s.mail, frame, performance.now()) })),
-  setMailStream: (mailStream) => set({ mailStream }),
+    set((s) => {
+      const now = performance.now();
+      return { mail: foldMail(s.mail, frame, now), mailStreamStats: noteFrame(s.mailStreamStats, now) };
+    }),
+  setMailStream: (mailStream) =>
+    set((s) => ({ mailStream, mailStreamStats: noteState(s.mailStreamStats, mailStream, s.status?.served ?? null, performance.now()) })),
   setMailView: (canvas) => set((s) => ({ mailUi: { ...s.mailUi, canvas } })),
   setMailSelected: (selected) => set((s) => ({ mailUi: { ...s.mailUi, selected } })),
   setPolicy: (policy) => set({ policy }),
@@ -259,5 +289,22 @@ export const useStore = create<Store>((set) => ({
   setHandlers: (handlers) => set({ handlers }),
   setHarnesses: (harnesses) => set({ harnesses }),
   setSession: (session) => set({ session }),
-  setStream: (stream) => set({ stream }),
+  setStream: (stream) =>
+    set((s) => ({ stream, streamStats: noteState(s.streamStats, stream, s.status?.served ?? null, performance.now()) })),
 }));
+
+// ---- stream telemetry (pure, tested) ----------------------------------------
+
+/** One frame folded: count it and stamp it. */
+export function noteFrame(st: StreamStats, now: number): StreamStats {
+  return { ...st, frames: st.frames + 1, lastFrameAt: now };
+}
+
+/** A state transition. Going LIVE is a (re)connect: it counts, stamps
+ * `liveSince`, and pins the daemon's `served` as of now so the panel can later
+ * say how many dispatches this connection has watched go by. Every other state
+ * leaves the counters alone — a stall or a retry does not erase what arrived. */
+export function noteState(st: StreamStats, state: string, served: number | null, now: number): StreamStats {
+  if (state !== "live") return st;
+  return { ...st, connects: st.connects + 1, liveSince: now, servedAtConnect: served };
+}

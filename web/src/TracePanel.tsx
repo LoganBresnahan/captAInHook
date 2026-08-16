@@ -1,7 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "./store.ts";
-import { dispatchHue, clockTime, traceMatches } from "./format.ts";
-import type { TraceEntry } from "./store.ts";
+import { dispatchHue, clockTime, traceMatches, agoLabel } from "./format.ts";
+import { useTick } from "./tick.ts";
+import { emptyTraceReason } from "./streamHealth.ts";
+import type { TraceEntry, StreamStats } from "./store.ts";
 
 // The Live-trace island (ADR-0008 d1) — the observability payoff: dispatches as
 // they happen, fed from the SSE stream via the store's `trace` slice (the one
@@ -17,9 +19,26 @@ import type { TraceEntry } from "./store.ts";
 function StreamBadge({ state }: { state: string }) {
   const label = state === "live" ? "streaming"
     : state === "retrying" ? "reconnecting…"
+    : state === "stalled" ? "stalled — reconnecting"
     : state === "dead" ? "disconnected"
     : "idle";
   return <span className={`stream-badge stream-${state}`} data-stream={state}>● {label}</span>;
+}
+
+/** What the stream has actually delivered, beside what the badge claims
+ * (2026-08-16). "streaming" was set on headers and never questioned; a panel
+ * could sit at 0 lines under a green dot while the daemon dispatched — and
+ * nothing on screen could say which side was wrong. Now the count and the
+ * age of the last frame are always shown, and the empty state compares the
+ * daemon's own `served` counter against what this connection has seen. */
+function StreamStatsLine({ stats, now }: { stats: StreamStats; now: number }) {
+  return (
+    <span className="muted trace-stats" data-frames={stats.frames} data-connects={stats.connects}>
+      {" · "}{stats.frames.toLocaleString()} frame{stats.frames === 1 ? "" : "s"} received
+      {stats.lastFrameAt !== null && ` · last ${agoLabel(now - stats.lastFrameAt)}`}
+      {stats.connects > 1 && ` · ${stats.connects} connects`}
+    </span>
+  );
 }
 
 function chipStyle(id: string): React.CSSProperties {
@@ -74,6 +93,8 @@ export function TracePanel() {
   const trace = useStore((s) => s.trace);
   const truncated = useStore((s) => s.traceTruncated);
   const stream = useStore((s) => s.stream);
+  const stats = useStore((s) => s.streamStats);
+  const served = useStore((s) => s.status?.served ?? null);
   const [filter, setFilter] = useState("");
   const [following, setFollowing] = useState(true);
   const scrollRef = useRef<HTMLOListElement>(null);
@@ -90,6 +111,10 @@ export function TracePanel() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [shown.length, following]);
+
+  // The "last frame N s ago" label ages against a monotonic stamp; nothing
+  // else re-renders it, so tick while visible.
+  useTick(1000, view === "trace" && session === "live");
 
   // The view gate (ADR-0015 d1). The SSE client lives OUTSIDE React (main.tsx)
   // and folds into the store regardless of what is rendered, so a hidden Trace
@@ -131,12 +156,14 @@ export function TracePanel() {
         {truncated > 0 && (
           <span className="muted trace-trunc">· {truncated.toLocaleString()} older dropped (client cap)</span>
         )}
+        <StreamStatsLine stats={stats} now={performance.now()} />
       </p>
       <ol className="trace-list" ref={scrollRef} onScroll={onScroll} data-trace-count={shown.length}>
         {shown.length === 0 ? (
-          <li className="muted trace-empty">
-            {filter === "" ? "Waiting for hook activity — fire a prompt or tool call." : "No lines match the filter."}
-          </li>
+          (() => {
+            const why = emptyTraceReason(filter, stream, stats, served);
+            return <li className="muted trace-empty" data-trace-empty={why.kind}>{why.text}</li>;
+          })()
         ) : (
           shown.map((e, i) => (
             <Row key={e.kind === "line" || e.kind === "unparsed" ? e.id : `${e.kind}-${i}`} entry={e} onPickDispatch={setFilter} />

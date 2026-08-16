@@ -1,4 +1,4 @@
-import { runEventStream } from "./sse.ts";
+import { runEventStream, stallWindowMs } from "./sse.ts";
 import { useStore, type MailStreamState, type SseFrame } from "./store.ts";
 import { apiFetch, clearToken } from "./auth.ts";
 import type { MailDto } from "./api.gen.ts";
@@ -53,6 +53,11 @@ export type MailStreamPorts = {
   signal: AbortSignal;
   path?: string;
   streamPath?: string;
+  /** The stream's stall watchdog seams (see `RunOptions`); defaults are the
+   * stream's own. Test-only overrides — the mail stream stalls under exactly
+   * the rule the trace's does, and surfaces it as its own `stalled`. */
+  stallMs?: number;
+  timer?: (ms: number, cb: () => void) => () => void;
   /** Floor between consecutive re-seeds. A bus that keeps giving the reducer
    * reasons to distrust it (a store being rewritten under us) must not become a
    * fetch loop: the resync is real work and it is bounded. */
@@ -120,6 +125,8 @@ export async function runMailStream(o: MailStreamPorts): Promise<MailStreamResul
         onFrame: o.fold,
         onState: (s) => o.setState(s === "idle" ? "idle" : s),
         sleep: o.sleep,
+        stallMs: o.stallMs,
+        timer: o.timer,
         signal: attach.signal,
       });
     } finally {
@@ -170,6 +177,7 @@ export function startMailStream(): { stop: () => void } {
       });
     },
     sleep: defaultSleep,
+    stallMs: stallWindowMs(),
     signal: ctrl.signal,
   }).then((result) => {
     if (result === "dead") {

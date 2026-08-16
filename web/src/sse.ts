@@ -116,7 +116,36 @@ export type RunOptions = {
   retryMaxMs?: number;
   /** Test seam — resolves after ms or rejects when the signal aborts. */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** The stall window (2026-08-16). The server writes a `: hb` comment every
+   * 15 s on a quiet trail (TrailSubscription's heartbeat) — so a connection
+   * that goes this long without a single BYTE is not quiet, it is wedged: a
+   * half-open socket, a relay that stopped forwarding, a subscription the
+   * daemon lost. Before this the client had no way to know: `live` was set
+   * on headers and never left while the socket sat open. Default 2.5×
+   * heartbeat + slack; the arm/disarm is `timer`, injectable, so tests fire
+   * it by hand and never wait. */
+  stallMs?: number;
+  timer?: (ms: number, cb: () => void) => () => void;
 };
+
+/** Default `timer` — setTimeout, disarmed by the returned thunk. */
+export function defaultTimer(ms: number, cb: () => void): () => void {
+  const t = setTimeout(cb, ms);
+  return () => clearTimeout(t);
+}
+
+export const DEFAULT_STALL_MS = 40_000;
+
+/** The stall window the app runs with. `sessionStorage["captainhook.stallMs"]`
+ * overrides it — an e2e seam (the suite sets it via addInitScript against a
+ * daemon whose heartbeat is likewise shortened, CAPTAINHOOK_SSE_HEARTBEAT_MS)
+ * so the stall path can be pinned in seconds. Anything unreadable ⇒ default. */
+export function stallWindowMs(): number {
+  try {
+    const v = Number(sessionStorage.getItem("captainhook.stallMs"));
+    return Number.isFinite(v) && v > 0 ? v : DEFAULT_STALL_MS;
+  } catch { return DEFAULT_STALL_MS; }
+}
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -139,18 +168,26 @@ export async function runEventStream(o: RunOptions): Promise<RunResult> {
   const base = o.retryBaseMs ?? 1000;
   const max = o.retryMaxMs ?? 15000;
   const sleep = o.sleep ?? defaultSleep;
+  const timer = o.timer ?? defaultTimer;
+  const stallMs = o.stallMs ?? DEFAULT_STALL_MS;
   let cursor: string | null = o.initialCursor ?? null;
   let retryHint: number | null = null;
   let delay = base;
   let first = true;
+  let stalled = false;
 
   while (!o.signal.aborted) {
-    if (!first) {
+    if (!first && !stalled) {
       o.onState("retrying");
       try { await sleep(Math.min(delay, max), o.signal); } catch { return "stopped"; }
       delay = Math.min(delay * 2, max);
     }
+    // A stall reconnects at once, still reading "stalled" until the new headers
+    // arrive: the socket was open, the server was not answering on it, and the
+    // honest thing is to try again from the cursor — not to back off as if the
+    // network were down. If THAT connect fails, the normal retry path takes over.
     first = false;
+    stalled = false;
 
     let resp: Response;
     try {
@@ -183,10 +220,20 @@ export async function runEventStream(o: RunOptions): Promise<RunResult> {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();   // handles UTF-8 split across chunks
     let buffer = "";
+    // The watchdog: re-armed on every chunk (heartbeats count — they are bytes),
+    // and when it fires it cancels the reader, which resolves the pending read
+    // as done and lets the loop below fall out with `stalled` set.
+    let disarm: () => void = () => {};
+    const arm = () => {
+      disarm();
+      disarm = timer(stallMs, () => { stalled = true; void reader.cancel(); });
+    };
+    arm();
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        arm();
         const step = splitRecords(buffer, decoder.decode(value, { stream: true }));
         buffer = step.buffer;
         for (const raw of step.records) {
@@ -201,6 +248,7 @@ export async function runEventStream(o: RunOptions): Promise<RunResult> {
       }
     } catch { /* read torn down mid-stream: fall through to reconnect */
     } finally {
+      disarm();
       // Release the connection on EVERY exit — including an exception thrown
       // out of onFrame (a store subscriber blowing up). Without this the old
       // TCP stream lives on while we reconnect, and server-side each zombie
@@ -210,6 +258,7 @@ export async function runEventStream(o: RunOptions): Promise<RunResult> {
       try { await reader.cancel(); } catch { /* already torn */ }
     }
     if (o.signal.aborted) return "stopped";
+    if (stalled) o.onState("stalled");
   }
   return "stopped";
 }
@@ -226,6 +275,7 @@ export function startEventStream(): { stop: () => void } {
     onFrame: (f) => useStore.getState().foldFrame(f),
     onState: (s) => useStore.getState().setStream(s),
     signal: ctrl.signal,
+    stallMs: stallWindowMs(),
   }).then((result) => {
     if (result === "dead") {
       clearToken();

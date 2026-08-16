@@ -266,6 +266,57 @@ bug**: the from-now anchor raced the first flush, silently losing a line appende
 at client-live (`ServeEventsAsync` now anchors before the flush). Pinned by
 `sse.test.ts`.
 
+### The stream is falsifiable from the screen (2026-08-16)
+
+A dogfood pass found the live GUI at **0 lines under "● streaming"** while the
+daemon dispatched — and nothing on the page could say which side was lying.
+Two things were true at once. `live` was set on response *headers* and never
+questioned while the socket sat open, so a wedged connection read as a quiet
+one; and the panel's empty state asserted "Waiting for hook activity" from no
+evidence at all. Both are fixed by making the client keep score:
+
+```
+ server   : hb\n\n every 15 s on a quiet trail (TrailSubscription heartbeat)
+ client   every chunk (heartbeats included — they are BYTES) re-arms a
+          watchdog; stallMs (40 s ≈ 2.5 heartbeats + slack) with NO byte
+          ⇒ state "stalled", reader.cancel(), reconnect AT ONCE from the
+          cursor (no backoff — the socket was open; the server was not
+          answering on it). New headers ⇒ "live"; a failed connect ⇒ the
+          normal "retrying" path.
+ store    StreamStats per stream: connects, frames, lastFrameAt (monotonic),
+          liveSince, servedAtConnect (the daemon's `served` as last polled
+          when the stream went live). foldFrame / setStream keep it.
+ screen   trace-meta: "N lines · N frames received · last 3 s ago [· 2 connects]"
+          empty state (streamHealth.ts, PURE): filtered / stalled / retrying /
+          idle / quiet / STARVED — the last is "connected, the daemon reports
+          N dispatches since this stream connected, 0 frames arrived": the
+          exact state that used to be invisible. Mail: "N frames" beside its
+          own badge, "stalled" as its own state.
+```
+
+And the **cause** the pass ran into, once the pictures could speak: **Firefox
+serializes concurrent requests to the same URL behind its HTTP-cache entry
+lock, held for the whole streaming body.** With the trace's `/api/v1/events`
+open, the Mail view's second `fetch("/api/v1/events")` never received headers
+— `idle` forever, `openStreams` at 1 under a page showing both views (measured
+live: neither of two new same-URL streams got headers in 2.5 s beside the
+app's; Chromium served all three). `apiFetch` now sends `cache: "no-store"` on
+every call, which bypasses the cache machinery entirely — same bytes on the
+wire everywhere, and both streams connect in ~5 ms in Firefox
+(doc/platform.md § Browser engines). `web/e2e/stream-health.spec.ts` pins the
+class, not the instance: page open first and the producer a REAL dispatch over
+a 2 MB aged trail; a quiet gap; the starved sentence staged deterministically
+(the `/events` route rerouted to an in-test server that answers headers and
+nothing else) — Chromium only, Firefox's interception cannot stage it; the
+Mail stream connecting *beside* the trace's; and the stall path driven for
+real (`SIGSTOP` the daemon ⇒ `stalled` inside the window ⇒ `SIGCONT` ⇒ `live`,
+second connect, resumed from the cursor, no gap) with the daemon's heartbeat
+at 500 ms (`CAPTAINHOOK_SSE_HEARTBEAT_MS`, a daemon-start knob for exactly
+this) and the client's window at 3 s (`sessionStorage["captainhook.stallMs"]`,
+the mirror seam). `playwright.config.ts` runs every spec in **Chromium and
+Firefox** — the client streams via `fetch` + `ReadableStream`, and one engine
+proves one engine.
+
 ## The policy editor is a rule builder over the same one write (ADR-0015 d4)
 
 The editor's default surface is a **rule table** — default decision, then one
@@ -436,7 +487,9 @@ the engine — and the config's one retry stays for genuine contention.
 | frontend project (React+Vite+Zustand, `base:'/ui/'`, outDir→ `ui/`) | `web/vite.config.ts`, `web/package.json`, `web/index.html` |
 | token bootstrap (fragment→sessionStorage→scrub→bearer) | `web/src/auth.ts` (`bootstrapToken`, `apiFetch`, `currentToken`, `clearToken`) |
 | the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `foldMail`, `SseFrame`, `MailStreamState`, `PolicyVerdict`, `TRACE_CAP`; navigation: `view`, `setView`, `VIEWS`, `VIEW_LABELS`) |
-| SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`; `initialCursor` opens a stream at a given position rather than "from now") |
+| SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`; `initialCursor` opens a stream at a given position rather than "from now"; `stallMs`/`timer` the watchdog and its seam, `DEFAULT_STALL_MS`, `stallWindowMs`, `"stalled"` in `StreamState`) |
+| stream telemetry + the honest empty state | `web/src/store.ts` (`StreamStats`, `emptyStreamStats`, `noteFrame`, `noteState`, `streamStats`, `mailStreamStats`), `web/src/streamHealth.ts` (`emptyTraceReason` — filtered/stalled/retrying/idle/quiet/**starved**), `web/src/tick.ts` (`useTick`), `format.ts` (`agoLabel`); `TracePanel` `.trace-stats[data-frames][data-connects]`, `[data-trace-empty=<kind>]`; `MailPanel` `.mail-stream-stats`; pinned by `streamHealth.test.ts`, the watchdog by `sse.test.ts` + `mailStream.test.ts` |
+| same-URL concurrency (Firefox cache lock) | `web/src/auth.ts` `apiFetch` sends `cache: "no-store"` on every call; `stream-health.spec.ts` "two subscriptions on one URL"; daemon knob `ApiHost.ResolveHeartbeat` / `CAPTAINHOOK_SSE_HEARTBEAT_MS` (`Program.cs`; `ApiHostTests.ResolveHeartbeat`) |
 | policy write client (ETag lifecycle) + the rule builder's round trip | `web/src/policy.ts` (`submitPolicy`; `parsePolicyRows`, `serializePolicyRows`, `sameMeaning`, `PolicyRow`/`PolicyRows`) |
 | rule builder UI (rows, order, raw toggle + raw-draft adoption, raw-lock) | `web/src/PolicyPanel.tsx` (`RuleBuilder`, `data-rule-*`, `data-policy-mode`, `data-policy-locked`, `data-draft-unrepresentable`) |
 | handlers editor logic (compose, PUT client + 412 inversion, toggle compose, wiring hint) | `web/src/handlers.ts` (`parseEntries`, `serializeEntries`, `upsertEntry`, `submitHandlers`, `togglePolicyText`, `disabledState`, `wiringHint`) |
@@ -462,7 +515,7 @@ the engine — and the config's one retry stays for genuine contention.
 | frontend unit pins | `web/src/{store,sse,policy,format,handlers,templates}.test.ts` (`node --test`, zero deps) |
 | sandbox daemon (spawn, isolation, readiness, drain, build+stage) | `web/e2e/daemon.ts` (`startDaemon`, `DaemonHandle.stop`, `buildAndStage`, `fireHook(event, payload)`, `mailSend`) — one module, three consumers; the sandbox redirects `CAPTAINHOOK_MAIL_DIR` too, so no spec or preview can touch the live bus |
 | seeded sandbox state (handlers, policy, trail, and the bus) | `web/scripts/seed.mjs` (`seedFiles`, `seedMail`, `seedTrail`, `burstTrail`, `mailEnvelope`) — the swarm goes on the bus through the real `mail send` + registered `mail digest`, never by hand-writing the store |
-| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,nav,panels,trace,policy,handlers,mail}.spec.ts`; `gotoView` (the ONE nav helper every spec navigates through) |
+| E2E pins + daemon fixture | `web/playwright.config.ts`, `web/e2e/{global-setup,fixtures}.ts` (the binding over `daemon.ts`), `web/e2e/{shell,session,nav,panels,trace,policy,handlers,mail,stream-health}.spec.ts`; `gotoView` (the ONE nav helper every spec navigates through); option fixtures `agedTrailBytes` / `heartbeatMs` (`test.use`) shape the daemon per describe; two projects, `chromium` + `firefox` (`npx playwright install chromium firefox`) |
 | screenshot loop (preview + snap + seed) | `web/scripts/{preview,snap,seed}.mjs` (`npm run ui:preview`, `npm run snap`) → `web/.screens/`; the loop itself in `.claude/skills/ui-loop/SKILL.md`. `build()`/`stageUi()` are separate on purpose — `--no-build` skips COMPILING, never staging, or a watch-mode snap shoots the previous build |
 | trace perf harness (the measurement behind rejecting virtualization) | `web/scripts/perf.mjs` (`npm run perf`) — long tasks at the cap, filter latency, the content-visibility A/B |
 | decision record | `doc/adr/0008-management-gui.md`; the SSE resume-cursor contract `doc/adr/0009-trail-rotation.md`; the handlers editor + trust surface `doc/adr/0011-hook-trust-model.md` |

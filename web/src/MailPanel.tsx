@@ -60,6 +60,7 @@ import type { MailState } from "./mail.ts";
 function MailStreamBadge({ state }: { state: MailStreamState }) {
   const label = state === "live" ? "live"
     : state === "retrying" ? "reconnecting…"
+    : state === "stalled" ? "stalled — reconnecting"
     : state === "resyncing" ? "re-reading the bus…"
     : state === "snapshotOnly" ? "snapshot (no trail served)"
     : state === "dead" ? "disconnected"
@@ -77,6 +78,7 @@ export function MailPanel() {
   const mail = useStore((s) => s.mail);
   const ui = useStore((s) => s.mailUi);
   const stream = useStore((s) => s.mailStream);
+  const streamStats = useStore((s) => s.mailStreamStats);
   const setMailView = useStore((s) => s.setMailView);
   const setMailSelected = useStore((s) => s.setMailSelected);
   // No poll: the snapshot and the live fold both come from the mail stream
@@ -189,6 +191,9 @@ export function MailPanel() {
           read-only
         </span>
         <MailStreamBadge state={stream} />
+        <span className="muted mail-stream-stats" data-frames={streamStats.frames} title="mail.* frames folded into this picture since the view opened">
+          {streamStats.frames.toLocaleString()} frame{streamStats.frames === 1 ? "" : "s"}
+        </span>
         <div className="mail-zoom" role="group" aria-label="zoom">
           <button type="button" data-zoom="out" aria-label="zoom out" onClick={() => zoomBy(1 / ZOOM_STEP)}>−</button>
           <button type="button" data-zoom="fit" onClick={() => setMailView(null)}>fit</button>

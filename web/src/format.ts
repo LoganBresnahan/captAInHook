@@ -53,3 +53,14 @@ export function traceMatches(entry: TraceEntry, query: string): boolean {
   if (entry.kind === "unparsed") return entry.raw.toLowerCase().includes(needle);
   return false;
 }
+
+/** Elapsed monotonic milliseconds as a short human age: "just now", "3 s ago",
+ * "2 min ago", "1 h ago". Coarse on purpose — it sits beside a live counter. */
+export function agoLabel(elapsedMs: number): string {
+  const s = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (s < 2) return "just now";
+  if (s < 60) return `${s} s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  return `${Math.floor(m / 60)} h ago`;
+}

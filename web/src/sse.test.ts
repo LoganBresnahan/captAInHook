@@ -212,3 +212,100 @@ test("initialCursor \"0\" is a position, not an absence", async () => {
   });
   assert.equal(attempts[0], "0");        // never collapsed to "no header"
 });
+
+// ---- the stall watchdog (2026-08-16) ---------------------------------------------
+
+/** A Response whose body stays OPEN: it sends `head`, then nothing, until the
+ * test decides. Models the wedged socket the watchdog exists for. */
+function openResponse(head: string) {
+  let push!: (s: string) => void;
+  let end!: () => void;
+  const resp = new Response(
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        push = (s) => c.enqueue(enc.encode(s));
+        end = () => c.close();
+        c.enqueue(enc.encode(head));
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } },
+  );
+  return { resp, push, end };
+}
+
+/** A hand-fired timer: records every arm, returns a disarm that marks it. */
+function fakeTimer() {
+  const armed: { ms: number; cb: () => void; disarmed: boolean }[] = [];
+  const timer = (ms: number, cb: () => void) => {
+    const e = { ms, cb, disarmed: false };
+    armed.push(e);
+    return () => { e.disarmed = true; };
+  };
+  /** Fire the newest live arm. */
+  const fire = () => { const live = armed.filter((a) => !a.disarmed); live[live.length - 1].cb(); };
+  return { timer, armed, fire };
+}
+
+test("a byte-less connection past the stall window is STALLED: reader torn down, immediate reconnect from the cursor", async () => {
+  const t = fakeTimer();
+  const attempts: Attempt[] = [];
+  const states: string[] = [];
+  const frames: SseFrame[] = [];
+  const ctrl = new AbortController();
+  const first = openResponse("retry: 1000\n\nid: 500\ndata: {}\n\n");
+  let sleeps = 0;
+  const done = runEventStream({
+    fetchFn: (_p, init) => {
+      const h = new Headers(init?.headers);
+      attempts.push({ lastEventId: h.get("Last-Event-ID") });
+      if (attempts.length === 1) return Promise.resolve(first.resp);
+      ctrl.abort();
+      return Promise.reject(new Error("aborted"));
+    },
+    onFrame: (f) => frames.push(f),
+    onState: (s) => states.push(s),
+    signal: ctrl.signal,
+    sleep: () => { sleeps++; return Promise.resolve(); },
+    timer: t.timer,
+    stallMs: 40_000,
+  });
+  // Let the first chunk be read and the fold happen.
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(frames.length, 1);
+  assert.equal(t.armed[0].ms, 40_000);
+  assert.equal(t.armed.filter((a) => !a.disarmed).length, 1);   // re-armed on the chunk, old one disarmed
+  t.fire();                                                       // nothing for 40 s: not even a heartbeat
+  const result = await done;
+  assert.equal(result, "stopped");
+  assert.deepEqual(states, ["live", "stalled"]);                 // stalled, then straight to reconnect — no "retrying"
+  assert.equal(sleeps, 0);                                        // no backoff sleep on a stall
+  assert.equal(attempts[1].lastEventId, "500");                   // resumed from the cursor
+  assert.equal(t.armed.every((a) => a.disarmed), true);          // no timer outlives its read
+});
+
+test("heartbeat bytes keep a quiet stream LIVE — every chunk re-arms the watchdog", async () => {
+  const t = fakeTimer();
+  const states: string[] = [];
+  const ctrl = new AbortController();
+  const conn = openResponse("retry: 1000\n\n");
+  const done = runEventStream({
+    fetchFn: () => Promise.resolve(conn.resp),
+    onFrame: () => {},
+    onState: (s) => states.push(s),
+    signal: ctrl.signal,
+    sleep: () => Promise.resolve(),
+    timer: t.timer,
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  const armsBefore = t.armed.length;
+  conn.push(": hb\n\n");
+  await new Promise((r) => setTimeout(r, 0));
+  conn.push(": hb\n\n");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(t.armed.length, armsBefore + 2);                  // one re-arm per heartbeat chunk
+  assert.equal(t.armed.filter((a) => !a.disarmed).length, 1);
+  assert.deepEqual(states, ["live"]);                             // never stalled
+  ctrl.abort();
+  conn.end();
+  assert.equal(await done, "stopped");
+});
