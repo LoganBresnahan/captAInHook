@@ -225,11 +225,14 @@ export type MailState = {
    * already account for. Set by `seedMail` from the snapshot and never touched
    * by reduction (it is a fact about the snapshot, not about the reduced state);
    * a re-seed replaces it, which is what makes a resnapshot re-anchor the stream
-   * as well as the picture. Null = the daemon serves no trail, so there is no id
-   * space to align to and the caller must subscribe FIRST and fold the overlap
-   * as replay — never treat it as 0, which means "from the first byte" and would
-   * replay the whole trail as live. */
-  trailEventId: number | null;
+   * as well as the picture. An OPAQUE token (ADR-0009 d2) — echo it, never
+   * compare or arithmetic it; that is also why the mail stream is its own
+   * subscription rather than a filter over the trace's, since filtering by id
+   * would mean interpreting one. Null = the daemon serves no trail, so there is
+   * no id space to align to and the caller must subscribe FIRST and fold the
+   * overlap as replay — never treat it as "0", which means "from the earliest
+   * still-reachable point" and would replay the whole trail as live. */
+  trailEventId: string | null;
   /** Offset of the unterminated last line, when there is one (it is also the last entry of `lines`). */
   torn: number | null;
   chain: { ok: boolean; head: string | null; gen: number; faults: number; dirMode: string | null; fileMode: string | null };

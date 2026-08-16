@@ -5,7 +5,16 @@
 // dropped), and the client cap counts what it evicts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { foldTrace, TRACE_CAP, type TraceEntry } from "./store.ts";
+import { foldMail, foldTrace, TRACE_CAP, type TraceEntry } from "./store.ts";
+import { seedMail } from "./mail.ts";
+import type { MailDto } from "./api.gen.ts";
+
+const mailDto = (trailEventId: string | null): MailDto => ({
+  dir: "<mail>",
+  chain: { ok: true, head: null, gen: 1, lines: 0, bytes: 0, dirMode: "700", fileMode: "600", faults: [] },
+  since: 0, sinceAligned: true, frontier: 0, trailEventId,
+  lines: [], cursors: [], presence: [],
+});
 
 const fold = (trace: TraceEntry[], truncated: number, ...frames: Parameters<typeof foldTrace>[2][]) =>
   frames.reduce((acc, f) => foldTrace(acc.trace, acc.truncated, f), { trace, truncated });
@@ -59,4 +68,36 @@ test("fold never mutates its input (zustand set() depends on it)", () => {
   const { trace } = foldTrace(frozen, 0, { kind: "line", id: "1", text: "{}" });
   assert.equal(frozen.length, 1);
   assert.equal(trace.length, 2);
+});
+
+// ---- foldMail: the bus's half of the same seam -------------------------------
+//
+// `foldTrace` KEEPS bytes; `foldMail` REDUCES them, and the difference shows up
+// exactly where a line is not JSON. The trace shows it raw (that is what a log
+// is for); the bus has no meaning to extract from it and must not pretend
+// otherwise — nor may it throw, since one bad line would tear down the stream
+// that carries every good one.
+
+test("foldMail: a mail line reduces; a line the bus has no use for costs nothing", () => {
+  const seeded = seedMail(mailDto("0"), 0);
+  const same = foldMail(seeded, { kind: "line", id: "1", text: '{"evt":"shim.answered"}' }, 10);
+  // The SAME object back: no render, no copy, for the overwhelming majority of
+  // trail traffic, which is not about the bus at all.
+  assert.equal(same, seeded);
+});
+
+test("foldMail: an unparsable line is dropped, never thrown and never guessed at", () => {
+  const seeded = seedMail(mailDto("0"), 0);
+  const after = foldMail(seeded, { kind: "line", id: "1", text: "{not json" }, 10);
+  assert.equal(after, seeded);
+});
+
+test("foldMail: a gap and a reset reach the reducer and ask for a fresh snapshot", () => {
+  const seeded = seedMail(mailDto("0"), 0);
+  const gapped = foldMail(seeded, { kind: "gap", dropped: 4 }, 10);
+  assert.equal(gapped.resnapshot?.reason, "gap");
+  const reset = foldMail(seeded, { kind: "reset" }, 10);
+  assert.equal(reset.resnapshot?.reason, "reset");
+  // This is the whole resync trigger: the reducer, not the driver, is what
+  // decides the picture can no longer be trusted.
 });

@@ -512,6 +512,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .stream-retrying { color: var(--warn); }
 .stream-dead { color: var(--bad); }
 .stream-idle { color: var(--text-dim); }
+/* The Mail stream's two extra states. `resyncing` borrows warn because it IS a
+   degraded moment — the picture was distrusted and is being rebuilt — while
+   `snapshotOnly` is dim rather than toned: nothing is wrong, the bus simply is
+   not being streamed, and colouring that as a fault would cry wolf. */
+.stream-resyncing { color: var(--warn); }
+.stream-snapshotOnly { color: var(--text-dim); }
 .trace-trunc { margin: var(--s-2) 0 0; font-size: var(--fs-xs); }
 
 .trace-list {
@@ -864,6 +870,81 @@ table.rules td.rule-actions button { padding: var(--s-1) var(--s-2); }
 .mail-track.presence-idle { opacity: 0.8; }
 .mail-track.presence-stale { opacity: 0.55; }
 .mail-track.presence-unknown { opacity: 0.5; }
+
+/* ---- the choreography (ADR-0016 d14, slice 5) ----------------------------
+   Four motions, one per thing that can actually happen on this bus, and each
+   says something the still picture cannot:
+
+     ARRIVAL   an envelope lands — it drops onto its lane from the spine above,
+               which is the direction mail actually travels here (the ledger is
+               the spine; the lane hangs off it). Keyed on insertion, so it
+               plays exactly once per envelope and never on a re-seed.
+     SLIDE     a cursor reads forward. The ONLY motion along the ledger axis,
+               and deliberately the slowest, because it is the one an operator
+               is trying to follow.
+     JUMP      a cursor re-anchors. Explicitly NOT a slide: nothing was read,
+               the cursor started over, and drawing that as a leftward slide
+               would depict a cursor reading backwards — which never happens.
+     SPEND     an envelope's TTL runs out under a cursor. A fade to the spent
+               palette rather than a swap, so the eye catches it going.
+
+   Everything here is subordinate to `prefers-reduced-motion` below, and none
+   of it carries information that is not ALSO in a data attribute, a glyph and
+   the sr-only sentence: the animation is how you notice, never how you know. */
+
+@keyframes mail-arrive {
+  from { opacity: 0; transform: translateY(-14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.mail-glyph[data-arrival="trail"] {
+  animation: mail-arrive 420ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+/* The drop line draws itself down to the envelope that just landed. */
+.mail-glyph[data-arrival="trail"] .glyph-drop { animation: mail-arrive 520ms ease-out both; }
+
+.track-cursor {
+  transition: transform 340ms cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+/* A re-anchor is not a read: cut, do not slide. */
+.mail-track[data-motion="reanchor"] .track-cursor { transition: none; }
+/* And say so for the moment it lands — the flag alone is easy to miss on a
+   canvas with several tracks. */
+@keyframes mail-jump {
+  0%   { opacity: 0.15; }
+  60%  { opacity: 1; }
+  100% { opacity: 1; }
+}
+.mail-track[data-motion="reanchor"] .track-cursor path { animation: mail-jump 420ms ease-out both; }
+
+/* Spending is a transition, not a repaint: the mark and the envelope both
+   travel to the spent palette so the change is legible as a change. */
+.mail-glyph .glyph-body,
+.mail-glyph .glyph-prio,
+.mail-glyph .glyph-mark,
+.track-mark rect,
+.track-mark text { transition: fill 260ms linear, stroke 260ms linear, opacity 260ms linear; }
+
+/* Presence FADES rather than switching, for the same reason it is inferred
+   rather than claimed: the picture does not know that a session left, only
+   that it has not seen it lately. */
+.mail-track { transition: opacity 600ms ease-out; }
+
+/* The canvas is a mechanism, not an animation. Anyone who has asked the
+   platform to stop moving things gets the whole picture with none of it —
+   every state above is also a data attribute, a status glyph and a sentence. */
+@media (prefers-reduced-motion: reduce) {
+  .mail-glyph[data-arrival="trail"],
+  .mail-glyph[data-arrival="trail"] .glyph-drop,
+  .mail-track[data-motion="reanchor"] .track-cursor path { animation: none; }
+  .track-cursor,
+  .mail-track,
+  .mail-glyph .glyph-body,
+  .mail-glyph .glyph-prio,
+  .mail-glyph .glyph-mark,
+  .track-mark rect,
+  .track-mark text { transition: none; }
+}
 
 /* ---- legend, detail, anomalies ---- */
 

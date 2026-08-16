@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { StatusDto, PolicyDto, HandlersDto, HarnessesDto, MailDto } from "./api.gen.ts";
-import { emptyMailState, seedMail, type MailState } from "./mail.ts";
+import { emptyMailState, reduceMail, seedMail, type MailState } from "./mail.ts";
 import type { MailView } from "./mailCanvas.ts";
 
 // zustand-store (ADR-0008 decision 8): ONE provider-less store outside the
@@ -110,6 +110,19 @@ export type MailUi = {
   selected: number | null;
 };
 
+/** The Mail view's OWN stream state, deliberately separate from the trace's.
+ * Mail runs a second subscription rather than filtering the trace's for two
+ * reasons: the resume id is opaque (ADR-0009 d2), so "is this frame already in
+ * my snapshot?" cannot be answered by comparing ids — only by opening at the
+ * snapshot's own position — and the trace's buffer is display-capped at
+ * TRACE_CAP, which is a fine rule for a log and a silent corruption for a
+ * reduced picture. `resyncing` is the state peculiar to this stream: the
+ * reducer asked for a fresh snapshot (a gap, a reset, or one of its own
+ * findings) and the driver is re-seeding and re-anchoring. `snapshotOnly` is
+ * the honest end state when the daemon serves no trail at all — the picture is
+ * real but frozen, and the view says so rather than implying it is live. */
+export type MailStreamState = "idle" | "live" | "retrying" | "resyncing" | "snapshotOnly" | "dead";
+
 export type Store = {
   // which screen is on (ADR-0015 d1) — the whole of navigation
   view: View;
@@ -124,6 +137,7 @@ export type Store = {
    * there is no verb in this store that could. */
   mail: MailState;
   mailUi: MailUi;
+  mailStream: MailStreamState;
   policy: PolicyDto | null;
   policyVerdict: PolicyVerdict | null;
   handlers: HandlersDto | null;
@@ -144,6 +158,12 @@ export type Store = {
    * against the caller's clock, and this machine's wall clock steps
    * (doc/platform.md § Wall-clock steps). */
   seedMailSnapshot: (dto: MailDto) => void;
+  /** Fold ONE frame of the mail stream into the reduced bus. The same monotonic
+   * clock rule as `seedMailSnapshot`, for the same reason. Frames the reducer
+   * has no use for return the SAME state object, so most trail traffic costs
+   * one comparison and no render. */
+  foldMailFrame: (frame: SseFrame) => void;
+  setMailStream: (s: MailStreamState) => void;
   setMailView: (v: MailView | null) => void;
   setMailSelected: (offset: number | null) => void;
   setPolicy: (p: PolicyDto) => void;
@@ -182,6 +202,27 @@ export function foldTrace(
     : { trace: next, truncated };
 }
 
+/** Fold one stream frame into the reduced bus — pure, exported for tests, and
+ * the mail-side twin of `foldTrace`. The two differ in exactly the way their
+ * jobs differ: the trace KEEPS the bytes (an unparsable line is still shown, as
+ * `unparsed`), while the bus REDUCES them, so a line that is not JSON carries
+ * no mail meaning and is dropped here — the trace is where an operator goes to
+ * see it. A gap or a reset is not folded away either: both reach the reducer,
+ * which raises `resnapshot`, which is what makes the driver re-seed. */
+export function foldMail(mail: MailState, frame: SseFrame, atMs: number): MailState {
+  switch (frame.kind) {
+    case "reset":
+      return reduceMail(mail, { kind: "reset", atMs });
+    case "gap":
+      return reduceMail(mail, { kind: "gap", dropped: frame.dropped, atMs });
+    case "line": {
+      let line: TrailLine;
+      try { line = JSON.parse(frame.text) as TrailLine; } catch { return mail; }
+      return reduceMail(mail, { kind: "line", line, atMs });
+    }
+  }
+}
+
 export const useStore = create<Store>((set) => ({
   view: "trace",
   trace: [],
@@ -189,6 +230,7 @@ export const useStore = create<Store>((set) => ({
   status: null,
   mail: emptyMailState(),
   mailUi: { canvas: null, selected: null },
+  mailStream: "idle",
   policy: null,
   policyVerdict: null,
   handlers: null,
@@ -207,6 +249,9 @@ export const useStore = create<Store>((set) => ({
   setStatus: (status) => set({ status }),
   seedMailSnapshot: (dto) =>
     set((s) => ({ mail: seedMail(dto, performance.now(), s.mail) })),
+  foldMailFrame: (frame) =>
+    set((s) => ({ mail: foldMail(s.mail, frame, performance.now()) })),
+  setMailStream: (mailStream) => set({ mailStream }),
   setMailView: (canvas) => set((s) => ({ mailUi: { ...s.mailUi, canvas } })),
   setMailSelected: (selected) => set((s) => ({ mailUi: { ...s.mailUi, selected } })),
   setPolicy: (policy) => set({ policy }),

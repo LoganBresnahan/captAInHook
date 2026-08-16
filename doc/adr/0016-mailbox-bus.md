@@ -586,6 +586,37 @@ shared edit log. The bus must not know or care what backs a member:
     paint and go back to covering what they were written for: reconnects,
     gaps, and a replaced trail.
 
+    *As-built amendment (2026-08-15, slice `mail-live-choreography`).* Two
+    shapes the sketch did not have. (1) **The stamp is a STRING and the Mail
+    view runs its OWN subscription**, both forced by ADR-0009 d2: the resume id
+    is an opaque monotonic cursor a client stores and echoes and never
+    interprets, so the tempting design — let the bus ride the trace's already
+    open stream and drop frames whose id is at or behind the stamp — is not
+    available, because that comparison IS an interpretation and d4 will
+    redefine the id as a cross-segment global offset underneath it. Opening a
+    second subscription AT the stamp asks the server the same question and
+    needs no arithmetic at all. It is independently right: the trace's buffer
+    is `TRACE_CAP`-capped, and dropping the oldest line is correct for a log
+    and silent corruption for a reduced picture, which cannot know what it was
+    never shown. The string typing then makes the opacity structural rather
+    than a comment, and removes the one comparison that must never collapse —
+    `"0"` (replay everything) and absent (no trail served) on the same side of
+    a falsy test. The cost is honest and small: one more attached observer, so
+    the stream is started LAZILY on the Mail view's first visit rather than at
+    session start. (2) **Resync is a first-class state, not an error path.**
+    The reducer already refuses to guess and says so by raising `resnapshot`;
+    the driver watches for exactly that, tears the stream down, re-seeds, and
+    re-anchors at the NEW stamp — which is why `seedMail` replacing state is
+    the right shape rather than a merge, and why the badge has a word for it.
+    The animations are CSS keyed on state the reducer already computes
+    (`MailGlyph.arrival` from the line's `source`, `MailTrack.motion` from the
+    cursor's `lastEventKind`), so the canvas computes no motion of its own and
+    the whole choreography vanishes under `prefers-reduced-motion` without
+    removing a single fact. One distinction is load-bearing rather than
+    decorative: an advance SLIDES and a re-anchor JUMPS, because a cursor only
+    ever reads forward and animating a re-anchor as a leftward slide would
+    depict a cursor reading backwards.
+
 ## Rejected alternatives
 
 | alternative | disposition |

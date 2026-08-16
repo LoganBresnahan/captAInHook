@@ -9,6 +9,7 @@ import {
   slotPixels, tierFor, unmapX, xForOffset, zoomView,
   LEDGER_LEFT, MAX_Z, MIN_Z, PAD_X, SLOT_W, SLOT_PAD, TIER_FAR_MAX, TIER_MID_MAX, ZOOM_STEP,
 } from "./mailCanvas.ts";
+import type { MailLane } from "./mailCanvas.ts";
 
 // mail-canvas, the geometry (ADR-0016 d14, slice 4). The canvas's own failure
 // mode is the one a screenshot catches — so these tests do NOT re-check that it
@@ -375,4 +376,62 @@ test("scene geometry is a pure function of state", () => {
   // …and of nothing else: a slot is one SLOT_W wide whatever the store's bytes.
   const scene = buildScene(state);
   for (const s of scene.slots) assert.equal(s.w, SLOT_W);
+});
+
+/** Fold a scenario's real trail lines at successive instants. */
+function foldTrail(state: MailState, lines: string[], startMs = 3000): MailState {
+  return lines.reduce((acc, text, i) =>
+    reduceMail(acc, { kind: "line", line: JSON.parse(text) as TrailLine, atMs: startMs + i }), state);
+}
+
+// ---- the choreography's inputs (slice 5) ------------------------------------
+//
+// The canvas computes no motion of its own: an envelope animates because the
+// REDUCER says it arrived on the trail, and a cursor jumps rather than slides
+// because the reducer says the last thing that happened to it was a re-anchor.
+// Both facts are carried through the scene so the styles have something to key
+// on and the e2e has something to assert that is not a timing.
+
+test("an envelope from the snapshot is not an arrival; one folded from the trail is", () => {
+  const sc = golden.scenarios.find((s) => s.name === "first-delivery")!;
+  const seeded = seedMail(sc.before, 0);
+  for (const g of buildScene(seeded).lanes.flatMap((l: MailLane) => l.glyphs))
+    assert.equal(g.arrival, "snapshot");   // a photograph contains no arrivals
+
+  // Fold the real trail: anything it APPENDS arrived while we were watching.
+  const after = foldTrail(seeded, sc.trail);
+  const appended = after.lines.filter((l) => l.source === "trail").map((l) => l.offset);
+  const glyphs = buildScene(after).lanes.flatMap((l: MailLane) => l.glyphs);
+  for (const g of glyphs)
+    assert.equal(g.arrival, appended.includes(g.offset) ? "trail" : "snapshot");
+});
+
+test("a re-seed replays no arrivals — a resync is not the bus moving", () => {
+  const sc = golden.scenarios.find((s) => s.name === "first-delivery")!;
+  const live = foldTrail(seedMail(sc.before, 0), sc.trail);
+  const reseeded = seedMail(sc.after, 100, live);
+  for (const g of buildScene(reseeded).lanes.flatMap((l: MailLane) => l.glyphs))
+    assert.equal(g.arrival, "snapshot");
+});
+
+test("a track carries the motion that moved it, and a re-anchor is not an advance", () => {
+  const advanced = golden.scenarios.find((s) => s.name === "first-delivery")!;
+  const a = foldTrail(seedMail(advanced.before, 0), advanced.trail);
+  const moved = buildScene(a).lanes.flatMap((l: MailLane) => l.tracks).filter((t) => t.motion !== null);
+  assert.ok(moved.length > 0);
+  assert.ok(moved.every((t) => t.motion !== "reanchor"));
+
+  // Caught at the moment it lands: a later advance legitimately overwrites the
+  // motion, and it is the re-anchoring INSTANT that must not draw as a slide.
+  const re = golden.scenarios.find((s) => s.name === "reanchor-preserves-deliveries")!;
+  let r = seedMail(re.before, 0);
+  let jumped = false;
+  re.trail.forEach((text, i) => {
+    r = reduceMail(r, { kind: "line", line: JSON.parse(text) as TrailLine, atMs: 3000 + i });
+    if (buildScene(r).lanes.flatMap((l: MailLane) => l.tracks).some((t) => t.motion === "reanchor"))
+      jumped = true;
+  });
+  assert.ok(jumped,
+    "a re-anchored cursor must be distinguishable from one that read forward — " +
+    "drawn as a slide it would depict a cursor reading backwards");
 });

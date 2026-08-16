@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "./store.ts";
-import { useApiJson } from "./api.ts";
+import { useStore, type MailStreamState } from "./store.ts";
 import { deliveriesFor, label as cursorLabel, opportunities } from "./mail.ts";
 import {
   buildScene, canvasHeight, cardLines, clampView, cursorKey, fitView, mapX, sceneSummary,
@@ -8,48 +7,81 @@ import {
   GLYPH_H, LANE_HEAD_W, LEDGER_LEFT, SPINE_H, ZOOM_STEP,
 } from "./mailCanvas.ts";
 import type { MailGlyph, MailLane, MailScene, MailTier, MailTrack, MailView } from "./mailCanvas.ts";
-import type { MailDto } from "./api.gen.ts";
 import type { MailState } from "./mail.ts";
 
-// The Mail island (ADR-0016 decision 14, roadmap item 21 slice 4) — the bus,
-// watched. The whole view is one sentence made visible: **mail never moves;
-// cursors move past it.** So the ledger is a fixed spine, each `to` role is a
-// lane hanging off it, and each session reading that role is a cursor sliding
-// along its own track — with the mail it passed over marked underneath, ageing.
+// The Mail island (ADR-0016 decision 14, roadmap item 21 slices 4–5) — the bus,
+// watched, and since slice 5 watched LIVE. The whole view is one sentence made
+// visible: **mail never moves; cursors move past it.** So the ledger is a fixed
+// spine, each `to` role is a lane hanging off it, and each session reading that
+// role is a cursor sliding along its own track — with the mail it passed over
+// marked underneath, ageing.
 //
-// **Observation is not delivery.** This island fetches `GET /api/v1/mail` and
-// nothing else; there is no verb here that could append or advance, the daemon
+// **Observation is not delivery.** This island reads `GET /api/v1/mail` ONCE and
+// then listens; there is no verb here that could append or advance, the daemon
 // exposes none under `/mail`, and the read model is handed a port with neither
 // (three pins, d14). Watching a mailbox changes nothing on disk — including
 // whether the mail counts as read.
 //
 // What it draws comes from the reducer (`mail.ts`), which is an INTERPOLATOR
-// between authoritative snapshots and never a second store (N8). In this slice
-// the only input is the snapshot: every poll REPLACES the picture with the
-// daemon's own view. Slice 5 folds the live `mail.*` trail between polls; the
-// seam for it is the store's `mail` slice, untouched here.
+// between authoritative snapshots and never a second store (N8). The snapshot
+// and the live `mail.*` fold both arrive through `mailStream.ts`, which opens
+// the stream at the exact trail position its snapshot was taken at — so the two
+// meet with nothing lost and nothing replayed — and re-seeds whenever the
+// reducer says the picture can no longer be trusted.
 //
-// One honest absence to read the picture by: **delivered** comes from a
-// `mail.deliver` ledger line and from nowhere else. The snapshot cannot carry
-// those (delivered mail is structurally ABSENT from a cursor — that is what
-// makes the cursor small), so until the live fold lands, an envelope behind a
-// cursor reads *before cursor · no record*, which is exactly what it is.
+// FOUR MOTIONS, and each says something the still picture cannot: an envelope
+// ARRIVES (dropping onto its lane from the spine, the direction mail actually
+// travels here), a cursor SLIDES (reading forward — the only direction it ever
+// reads), a cursor JUMPS (a re-anchor: nothing was read, it started over, and
+// drawing that as a slide would depict a cursor reading backwards), and an
+// envelope SPENDS its TTL. All of it is CSS keyed on state the reducer already
+// computes — `data-arrival`, `data-motion`, `data-status` — so the animation is
+// how you notice and never how you know, and `prefers-reduced-motion` removes
+// every one of them without removing a single fact.
+//
+// **Delivered is now real.** It comes from a `mail.deliver` ledger line and
+// from nowhere else; the snapshot cannot carry one (delivered mail is
+// structurally ABSENT from a cursor — that is what makes the cursor small), so
+// through slice 4 an envelope behind a cursor could only read *before cursor ·
+// no record*. The live fold is what supplies the record, and an envelope with
+// no record behind a cursor still reads exactly that, honestly.
 //
 // EVERY COORDINATE BELOW IS A CSS PIXEL. The svg's viewBox is 1:1 with its box,
 // and the only thing pan/zoom touches is the ledger's x — see `MailView`. That
 // is why no font size, stroke or label offset is scaled anywhere in this file.
 
-const MAIL_POLL_MS = 4000;
+/** The bus's own liveness, deliberately its own badge rather than the trace's:
+ * these are two subscriptions and they can disagree, and the one that matters
+ * for THIS picture is the one feeding it. `resyncing` is the state a log has no
+ * equivalent of — the reducer distrusted the picture and a fresh snapshot is on
+ * the way — and `snapshot` is the honest end state when no trail is served at
+ * all: what you see is real and is not moving. Every state carries a word as
+ * well as a colour. */
+function MailStreamBadge({ state }: { state: MailStreamState }) {
+  const label = state === "live" ? "live"
+    : state === "retrying" ? "reconnecting…"
+    : state === "resyncing" ? "re-reading the bus…"
+    : state === "snapshotOnly" ? "snapshot (no trail served)"
+    : state === "dead" ? "disconnected"
+    : "idle";
+  return (
+    <span className={`stream-badge stream-${state}`} data-mail-stream={state}>
+      ● {label}
+    </span>
+  );
+}
 
 export function MailPanel() {
   const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const mail = useStore((s) => s.mail);
   const ui = useStore((s) => s.mailUi);
-  const seedMailSnapshot = useStore((s) => s.seedMailSnapshot);
+  const stream = useStore((s) => s.mailStream);
   const setMailView = useStore((s) => s.setMailView);
   const setMailSelected = useStore((s) => s.setMailSelected);
-  useApiJson<MailDto>("/api/v1/mail", seedMailSnapshot, MAIL_POLL_MS);
+  // No poll: the snapshot and the live fold both come from the mail stream
+  // (mailStream.ts), which is started on this view's first visit from main.tsx
+  // and re-seeds itself whenever the reducer says the picture is untrustworthy.
 
   const [el, setEl] = useState<SVGSVGElement | null>(null);
   const [width, setWidth] = useState(900);
@@ -156,6 +188,7 @@ export function MailPanel() {
         <span className="mail-readonly" title="ADR-0016 d14: nothing under /api/v1/mail writes, ever.">
           read-only
         </span>
+        <MailStreamBadge state={stream} />
         <div className="mail-zoom" role="group" aria-label="zoom">
           <button type="button" data-zoom="out" aria-label="zoom out" onClick={() => zoomBy(1 / ZOOM_STEP)}>−</button>
           <button type="button" data-zoom="fit" onClick={() => setMailView(null)}>fit</button>
@@ -174,8 +207,8 @@ export function MailPanel() {
       <ChainStrip state={mail} />
       {mail.resnapshot !== null && (
         <p className="mail-resnapshot" data-mail-resnapshot={mail.resnapshot.reason}>
-          <strong>{mail.resnapshot.reason}</strong> — {mail.resnapshot.detail}. The next poll
-          re-reads the bus from the daemon.
+          <strong>{mail.resnapshot.reason}</strong> — {mail.resnapshot.detail}. Re-reading the
+          bus from the daemon and re-anchoring the stream to the new snapshot.
         </p>
       )}
 
@@ -408,6 +441,12 @@ function Glyph(
       data-glyph={g.offset}
       data-status={g.status}
       data-priority={g.priority}
+      // The arrival animation runs on INSERTION — a CSS animation on an element
+      // that has just entered the DOM, which is what an envelope landing on the
+      // bus actually is. Nothing schedules it and nothing has to decide when it
+      // has been "recent enough" to stop; a re-render cannot restart it, and a
+      // re-seed (every line `snapshot` again) correctly replays nothing.
+      data-arrival={g.arrival}
       role="button"
       tabIndex={0}
       onClick={pick}
@@ -477,6 +516,7 @@ function Track(
   return (
     <g className={`mail-track presence-${track.presence}${track.uncertain !== null ? " is-uncertain" : ""}`}
       data-track={track.key} data-presence={track.presence}
+      data-motion={track.motion ?? undefined}
       data-uncertain={track.uncertain !== null ? "yes" : undefined}>
       <title>
         {`${cursorLabel(track.role, track.session)} — ${track.offset === null ? "position unknown"
@@ -507,7 +547,13 @@ function Track(
           </text>
         )
       ) : (
-        <g className="track-cursor" data-cursor={track.key} transform={`translate(${cx} ${y})`}>
+        // A CSS transform rather than the `transform` ATTRIBUTE, because only
+        // the former transitions: the slide is the cursor reading forward past
+        // mail, and it is the one motion on this canvas that carries meaning
+        // rather than decoration. A re-anchor suppresses it in styles.css —
+        // that cursor did not read backwards, it started over.
+        <g className="track-cursor" data-cursor={track.key}
+          style={{ transform: `translate(${cx}px, ${y}px)` }}>
           {/* the stem reaches up into the envelope row: a cursor's position is
               a statement ABOUT the ledger above it, not a mark on its own rail */}
           <line className="cursor-stem" x1={0} y1={lane.glyphY - y} x2={0} y2={0} />

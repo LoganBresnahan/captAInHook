@@ -102,12 +102,20 @@ public sealed record HandlerDto(
 /// duplicate but never to lose, and the replay rules go back to being what they
 /// were written for: reconnects, gaps, rotation. Null when the daemon serves no
 /// trail (no stream to align to) — a client that finds it absent must fall back
-/// to subscribe-then-snapshot and fold the overlap as replay, NEVER to 0, which
-/// in this id space means "resume from the first byte" and would replay the
-/// whole trail as live.
+/// to subscribe-then-snapshot and fold the overlap as replay, NEVER to "0",
+/// which in this id space means "from the earliest still-reachable point"
+/// (ADR-0009 d2) and would replay the whole trail as live.
+///
+/// A STRING, though today it is a number, for the same reason `Last-Event-ID`
+/// is: ADR-0009 d2 makes the resume id an OPAQUE monotonic cursor a client
+/// stores and echoes and never interprets, precisely so d4 can silently
+/// redefine it as a cross-segment global offset. A numeric field would invite
+/// the arithmetic that contract forbids, and would put "0" and absent on the
+/// same side of a falsy test — the one comparison that must never collapse,
+/// since "0" means replay everything and absent means do not resume at all.
 public sealed record MailDto(
     string Dir, MailChainDto Chain, long Since, bool SinceAligned, long Frontier,
-    long? TrailEventId,
+    string? TrailEventId,
     IReadOnlyList<MailLineDto> Lines,
     IReadOnlyList<MailCursorDto> Cursors,
     IReadOnlyList<MailPresenceDto> Presence);

@@ -1,5 +1,6 @@
 import type {
-  MailState, MailCursorState, MailLedgerLine, MailLineStatus, MailPresenceTier, MailSession,
+  MailState, MailCursorEventKind, MailCursorState, MailLedgerLine, MailLineStatus,
+  MailPresenceTier, MailSession,
 } from "./mail.ts";
 import { lineStatus, projectCursor, rolesOf, presenceTier, sameSession, clampField } from "./mail.ts";
 
@@ -139,6 +140,13 @@ export type MailGlyph = {
    * are drawn in the lane they would have belonged to only when the ledger can
    * say — an unreadable line names no role, so it lives on the spine alone. */
   torn: boolean;
+  /** How this envelope entered the picture: `trail` means it ARRIVED while we
+   * were watching (a `mail.append` we folded), `snapshot` means it was already
+   * on the bus when we read it. The arrival animation keys on this and on
+   * nothing else — in particular not on a timestamp, so nothing has to decide
+   * how recent "recent" is, and a re-seed (whose lines are all `snapshot`
+   * again) correctly replays no arrivals at all. */
+  arrival: "snapshot" | "trail";
 };
 
 /** One held/expired item under a cursor track, aligned with its envelope. */
@@ -171,6 +179,14 @@ export type MailTrack = {
   uncertain: string | null;
   /** True when the cursor sits at the store's end: nothing is pending ahead. */
   atFrontier: boolean;
+  /** The last thing that happened to this cursor, which decides HOW it moves
+   * rather than merely that it did. The distinction that matters is
+   * `reanchor`: an advance slides (the cursor read forward past mail, which is
+   * the only direction it ever reads), while a re-anchor JUMPS — usually
+   * backwards to 0 — because the cursor did not read anything, it started
+   * over. Animating that as a slide would draw a cursor reading backwards,
+   * which never happens on this bus. Null before anything has moved it. */
+  motion: MailCursorEventKind | null;
 };
 
 export type MailLane = {
@@ -247,6 +263,7 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
         status: cursors.length === 0 ? "no-reader" : summarize(perCursor.map((p) => p.status)),
         perCursor,
         torn: !line.terminated,
+        arrival: line.source,
       });
     }
 
@@ -286,6 +303,7 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
         reanchored: c.reanchored,
         uncertain: c.uncertain,
         atFrontier: c.offset !== null && c.offset >= state.frontier,
+        motion: c.lastEventKind,
       };
     });
 

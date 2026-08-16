@@ -426,7 +426,7 @@
         },
         "trailEventId": {
           "type": [
-            "integer",
+            "string",
             "null"
           ]
         },

@@ -104,6 +104,14 @@ export type RunOptions = {
   onState: (s: StreamState) => void;
   signal: AbortSignal;
   path?: string;
+  /** Where the FIRST connect resumes from, echoed verbatim in `Last-Event-ID`
+   * — an opaque token this code never interprets (ADR-0009 d2). Absent/null is
+   * the trace's own behaviour: open "from now". The Mail stream passes
+   * `MailDto.trailEventId` here, which is what makes its snapshot and its
+   * stream meet exactly: zero loss, zero duplicate. Note that null and the
+   * token "0" are NOT the same instruction — "0" means "from the earliest
+   * still-reachable point", i.e. replay everything. */
+  initialCursor?: string | null;
   retryBaseMs?: number;
   retryMaxMs?: number;
   /** Test seam — resolves after ms or rejects when the signal aborts. */
@@ -123,13 +131,15 @@ function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
  * ("stopped"). Everything else — network errors, a draining daemon's 503, the
  * connection ending — is a transient: back off (exponential from the server's
  * `retry:` hint or retryBaseMs, capped) and resume from the cursor. The FIRST
- * connect sends no Last-Event-ID: the trace opens "from now" (decision 5). */
+ * connect sends no Last-Event-ID unless `initialCursor` gives it one: the trace
+ * opens "from now" (decision 5), the Mail stream opens at the exact position
+ * its snapshot was taken (ADR-0016 d14 as-built). */
 export async function runEventStream(o: RunOptions): Promise<RunResult> {
   const path = o.path ?? "/api/v1/events";
   const base = o.retryBaseMs ?? 1000;
   const max = o.retryMaxMs ?? 15000;
   const sleep = o.sleep ?? defaultSleep;
-  let cursor: string | null = null;
+  let cursor: string | null = o.initialCursor ?? null;
   let retryHint: number | null = null;
   let delay = base;
   let first = true;

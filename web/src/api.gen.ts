@@ -83,7 +83,7 @@ export interface MailDto {
   since: number;
   sinceAligned: boolean;
   frontier: number;
-  trailEventId: number | null;
+  trailEventId: string | null;
   lines: MailLineDto[];
   cursors: MailCursorDto[];
   presence: MailPresenceDto[];

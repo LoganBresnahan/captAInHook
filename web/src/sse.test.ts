@@ -174,3 +174,41 @@ test("a network error is a transient: retrying state, then resume", async () => 
   assert.equal(states.includes("retrying"), true);
   assert.equal(attempts[2].lastEventId, "11");          // resumed after the blip
 });
+
+test("initialCursor opens the FIRST connect at a given position, verbatim", async () => {
+  // The Mail stream's whole join (ADR-0016 d14 as-built): its snapshot carries
+  // the position it was taken at, and the stream starts exactly there — not
+  // "from now", which loses the window, and not at "0", which replays the lot.
+  const attempts: (string | null)[] = [];
+  const ctrl = new AbortController();
+  await runEventStream({
+    fetchFn: (_path, init) => {
+      attempts.push(new Headers(init?.headers).get("Last-Event-ID"));
+      if (attempts.length >= 2) ctrl.abort();
+      return Promise.resolve(sseResponse("id: 777\ndata: {}\n\n"));
+    },
+    initialCursor: "4096",
+    onFrame: () => {},
+    onState: () => {},
+    signal: ctrl.signal,
+    sleep: () => (ctrl.signal.aborted ? Promise.reject(new Error("aborted")) : Promise.resolve()),
+  });
+  assert.equal(attempts[0], "4096");     // the snapshot's stamp, untouched
+  assert.equal(attempts[1], "777");      // thereafter the stream's own cursor
+});
+
+test("initialCursor \"0\" is a position, not an absence", async () => {
+  const attempts: (string | null)[] = [];
+  const ctrl = new AbortController();
+  await runEventStream({
+    fetchFn: (_path, init) => {
+      attempts.push(new Headers(init?.headers).get("Last-Event-ID"));
+      ctrl.abort();
+      return Promise.resolve(sseResponse(""));
+    },
+    initialCursor: "0",
+    onFrame: () => {}, onState: () => {}, signal: ctrl.signal,
+    sleep: () => Promise.reject(new Error("aborted")),
+  });
+  assert.equal(attempts[0], "0");        // never collapsed to "no header"
+});

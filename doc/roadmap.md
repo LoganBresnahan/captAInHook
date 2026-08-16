@@ -225,6 +225,62 @@ run live*. The framework underneath is what exists today.
   zero contracts, the read-order pin), 3 web units; `MailState.trailEventId`
   carries it so slice 5's resnapshot re-anchors the stream as well as the
   picture. C# 948 → 952 green twice; web units 211 → 214.)
+  `mail-live-choreography` (2026-08-15; phase 4, slice 5 — the bus stops being
+  a photograph taken every four seconds and becomes the thing itself, moving.
+  `web/src/mailStream.ts` is the whole seam: fetch the snapshot, seed, open the
+  stream AT the stamp the snapshot carries, and re-seed whenever the reducer
+  raises `resnapshot`. **Two as-built amendments to d14**, the first forced by
+  ADR-0009 d2. The tempting design — let the bus ride the trace's already-open
+  stream and drop frames whose id is at or behind the stamp — is NOT AVAILABLE,
+  because the resume id is an opaque monotonic cursor a client echoes and never
+  interprets (d4 will redefine it as a cross-segment global offset), and that
+  comparison is an interpretation. So Mail runs its OWN subscription opened at
+  the stamp, which asks the server the same question and needs no arithmetic;
+  it is independently right, since the trace's buffer is `TRACE_CAP`-capped and
+  dropping the oldest line is correct for a log and silent corruption for a
+  reduced picture. `TrailEventId` therefore became a STRING — opacity
+  structural rather than commented, and the one comparison that must never
+  collapse (`"0"` = replay everything vs absent = no trail served) can no
+  longer be flattened by a falsy test. The cost is one more attached observer
+  (ADR-0007 d7 defers idle-exit), so the stream starts LAZILY on the Mail
+  view's first visit rather than at session start. Second: **resync is a
+  first-class state**, not an error path — the reducer already refuses to guess
+  and says so, and the driver watches edge-triggered for exactly that, tears
+  the stream down, re-seeds and re-anchors at the NEW stamp (resuming at the
+  old one would replay everything the fresh snapshot already contains, which is
+  the overlap this design exists to remove). The badge is the Mail stream's
+  own, not the trace's — two subscriptions can disagree and the one that
+  matters is the one feeding THIS picture — with `resyncing` and `snapshotOnly`
+  as states a log has no equivalent of. **Delivered is finally real**: it comes
+  from a `mail.deliver` line and nowhere else, which no snapshot can carry, so
+  slice 4 could only ever say *before cursor · no record*; the fold supplies the
+  record, and an envelope still lacking one reads the same honest sentence.
+  FOUR MOTIONS, all CSS keyed on state the reducer already computes
+  (`MailGlyph.arrival` from the line's `source`, `MailTrack.motion` from the
+  cursor's `lastEventKind`) so the canvas computes no motion of its own and
+  every one vanishes under `prefers-reduced-motion` without removing a fact:
+  arrival drops onto the lane from the spine (keyed on INSERTION, so it plays
+  once per envelope and a re-seed correctly replays nothing), the cursor slides,
+  a re-anchor **jumps** — load-bearing, not decorative, since a cursor only ever
+  reads forward and animating a re-anchor as a leftward slide would depict one
+  reading backwards — and a spend transitions rather than repaints. e2e asserts
+  DOM STATE, never timing, against a real daemon driven by real `mail send` +
+  real fired hooks: an envelope arrives live in its lane and is distinguishable
+  from a snapshot line; a digest at a seam delivers it and the RECORD is what
+  says so; no `/mail` request follows the first (the absence of the poll is part
+  of the contract — with it back, arrivals would silently stop animating); and a
+  TRUNCATED trail under a live daemon drives reset ⇒ resync ⇒ re-anchor, with
+  mail sent afterwards still arriving, proving the new anchor is live. Two
+  assertions the drive corrected: the digest legitimately delivers what the seed
+  left pending too, so the pin moved to the envelope we WATCHED arrive rather
+  than a count that was really about the seed; and the `deliver` record lands
+  after the advance, so the cursor's last motion is `deliver`, not `advance` —
+  the claim is that it read FORWARD, not which forward event was last. The gap
+  half of the resync path stays at the unit level: reaching it e2e would mean
+  exposing the SSE buffer's capacity as daemon CONFIGURATION, and a production
+  surface added so a test can reach it is the worse trade. C# 952 green twice;
+  web units 214 → 231, e2e 32 → 36 green twice; all three tiers × both themes
+  snapped and read.)
   `mail-canvas` (2026-08-15; phase 3, slice 4 — the sixth GUI view, and the
   first picture of the bus: `web/src/MailPanel.tsx` over the pure geometry in
   `web/src/mailCanvas.ts`, drawing the MECHANISM rather than a mailbox. The

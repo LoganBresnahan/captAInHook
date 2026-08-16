@@ -10,6 +10,7 @@ import { MailPanel } from "./MailPanel.tsx";
 import { bootstrapToken } from "./auth.ts";
 import { useStore } from "./store.ts";
 import { startEventStream } from "./sse.ts";
+import { startMailStream } from "./mailStream.ts";
 import "./styles.css";
 
 // The mount table (ADR-0008 d8): every screen is its own createRoot on a
@@ -41,10 +42,20 @@ mount("mail", <MailPanel />);
 // the session dies (the client also self-reports dead on a 401/403 reconnect —
 // a cutover rotated the token — and flips the session itself; decision 4).
 let stream: { stop: () => void } | null = null;
+// The Mail stream is LAZY where the trace's is eager, and rides the same
+// session. It is a SECOND subscription on the daemon — necessarily, since the
+// resume id is opaque and the trace's buffer is display-capped (see
+// mailStream.ts) — and an attached observer defers idle-exit (ADR-0007 d7), so
+// a session that never opens the Mail view should never make the daemon pay for
+// one. Once opened it stays: leaving a view renders it null but does not
+// unmount it, and a picture that quietly stopped following the bus while you
+// read Status would be wrong on your return with no way to tell.
+let mailStream: { stop: () => void } | null = null;
 useStore.subscribe((s) => {
   if (s.session === "live" && stream === null) stream = startEventStream();
-  if (s.session !== "live" && s.session !== "checking" && stream !== null) {
-    stream.stop();
-    stream = null;
+  if (s.session === "live" && s.view === "mail" && mailStream === null) mailStream = startMailStream();
+  if (s.session !== "live" && s.session !== "checking") {
+    if (stream !== null) { stream.stop(); stream = null; }
+    if (mailStream !== null) { mailStream.stop(); mailStream = null; }
   }
 });

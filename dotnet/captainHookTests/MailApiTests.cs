@@ -364,8 +364,10 @@ public class MailApiTests
                                 Heartbeat: TimeSpan.FromMinutes(10)));
 
         var mail = await MailJson(api);
-        var stamp = mail.GetProperty("trailEventId").GetInt64();
-        Assert.Equal(new FileInfo(trail.Path).Length, stamp);
+        var stamp = mail.GetProperty("trailEventId").GetString();
+        // A token on the wire (ADR-0009 d2) — the test may look inside it to
+        // assert WHICH position was stamped; no client may.
+        Assert.Equal(new FileInfo(trail.Path).Length, long.Parse(stamp!));
 
         // The choreography the picture must not miss, appended in the window
         // where a subscribe-after-snapshot client would have lost it.
@@ -373,7 +375,8 @@ public class MailApiTests
                      """{"ev":"mail.deliver","id":"m-01"}""");
 
         await using var client = new SseClient();
-        Assert.Equal(HttpStatusCode.OK, await client.OpenAsync(api.Port, api.Token, lastEventId: stamp));
+        Assert.Equal(HttpStatusCode.OK,
+            await client.OpenAsync(api.Port, api.Token, lastEventId: long.Parse(stamp!)));
 
         var first = await client.ReadFrameAsync(TimeSpan.FromSeconds(10));
         var second = await client.ReadFrameAsync(TimeSpan.FromSeconds(10));
@@ -389,9 +392,10 @@ public class MailApiTests
     /// The fallback contract, and the reason the field is NULLABLE rather than
     /// defaulted: a daemon serving no trail has no id space to align to, and
     /// the client must fall back to subscribe-then-snapshot and fold the
-    /// overlap as replay. It must NOT read a missing stamp as 0 — in this id
-    /// space 0 is the first byte, so that reading replays the entire trail as
-    /// live. Absent means absent.
+    /// overlap as replay. It must NOT read a missing stamp as "0" — in this id
+    /// space "0" is the earliest still-reachable point (ADR-0009 d2), so that
+    /// reading replays the entire trail as live. Absent means absent, and the
+    /// string typing is what keeps a falsy test from collapsing the two.
     [Fact]
     public async Task Mail_TrailEventId_IsNullWhenNoTrailIsServed()
     {
@@ -405,8 +409,10 @@ public class MailApiTests
 
     /// A trail file that does not exist yet is "nothing yet", never an error —
     /// the same answer `TrailSubscription` gives a subscriber arriving before
-    /// the first line is written. Here 0 is the honest stamp rather than a
-    /// dangerous default: there are no bytes for it to replay.
+    /// the first line is written. Here "0" is the honest stamp rather than a
+    /// dangerous default: there are no bytes for it to replay. It is also
+    /// exactly why absent must not render as "0" — the two mean opposite
+    /// things and only the type keeps them apart.
     [Fact]
     public async Task Mail_TrailEventId_IsZeroWhenTheTrailDoesNotExistYet()
     {
@@ -419,7 +425,9 @@ public class MailApiTests
             readModel: Model(MailReadPort.Over(tmp.Dir), trailPath: trail.Path));
 
         var mail = await MailJson(api);
-        Assert.Equal(0, mail.GetProperty("trailEventId").GetInt64());
+        var stamp = mail.GetProperty("trailEventId");
+        Assert.Equal(JsonValueKind.String, stamp.ValueKind);   // "0", never 0 and never null
+        Assert.Equal("0", stamp.GetString());
     }
 
     /// The stamp is read BEFORE the store, and that order is the difference

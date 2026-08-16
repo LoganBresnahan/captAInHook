@@ -187,7 +187,11 @@ export function seedFiles(daemon) {
 // role whose cursor sits exactly at the frontier.
 const MAIL_SESSIONS = { alpha: "sess-alpha-4f21", beta: "sess-beta-9c07" };
 
-const envelope = (id, to, over) => ({
+/** One envelope in the store's own dialect. EXPORTED so a spec that puts mail
+ * on the bus mid-test spells it exactly as the seed does — the strict parser
+ * refuses anything else (`v` is required and must be 1), and one hand-rolled
+ * literal drifting from this shape is a test that fails for the wrong reason. */
+export const mailEnvelope = (id, to, over) => ({
   v: 1, id, to, kind: "status", priority: "ambient", ttlDeliveries: 3,
   from: { agent: "seed", harness: "claude-code", session: MAIL_SESSIONS.alpha },
   topic: "seed", body: "seeded envelope", ...over,
@@ -195,14 +199,16 @@ const envelope = (id, to, over) => ({
 
 /**
  * Put the swarm on the sandbox bus and move its cursors. Call AFTER seedFiles
- * (whose hooks register the two digest handlers) and before the page is
- * screenshotted; the Mail view polls the snapshot, so unlike the trail this
- * does not have to wait for a live subscription.
+ * (whose hooks register the two digest handlers) and BEFORE the page opens:
+ * everything here lands in the snapshot the view seeds from, so unlike the
+ * trail it does not have to wait for a live subscription. Mail sent AFTER the
+ * page is up is a different thing entirely — it arrives on the stream, which is
+ * what the choreography specs drive.
  *
  * @param {import("../e2e/daemon.ts").DaemonHandle} daemon
  */
 export function seedMail(daemon) {
-  const send = (id, to, over) => daemon.mailSend(envelope(id, to, over));
+  const send = (id, to, over) => daemon.mailSend(mailEnvelope(id, to, over));
   const { alpha, beta } = MAIL_SESSIONS;
 
   // Three roles' worth of mail, none of it read yet.
