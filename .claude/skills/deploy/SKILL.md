@@ -222,7 +222,12 @@ SHELL_HTML=$(curl -sf "http://127.0.0.1:$PORT/ui")               # shell serves,
 grep -q 'id="nav"' <<<"$SHELL_HTML" && echo "shell ok"           # the sidebar shell's first island mount
 # and its HASHED assets must serve too — a staged index.html whose assets are
 # missing renders a blank page while the shell check alone says "fine".
-for a in $(grep -o 'assets/index-[A-Za-z0-9]*\.\(js\|css\)' <<<"$SHELL_HTML"); do
+# The char class MUST include _ and - : Vite's base64url hashes use both, and a
+# class of [A-Za-z0-9] silently skips the asset it cannot match — which on the
+# 2026-08-15 deploy meant the JS bundle (index-C_ooexHi.js) was never checked
+# while the loop reported a clean pass on the CSS alone. A check that can miss
+# the one file whose absence blanks the page is worse than no check.
+for a in $(grep -oE 'assets/index-[A-Za-z0-9_-]+\.(js|css)' <<<"$SHELL_HTML" | sort -u); do
   echo "  $a → $(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/ui/$a")"
 done
 ```
