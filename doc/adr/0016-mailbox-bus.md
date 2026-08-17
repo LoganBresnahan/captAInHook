@@ -5,6 +5,12 @@ owner's design sessions of 2026-08-11/12. Nothing here is implemented yet —
 build order below, decomposed via `/adr-plan`.)* *(Amended 2026-08-15 —
 decision 14, the observation surface: a read-only mail endpoint + the Mail
 canvas; plan addendum below. All 11 original slices had landed by then.)*
+*(Amended 2026-08-17 — decision 9's revisit trigger fired on the first real
+exchange; the watcher, runner shape and ask/reply are
+[ADR-0017](0017-watcher-nudge-and-ask.md). Same session, the owner's verdict
+on the addendum's optional slice 6 `mail-replay`: **build**, in two parts —
+a delivery-record preload first (fold `mail.deliver` history so cards read
+✓ for pickups that predate the page), the scrub bar second.)*
 **Date:** 2026-08-12
 **Builds on:** [ADR-0003](0003-declarative-harness-registry.md) (the harness
 spec as capability data), [ADR-0007](0007-management-api.md) (TrailCursor /
@@ -372,6 +378,14 @@ shared edit log. The bus must not know or care what backs a member:
    real case where an agent needed to *wait* on another agent, not merely hear
    from it.
 
+   *Revisit trigger FIRED 2026-08-16:* the bus's first real exchange (a
+   two-window review of commit 1ee7218) had the maintainer send a request it
+   could do nothing but wait on, until a human typed in the other window.
+   Ask/reply, the watcher and the runner shape are
+   [ADR-0017](0017-watcher-nudge-and-ask.md), which reads `inReplyTo`
+   (decision 8 there), keeps addresses as roles, and resolves N5 below by
+   thread-aware delivery preference. This decision stands for v1 as built.
+
 10. **Every delivery carries provenance — in both directions.** Into the
     context: the rendered digest prefixes each item with sender, harness, and
     age ("from intent-watcher (claude-code), 2 turns ago"). Injected mail is a
@@ -700,7 +714,9 @@ shared edit log. The bus must not know or care what backs a member:
   a measured-cost decision, not a default.
 - **N5 · Multi-session fan-out.** A role held by two live sessions receives
   twice (one cursor each). Correct for awareness traffic; would be wrong for
-  future ask/reply — recorded so decision 9's design remembers it.
+  future ask/reply — recorded so decision 9's design remembers it. *Picked up
+  by ADR-0017 d8: an answer prefers the asking session's cursor (urgent-class
+  there, ambient elsewhere) without addressing sessions.*
 - **N6 · Watcher token cost.** Every LLM watcher is a model call on somebody's
   bill; on-demand default + policy scoping are the throttles, and each watcher
   carries ADR-0010 N7's reentrancy guard (`--setting-sources ""` pattern) so a

@@ -37,6 +37,15 @@ run live*. The framework underneath is what exists today.
   the reducer is an interpolator between authoritative snapshots, never a
   second store; the trail's days-to-weeks lifetime means older envelopes show
   *before cursor · no record*, never "delivered".
+  **2026-08-16/17 (dogfood):** the first real exchange rode the bus — a
+  second window holding `reviewer` (d8 as-built: a second digest handler,
+  cwd-scoped by `dispatch.json`) reviewed 1ee7218 and found three real bugs,
+  fixed in d6083f9. Verdict on optional slice 6 `mail-replay` from watching
+  it: **build**, as (a) a delivery-record preload (fold `mail.deliver`
+  history so cards read ✓ for pickups before page-open — the thing that read
+  *"is past it · no delivery record in this picture"* all day) then (b) the
+  scrub bar. Remaining here: 6a, 6b, 7 (field report + docs + this tick).
+  What the exchange asked for beyond this item is **ADR-0017** (item 22).
   Slices landed: `mail-read-endpoint` (2026-08-15; phase 1, slice 1 —
   `GET /api/v1/mail?since=` returns the bus as one snapshot: chain status
   (`VerifyChain`, head, gen, line count, and the 0700/0600 modes d13 promises,
@@ -1392,6 +1401,22 @@ run live*. The framework underneath is what exists today.
   complete: all 7 phases, all 13 slices landed; item 6 checked.**
 
 ## Later
+
+- [ ] **22. The watcher — human nudge always on, robot nudge sometimes, and
+  ask/reply** — [ADR-0017](adr/0017-watcher-nudge-and-ask.md) (Proposed
+  2026-08-17). `captainHook mail status` for the statusline (📬 count, ruleless,
+  never enters the loop); an in-daemon watcher, event-driven off the trail's
+  own `mail.append` / `mail.cursorAdvance`, pure rules over pending +
+  presence + role-kind with monotonic deadline re-checks (no cron); the robot
+  nudge as an internal `MailNudge` hook event through the ordinary dispatcher
+  (handlers.json = the hands, dispatch.json = the consent, budgets = the
+  bound); per-harness turn payloads (`turn-claude.sh` first; the bus is the
+  memory, fresh session per turn); `inReplyTo` read + `mail ask --wait` +
+  hop budgets; nudge/thread marks on the canvas. E2E is load-bearing and
+  model-free: a stub harness payload that fires real hooks and answers on
+  the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
+  first is *not* required; item 15 (capability policy) bounds the runners
+  when it lands.
 
 - [x] **20. The mailbox bus — cross-harness agent communication** — the hub
   reframe: N external agent loops (Claude Code + any hook-bearing harness),
