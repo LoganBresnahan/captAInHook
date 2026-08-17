@@ -143,6 +143,14 @@ public sealed record MailDigestOptions(
     /// consumes, and `Advance`'s per-cursor flock already decides who wins.
     public string? CursorKey(string? sessionId) => Instance ?? sessionId;
 
+    /// This registration's ADDRESS — the spelling a sender writes to reach it,
+    /// and the thing that decides what it may read (ADR-0018 d4). A named
+    /// registration reads its role's broadcast AND its own unicast; an unnamed
+    /// one reads the broadcast alone. Carried rather than re-derived per call
+    /// site, so the cursor key and the entitlement can never come from two
+    /// different readings of the same flags.
+    public MailAddress Mailbox => new(Role, Instance);
+
     /// Per-seam default render caps, in characters (the deterministic proxy
     /// for d5's "hard token cap"): the mid-turn class fires on every tool
     /// call, so its budget is a quarter of the session-edge classes'.
@@ -568,8 +576,10 @@ public static class MailDigest
         }
 
         var verbs = spec.Events.TryGetValue(req.EventType, out var declared) ? declared : null;
-        // The cursor keys on the INSTANCE; the trail keeps the real session.
-        var view = cursors.Pending(opts.Role, opts.CursorKey(req.SessionId), req.SessionId);
+        // The cursor keys on the INSTANCE; the trail keeps the real session;
+        // and the ADDRESS decides what this registration is entitled to read —
+        // its role's broadcast, plus its own unicast when it is named (d4).
+        var view = cursors.Pending(opts.Mailbox, req.SessionId);
         var plan = Plan(view.Pending, opts.Seam, verbs);
 
         if (plan.Vehicle == MailVehicle.None || plan.Deliver.Count == 0)
@@ -594,7 +604,7 @@ public static class MailDigest
 
             case MailCursorWrite.Written:
                 stdout.WriteLine(AnswerLine(plan.Vehicle, render.Text, req.DispatchId));
-                LogDelivery(req, opts, plan, render);
+                LogDelivery(req, opts, view, plan, render);
                 return 0;
 
             default: throw new InvalidOperationException("MailCursorWrite is a closed set");
@@ -672,9 +682,36 @@ public static class MailDigest
     /// `sessionId` and `role` rides data, so the join keys are unchanged and
     /// strictly better connected.
     private static void LogDelivery(
-        DigestRequest req, MailDigestOptions opts, MailPlan plan, MailRender render)
+        DigestRequest req, MailDigestOptions opts, MailPendingView view,
+        MailPlan plan, MailRender render)
     {
         var bytes = Encoding.UTF8.GetBytes(render.Text);
+        var data = new Dictionary<string, object>
+        {
+            ["role"] = opts.Role,
+            ["seam"] = Wire(opts.Seam),
+            // The vehicle is not derivable from anything else on the ledger,
+            // and it is the difference between informing the loop and blocking
+            // it (an inject vs. a reconcile-class block).
+            ["vehicle"] = Wire(plan.Vehicle),
+            ["envelopeIds"] = render.Delivered.Select(p => Clamp(p.Envelope.Id)).ToList(),
+            ["renderHash"] = Convert.ToHexStringLower(SHA256.HashData(bytes)),
+            ["bytesInjected"] = bytes.Length,
+        };
+        // WHICH MAILBOX took it (ADR-0018 d4). `sessionId` names the window and
+        // `role` the lane; neither says which of a role's mailboxes this
+        // delivery landed in, and for a unicast envelope that is the entire
+        // fact — the whole point of the address was that ONE box got it.
+        //
+        // Spelled as `instance` beside `role`, exactly as `mail.cursorAdvance`
+        // spells it, rather than as a joined `address` field: two spellings of
+        // "which mailbox" on one trail is the second implementation this
+        // subsystem keeps refusing to grow (N8), and a reader that already
+        // learned the advance's columns needs nothing new here. Written ONLY
+        // when the mailbox is named, so every delivery line a pre-ADR-0018
+        // reader has seen keeps its exact shape.
+        if (view.Named) data["instance"] = view.Session!;
+
         Log.Info("mail", "mail.deliver", new LogFields
         {
             // An empty dispatchId is what a collapsed run puts on the wire; as
@@ -683,18 +720,7 @@ public static class MailDigest
             SessionId = req.SessionId,
             HookEvent = req.EventType,
             Msg = "mail delivered into the recipient's context",
-            Data = new Dictionary<string, object>
-            {
-                ["role"] = opts.Role,
-                ["seam"] = Wire(opts.Seam),
-                // The vehicle is not derivable from anything else on the
-                // ledger, and it is the difference between informing the loop
-                // and blocking it (an inject vs. a reconcile-class block).
-                ["vehicle"] = Wire(plan.Vehicle),
-                ["envelopeIds"] = render.Delivered.Select(p => Clamp(p.Envelope.Id)).ToList(),
-                ["renderHash"] = Convert.ToHexStringLower(SHA256.HashData(bytes)),
-                ["bytesInjected"] = bytes.Length,
-            },
+            Data = data,
         });
     }
 

@@ -374,6 +374,40 @@ public class MailStatusTests
         Assert.Equal(["📬 main 1", "📬 main@ci 1"], w.Run(session: "s-77"));
     }
 
+    /// ADR-0018 d4 (`plan-unicast`): the bar counts what the digest would be
+    /// handed, and a named mailbox is handed its unicast mail. Omitting it would
+    /// hide the one kind of envelope that has nobody else to reach — nothing
+    /// broadcasts it to a second window, so an uncounted unicast is mail no
+    /// human is ever told about.
+    [Fact]
+    public void NamedRegistration_CountsItsUnicastMailToo()
+    {
+        using var w = new StatusWorld();
+        w.Register(NamedDigest("mail-main", "main", "laptop-a"));
+        w.Policy();
+        w.Send("b-1", "main");
+        w.Send("u-1", "main@laptop-a", MailPriority.Urgent, ttl: null);
+        w.Send("u-2", "main@laptop-b", ttl: null);          // a sibling's
+        w.Send("x-1", "reviewer");
+
+        Assert.Equal(["📬 2 · 1 urgent"], w.Run(session: "s-77"));
+    }
+
+    /// And an UNNAMED window is not addressable by its session id (d4's
+    /// refusal): the bar must not count mail addressed to `main@s-77`, because
+    /// no digest of this window's will ever be handed it.
+    [Fact]
+    public void UnnamedRegistration_DoesNotCountUnicastAddressedToItsSession()
+    {
+        using var w = new StatusWorld();
+        w.Register(Digest("mail-main", "main"));
+        w.Policy();
+        w.Send("b-1", "main");
+        w.Send("u-1", "main@s-77", ttl: null);
+
+        Assert.Equal(["📬 1"], w.Run(session: "s-77"));
+    }
+
     [Fact]
     public void AnUngrammaticalRegistration_ContributesNoMailbox()
     {
@@ -410,9 +444,12 @@ public class MailStatusTests
         public void Policy(params object[] rules) =>
             File.WriteAllText(PolicyPath, JsonSerializer.Serialize(new { version = 1, @default = "allow", rules }));
 
-        public void Send(string id, string to, MailPriority priority = MailPriority.Ambient) =>
+        /// `ttl: null` is how a UNICAST envelope is spelled (ADR-0018 d5) — the
+        /// store re-parses what it writes and refuses one carrying a ttl.
+        public void Send(
+            string id, string to, MailPriority priority = MailPriority.Ambient, int? ttl = 3) =>
             MailFixtures.AppendOk(new MailStore(MailDir),
-                MailFixtures.Envelope(id: id, to: to, priority: priority));
+                MailFixtures.Envelope(id: id, to: to, priority: priority, ttl: ttl));
 
         /// The real digest verb, so a cursor moves exactly as it does in life.
         public void Digest(string role, string? session, string? instance = null)

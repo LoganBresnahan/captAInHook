@@ -10,11 +10,12 @@ namespace CaptainHook.Mail;
 // `to` is either a ROLE — `maintainer`, every instance holding it, ADR-0016's
 // broadcast, unchanged — or a ROLE@INSTANCE — `maintainer@laptop-a`, exactly
 // one mailbox, unicast (d1). Both are routing keys over the one chain; the
-// store learns nothing new. **This file only decides what an address IS.**
-// Routing on it is `plan-unicast`'s (d4), TTL's refusal on unicast is
-// `unicast-refuses-ttl`'s (d5), and naming an instance at registration is
-// `instance-registration`'s (d3) — none of them are here, and until they land
-// a `role@instance` envelope parses and is simply addressed to nobody.
+// store learns nothing new. **This file decides what an address IS, and — from
+// slice `plan-unicast` (d4) — who reads one**: `Accepts` is the recipient
+// predicate, added here rather than in `MailCursors` because it is a fact about
+// addresses and because both of that file's predicate sites must call the same
+// one. TTL's refusal on unicast is `unicast-refuses-ttl`'s (d5) and naming an
+// instance at registration is `instance-registration`'s (d3); neither is here.
 //
 // Why a grammar at all, when `to` accepted anything through all of item 20:
 // `@` can only mean "instance follows" if it can mean nothing else, so
@@ -74,6 +75,48 @@ public readonly record struct MailAddress(string Role, string? Instance)
         return true;
 
         static bool IsAlnum(char c) => c is (>= 'a' and <= 'z') or (>= '0' and <= '9');
+    }
+
+    /// Does the mailbox at THIS address read an envelope addressed to `to`?
+    /// (d4, slice `plan-unicast` — the recipient predicate, and the ONE
+    /// spelling of it.)
+    ///
+    /// A registration reads its role's BROADCAST, as every holder of the role
+    /// does, plus — only when it is NAMED — the unicast addressed to it alone.
+    /// Both predicate sites in `MailCursors` call this, which is not tidiness:
+    /// the sites disagreeing is a specific, silent failure. The pending scan
+    /// decides what a digest may deliver; `LoadOrAnchor`'s held-entry check
+    /// decides whether a cursor's own held list still describes this mailbox's
+    /// mail. A scan that accepted a unicast the held check then rejected would
+    /// hold the envelope, re-anchor on the next read ("addressed to someone
+    /// else"), and drop every held entry with it — mail delivered twice, held
+    /// state lost, and a loud warn blaming the store for a predicate's
+    /// disagreement with itself.
+    ///
+    /// **An UNNAMED reader does not match `role@<its own session id>`.** That
+    /// is the refusal this predicate exists to make: matching there would make
+    /// sessions addressable, which ADR-0016 d6 rejected outright and this ADR
+    /// re-rejected (a mailbox keyed to a window dies with the window, and four
+    /// of the six cursors on the live lane are that failure). A session id is
+    /// the cursor KEY's fallback (d3) — never a name a sender may spell.
+    public bool Accepts(string to)
+    {
+        // Broadcast only. Spelled as the first branch because it is the whole
+        // of what the bus did before this slice, and it must stay exactly that.
+        if (Instance is null) return to == Role;
+
+        if (to == Role) return true;   // a named reader is still a holder of its role
+
+        // `Role + "@" + Instance` without building it: this runs once per
+        // ledger line per cursor per read, and the read is on the dispatch hot
+        // path. Robust to a `to` the grammar would refuse (a second `@` lands
+        // in the instance half and simply fails to match) — the parser is the
+        // gate, but a predicate that leans on its caller is a predicate that
+        // breaks when someone calls it from somewhere new.
+        var at = to.IndexOf('@');
+        return at == Role.Length
+            && to.AsSpan(0, at).SequenceEqual(Role)
+            && to.AsSpan(at + 1).SequenceEqual(Instance);
     }
 
     /// Parse an address, or fail. At most one `@`; both halves non-empty and

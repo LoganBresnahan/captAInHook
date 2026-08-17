@@ -1558,6 +1558,60 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `plan-unicast` (2026-08-17; phase 3, slice 5 — the slice where
+  a `role@instance` envelope stops being carried and starts being DELIVERED.
+  Four slices built a grammar, a TTL refusal, a named cursor key and a
+  provenance field; none of them routed anything, so unicast mail parsed,
+  landed on the chain, and reached nobody. The whole slice is one predicate —
+  `MailAddress.Accepts`: a registration reads its role's BROADCAST always, plus
+  its own `role@instance` when it is NAMED, so naming a mailbox adds an address
+  rather than replacing one. **The predicate has two call sites and only one is
+  on the happy path**, which is the plan's named hazard and the reason this
+  lands as one `Accepts` called twice rather than two checks kept in step: the
+  pending scan decides what may be delivered, `LoadOrAnchor`'s held-entry check
+  decides what a cursor may still hold, and the second is reached only when a
+  named reader HOLDS an undelivered unicast. With the sites disagreeing it is
+  not a half-built feature — the scan accepts the envelope, the digest holds it,
+  and the next read re-anchors the cursor to 0 with `cause: store`, drops every
+  held entry, redelivers what was already read, and blames the store for a
+  disagreement between two lines of our own code, on every read thereafter.
+  Verified by mutation rather than asserted: reverting that one site fails
+  exactly the two tests aimed at it (`AHeldUnicast_SurvivesTheNextRead...`,
+  `...NeverExpires...`) and nothing else in 1119 — which is precisely the shape
+  of a bug a happy-path pass ships. **Three as-built calls.** (i) An unnamed
+  reader does NOT match `role@<its own session id>` — the plan's pin, and a real
+  refusal rather than a technicality, since session ids are grammar-legal
+  instance names and matching would make windows addressable, resurrecting the
+  model ADR-0016 d6 rejected and whose failure is on the live ledger. The
+  plausible-wrong implementation (treat the cursor KEY as the instance name) was
+  written and confirmed to fail exactly the two tests aimed at IT. (ii)
+  Named-ness is CARRIED from the registration, never inferred from cursor-key ≠
+  session: the inference is right for the trail, where equal means "nothing
+  extra to say", and would silently un-route a registration whose `--as`
+  happened to equal its session id. (iii) `mail.deliver` says which mailbox with
+  an `instance` column beside `role` — the spelling and the write-only-when-named
+  rule `mail.cursorAdvance` already uses — rather than the plan's word
+  "address", because two spellings of "which mailbox" on one trail is N8 wearing
+  a delivery record for a hat; for a unicast envelope that column is the whole
+  fact, since `role` names a lane a dozen mailboxes hang off and `sessionId`
+  names a window that is gone tomorrow. **One gap kept, deliberately:** the
+  read-only `MailReadPort` reads every cursor as unnamed, so unicast shows in the
+  snapshot as pending for nobody — a cursor file's name is just its key and that
+  port reads only the mail dir, so it cannot know whether a mailbox is entitled
+  to `role@key`; between under-claiming and guessing a read-only picture
+  under-claims, since guessing would paint every window as addressable by its
+  session id, which is the routing model this slice refuses. The live trail can
+  tell, so the picture is recoverable from the stream, and saying it in the
+  SNAPSHOT is `canvas-instances`'. The reducer does not mirror the predicate yet
+  for the same reason — that is phase 4's, and the golden corpus needed NO
+  regeneration here, which is the byte-identity proof for every unnamed reader.
+  `mail status` follows the address whole and counts unicast, because nothing
+  broadcasts a unicast envelope to a second window and an uncounted one is mail
+  no human is ever told about. 30 tests (`MailUnicastRoutingTests` 28, two
+  `MailStatusTests`); suite 1089 → 1119 green twice, web 253 unchanged. Docs:
+  flow doc § *Who reads what* with the predicate as a diagram; a count audit on
+  the way past found `MailStatusTests` still recorded as 30 — the four cases
+  `instance-registration` added were never folded in — now the measured 36.)
   Slices landed: `forwarded-from-provenance` (2026-08-17; phase 2, the
   mechanical one — `forwardedFrom {id, address}` on the envelope, cloned along
   the `inReplyTo` path across parser → store → DTO → schema → `api.gen.ts` →

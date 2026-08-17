@@ -74,7 +74,13 @@ public static class MailStatus
             // cursor this window reads (ADR-0018 d3). Counting the session's own
             // cursor for a named registration would report a mailbox nobody
             // reads — worse than silence, because it looks like an answer.
-            var view = cursors.Pending(box.Role, box.Instance ?? session);
+            //
+            // The address goes in whole rather than as a pre-resolved key, so
+            // the count is over exactly what the digest would be handed (d4):
+            // a named mailbox's unicast mail is waiting for a human as surely
+            // as its broadcast is, and a bar that omitted it would point at the
+            // one kind of envelope that has nobody else to reach.
+            var view = cursors.Pending(box, session);
             var line = Line(box.ToString(), view, qualify);
             if (line is not null) stdout.WriteLine(line);
         }

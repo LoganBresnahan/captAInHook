@@ -29,11 +29,12 @@ as a handler (`mail digest`). Nothing about "swarm" is a mode the daemon enters.
         ▼
   ════════════════ the store is store-and-forward: nobody need be listening ═══
         ▼
-  a hook fires ──► daemon ──► registered `mail digest --role R --seam S`
+  a hook fires ──► daemon ──► registered `mail digest --role R [--as I] --seam S`
         │
-        ├─ MailCursors.Pending(role, session) ── the per-(role, session) position
+        ├─ MailCursors.Pending(address, hookSession) ── the mailbox's position
+        │     keyed role × (I ?? session); reads `R`, plus `R@I` when named
         │     frontier + held[] ── re-anchors LOUDLY on 7 disagreements
-        │     TTL: expired = deliveries − seenAt + 1 ≥ ttlDeliveries
+        │     TTL: expired = deliveries − seenAt + 1 ≥ ttlDeliveries (broadcast only)
         │
         ├─ MailDigest.Plan(pending, seam, verbs)   ── PURE: no I/O, no clock
         │     seam class × priority × the event's DECLARED verbs → deliver | none
@@ -312,14 +313,75 @@ alphanumeric test is **ASCII by hand**, not `char.IsLetterOrDigit`, because a
 Unicode-aware check admits `mаintainer` with a Cyrillic а — a mailbox that
 renders identically to a real one and receives none of its mail.
 
-As of this slice the grammar is *all* that is built: a `role@instance` envelope
-parses, is carried verbatim, and is addressed to nobody, because routing on the
-instance (`plan-unicast`) and naming an instance at registration
-(`instance-registration`) are later slices of ADR-0018 — though the TTL half
-(`unicast-refuses-ttl`, above) landed immediately after this one, closing the
-window in which a unicast envelope could reach the chain carrying a `ttl` the
-parser would later refuse to read back. It lands first and alone because its risk is permanence: the ledger is
-append-only, so what parses today is what it holds forever.
+The grammar landed first and alone because its risk is permanence: the ledger is
+append-only, so what parses today is what it holds forever. It shipped with
+nothing routing on it — a `role@instance` envelope parsed, was carried verbatim,
+and was addressed to nobody — and the slices below closed that in order:
+`unicast-refuses-ttl` (above), `instance-registration` (naming a mailbox), and
+`plan-unicast` (the predicate, next).
+
+### Who reads what (ADR-0018 d4)
+
+An address is a routing key; a cursor is a position. The two are related but not
+the same, and the predicate is the address's:
+
+```
+   registration:  mail digest --role main [--as laptop-a]
+                        │              │
+                        │              └── names the MAILBOX (durable)
+                        ▼
+   MailAddress ── Accepts(to) ─────────────────────────────────┐
+        │                                                      │
+        │   unnamed  →  to == "main"                            │
+        │   named    →  to == "main"  ||  to == "main@laptop-a" │
+        │                                                      │
+        └── called from BOTH recipient filters: ───────────────┘
+              MailCursors.Pending's ledger scan  (what may be delivered)
+              LoadOrAnchor's held-entry check    (what a cursor may still hold)
+```
+
+Naming a mailbox *adds* an address; it does not remove one. A named
+registration is still a holder of its role and still takes the role's broadcast
+— unicast is the second thing it answers to, not a replacement for the first.
+
+Two properties carry the whole slice, and both are about silence:
+
+**An unnamed reader does not match `role@<its own session id>`.** Session ids
+are grammar-legal instance names, so that is a real address a sender can spell.
+Matching it would make windows addressable — the model ADR-0016 d6 rejected and
+this ADR re-rejected, since a mailbox keyed to a window dies with the window
+(four of six cursors on the live lane are that failure). The session id is the
+cursor *key*'s fallback, never a name.
+
+**One predicate, two call sites, and only one of them is on the happy path.**
+`Pending`'s scan decides what a digest may deliver; `LoadOrAnchor`'s held-entry
+check decides whether a cursor's held list still describes mail this mailbox
+reads. A named reader that *holds* an undelivered unicast is the state where a
+disagreement surfaces, and it does not surface as a missing feature: the scan
+accepts the envelope, the digest holds it, and the next read declares the held
+entry addressed to someone else — a `store`-cause re-anchor that resets the
+cursor to 0, drops every held entry with it, redelivers what was already read,
+and blames the store for a disagreement between two lines of our own code. Then
+does it again on every read after that. Calling one `MailAddress.Accepts` from
+both sites makes that unrepresentable rather than merely tested for.
+
+Delivery into a named mailbox says so on the ledger: `mail.deliver` carries an
+`instance` column beside `role`, in the same spelling and under the same
+write-only-when-named rule as `mail.cursorAdvance` (§ *instance registration*).
+For a unicast envelope that column is the entire fact — `role` names a lane a
+dozen mailboxes may hang off, and `sessionId` names a window that will be gone
+tomorrow.
+
+**One thing this deliberately does not do.** The read-only observation surface
+(`MailReadPort`) reads every cursor as *unnamed*, so unicast mail shows there as
+pending for nobody. A cursor file's name is just its key, and this surface reads
+only the mail directory — it cannot tell an `--as` name from a session id, and
+so cannot know whether that mailbox is entitled to `role@key`. Between
+under-claiming and guessing, a read-only picture under-claims: guessing the
+other way would paint every window as addressable by its session id, which is
+the routing model d4 refuses. The live trail *can* tell (that `instance`
+column), so the picture is recoverable from the stream; saying it in the
+snapshot is `canvas-instances`' to design.
 
 ## Provenance, and the ledger's other direction
 
@@ -458,10 +520,10 @@ offers:
        stdin: {"session_id": …, "cwd": …}          ← the harness's status payload
                      │
    handlers.json ────┤  registrations whose args MailDigest.TryParseArgs accepts
-                     │        ⇒ role                (recognition, not a 2nd parser)
+                     │        ⇒ address              (recognition, not a 2nd parser)
    dispatch.json ────┤  Evaluate(event, cwd, session) per event it is registered on
-                     │        ⇒ the roles THIS window may read
-   cursor+store ─────┘  MailCursors.Pending(role, session)
+                     │        ⇒ the mailboxes THIS window may read
+   cursor+store ─────┘  MailCursors.Pending(address, session)   ── unicast counted
                      │
                      ▼
               📬 2 · 1 urgent        (one line per role; the role is NAMED only
@@ -516,8 +578,9 @@ prose, not ground truth.
 | `MailEnvelope`, `MailSender`, `MailKind`, `MailPriority`, `TryParse`/`TryParseLine` | `dotnet/captainHook/Mail/MailEnvelope.cs` |
 | `forwardedFrom` PROVENANCE (ADR-0018 d8, slice 4) — `{id, address}` on the envelope, the second and last envelope-to-envelope reference. The id is validated PRESENCE-ONLY (the ledger rotates; a forward that stopped parsing when its original aged out would destroy the provenance it exists to keep), the ADDRESS is grammar-checked (an address no sender could write names no mailbox that existed). Object-shaped and strictly walked like `from` — a half-read provenance link would name an origin nobody can check. Carries the address BESIDE the id because the id alone cannot say whose mailbox the mail was stranded in: the original's `to` may be a bare role a dozen mailboxes hold | `MailForwardedFrom` + `ParseForwardedFrom` (`Mail/MailEnvelope.cs`); `MailStore.Render` writes it beside `inReplyTo` and omits it when absent; `MailForwardedFromDto` (`Api/ApiDtos.cs`) → `api.schema.json` → `api.gen.ts` → `MailEnvelopeView.forwardedFrom` (`web/src/mail.ts`, snapshot-only like `body`/`ts`). Nothing READS it yet — the reaper (d6) is what writes one. Pinned by six parse tests + two store round trips |
 | unicast has NO TTL (ADR-0018 d5, slice 2) — `ttlDeliveries` REFUSED on a `role@instance` address (not ignored), `MailEnvelope.TtlDeliveries` nullable, omitted from the stored line and from `mail.append`, null through DTO → reducer → canvas; expiry simply does not run, so a held unicast is never spent. No new write-side guard was needed: `Append` already re-parses what it renders | `MailEnvelope.TryParse` + `HasTtl`; `MailStore.Render`/`Append`; `MailCursors.Pending`'s expiry guard (`MailCursor.cs`); `MailEnvelopeDto`/`MailPendingDto` (`Api/ApiDtos.cs`); `isExpired` + `onAppend`'s ttl-applies rule (`web/src/mail.ts`); the three renderings in `web/src/MailPanel.tsx` (mark reads `n held`, the card reads `none — unicast`, the standing line says unicast mail does not expire). Pinned by the parse table's d5 block, `MailStoreFormatTests.Render_UnicastLine_ReParsesCleanWithNoTtl` + `Append_RefusesAUnicastEnvelopeCarryingATtl` (the adversarial case: a contradiction constructible in process, refused at the append), and `mail.skeptic.test.ts` § 9 |
-| INSTANCE registration (ADR-0018 d3, slice 3) — `mail digest --as <instance>`; cursor key = role × instance (`--as` ?? session id) so the unnamed path is byte-identical; `--role`/`--as` both grammar-checked at registration; the cursor keys on the instance while the trail keeps the window (`sessionId` = who moved it, a new `instance` column = which mailbox, written only when they differ); `mail status` follows the same key and names a qualified line by its full address | `MailDigestOptions.Instance`/`CursorKey` + `--as` in `MailDigest.TryParseArgs` (`Mail/MailDigest.cs`); `MailPendingView.HookSession`/`Named` and the two `MailCursors.Pending` overloads — the 2-arg one is the SAFE one on purpose (`Mail/MailCursor.cs`); `MailStatus.ReadableMailboxes`/`MailboxOf` (`Mail/MailStatus.cs`). Pinned by `MailInstanceRegistrationTests` (13) and four `MailStatusTests` cases; byte-identity proven by the reducer's golden corpus needing no regeneration |
-| the ADDRESS grammar (ADR-0018 d2, slice 1) — `to` parses as `role` or `role@instance`, `[a-z0-9][a-z0-9-]*` per half, one `@`, both halves non-empty; refused not guessed; lowercase pinned rather than folded; ASCII by hand (no homoglyph mailboxes); applied to `to` and nothing else. Routing on the instance is NOT built here | `MailAddress` (`TryParse`, `IsRole`, `Role`, `Instance`, `IsUnicast`, `GrammarHelp`) in `dotnet/captainHook/Mail/MailAddress.cs`, called from `MailEnvelope.TryParse`; `MailAddressTests` (17) + the address block in `MailEnvelopeTests` (30: the legacy-role corpus, unicast accept, 17 refusals, the blank-vs-ungrammatical split, and the message that teaches the grammar) |
+| UNICAST ROUTING (ADR-0018 d4, slice 5) — the recipient predicate: a registration reads its role's BROADCAST always, plus its own `role@instance` UNICAST when it is named. `MailAddress.Accepts` is the one spelling and BOTH of `MailCursors`' recipient filters call it — the pending scan (what may be delivered) and `LoadOrAnchor`'s held-entry check (what a cursor may still hold), the second of which no happy-path drive reaches: a named reader HOLDING a unicast is where a disagreement surfaces, as a re-anchor loop that drops held state and redelivers, blaming the store. An UNNAMED reader never matches `role@<its session id>` (that would make windows addressable — ADR-0016 d6's rejected model), and named-ness is CARRIED from the registration, never inferred from key≠session. `mail.deliver` gains the `instance` column beside `role`, same write-only-when-named rule as `mail.cursorAdvance`. The read-only snapshot reads every cursor as unnamed and so UNDER-CLAIMS: unicast shows as pending for nobody there, because a cursor file's name is just its key | `MailAddress.Accepts` (`Mail/MailAddress.cs`); `MailCursors.Pending(MailAddress, hookSession)` + its unnamed 2-arg overload and `LoadOrAnchor` (`Mail/MailCursor.cs`); `MailDigestOptions.Mailbox` + `LogDelivery` (`Mail/MailDigest.cs`); `MailStatus.Run` passes the address whole (`Mail/MailStatus.cs`); `MailReadPort.Over`'s deliberate unnamed call (`Mail/MailReadPort.cs`). Pinned by `MailUnicastRoutingTests` (28 — the two predicate tables, the session-id refusal end to end, sibling invisibility, the held-unicast survival and non-expiry, the ledger column, and the snapshot's gap) + two `MailStatusTests` cases. The reducer does NOT mirror the predicate yet — `canvas-instances` owns that, and the golden corpus needed no regeneration here |
+| INSTANCE registration (ADR-0018 d3, slice 3) — `mail digest --as <instance>`; cursor key = role × instance (`--as` ?? session id) so the unnamed path is byte-identical; `--role`/`--as` both grammar-checked at registration; the cursor keys on the instance while the trail keeps the window (`sessionId` = who moved it, a new `instance` column = which mailbox, written only when they differ); `mail status` follows the same key and names a qualified line by its full address | `MailDigestOptions.Instance`/`CursorKey` + `--as` in `MailDigest.TryParseArgs` (`Mail/MailDigest.cs`); `MailPendingView.HookSession`/`Named` and the two `MailCursors.Pending` overloads — the 2-arg one is the SAFE one on purpose, and since d4 it is also the UNNAMED one (`Mail/MailCursor.cs`); `MailStatus.ReadableMailboxes`/`MailboxOf` (`Mail/MailStatus.cs`). Pinned by `MailInstanceRegistrationTests` (13) and four `MailStatusTests` cases; byte-identity proven by the reducer's golden corpus needing no regeneration |
+| the ADDRESS grammar (ADR-0018 d2, slice 1) — `to` parses as `role` or `role@instance`, `[a-z0-9][a-z0-9-]*` per half, one `@`, both halves non-empty; refused not guessed; lowercase pinned rather than folded; ASCII by hand (no homoglyph mailboxes); applied to `to` and nothing else. Routing on the instance is `plan-unicast`'s, above | `MailAddress` (`TryParse`, `IsRole`, `Role`, `Instance`, `IsUnicast`, `GrammarHelp`) in `dotnet/captainHook/Mail/MailAddress.cs`, called from `MailEnvelope.TryParse`; `MailAddressTests` (17) + the address block in `MailEnvelopeTests` (30: the legacy-role corpus, unicast accept, 17 refusals, the blank-vs-ungrammatical split, and the message that teaches the grammar) |
 | `MailStore` (`Append`, `Read`, `VerifyChain`, `HeadHash`, `Render`, `HashOf`, `ResolveDir`, `TryLock`), `Genesis`, `MaxLineBytes` | `dotnet/captainHook/Mail/MailStore.cs` |
 | `MailAppend` (Appended/Failed), `MailLine`, `MailChainFault`, `MailChainFaultKind` | `dotnet/captainHook/Mail/MailStore.cs` |
 | `MailCursor`, `MailHeld`, `MailCursors` (`Pending`, `Advance`, `CursorPath`, `Enc`, `CurrentGen`) | `dotnet/captainHook/Mail/MailCursor.cs` |
@@ -535,7 +598,7 @@ prose, not ground truth.
 | snapshot ⇄ stream alignment (d14 as-built): `MailDto.TrailEventId` is the trail's end STAMPED BEFORE the store is read, so a client subscribing at `Last-Event-ID: <it>` gets zero loss and zero duplicate. A STRING, because the id is opaque (ADR-0009 d2) and because `"0"` (replay everything) must never collapse into absent under a falsy test; null = no trail served ⇒ the picture is real and frozen | `MailDto` in `dotnet/captainHook/Api/ApiDtos.cs`; `ApiReadModel.Mail`/`TrailLength` (`_trailPath`, bound from `sseOptions.TrailPath` in `Core/DaemonHost.cs`); `MailState.trailEventId` in `web/src/mail.ts`; pinned by `MailApiTests` (resume-exactness end to end, null/"0" contracts, the source pin on read order) |
 | the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (10) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |
 | the delivery PRELOAD (d14, slice 6a) — `delivered` still comes from a `mail.deliver` line and nowhere else, but the picture no longer has to have been watching when it landed: the daemon folds those lines out of the trail into `MailDto.deliveries` (columns verbatim; NO ledger offsets, because placing an id is the reducer's arithmetic and a second implementation is N8), and `MailDto.deliveriesComplete` is the narrow claim that the whole file was read and nothing trimmed — false for a scan window, a hit cap, or no trail at all, which is what lets the detail card distinguish "nobody read it" from "further back than I can see" | `MailDeliveryFold`/`MailDeliveryLine`/`MailDeliveryFoldResult` in `dotnet/captainHook/Api/MailDeliveryFold.cs`; `MailDeliveryDto` + `ApiReadModel.Mail` in `Api/ApiDtos.cs`/`Api/ApiReadModel.cs`; `preloadDeliveries`/`resolveDelivery` (ONE placement rule, shared with `onDeliver`) in `web/src/mail.ts`. Pinned by `dotnet/captainHookTests/MailDeliveryPreloadTests.cs` (11 — a real engine-written line, the payload-stderr forgery, the bounds saying so, and a drive proving three snapshots change nothing on disk), 5 in `web/src/mail.test.ts` (preload ≡ live, dedup, unplaceable-is-quiet, no phantom cursors), and `web/e2e/mail.spec.ts` (a pickup nobody watched, delivered on a reloaded page from a snapshot line) |
-| the human channel (ADR-0017 d2) — `captainHook mail status`: roles from the `mail digest` registrations that survive `dispatch.json` for this cwd/session, counts from `MailCursors.Pending`, one `📬 n · m urgent` line per role, silent when there is nothing to say | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; role recognition is `MailDigest.TryParseArgs` itself, policy is `PolicyResolution.Resolve` + `Evaluate` (`Core/DispatchPolicy.cs`), registrations are `ExecHandlersFile.Resolve` (`Core/ExecHandlersFile.cs`). Pinned by `dotnet/captainHookTests/MailStatusTests.cs` (30 — line goldens, per-cursor counts, handler/event/project denials, multi-seam collapse, the refused registration, four silences, unreadable stdin, and a drive proving it creates and changes nothing) |
+| the human channel (ADR-0017 d2) — `captainHook mail status`: roles from the `mail digest` registrations that survive `dispatch.json` for this cwd/session, counts from `MailCursors.Pending`, one `📬 n · m urgent` line per role, silent when there is nothing to say | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; role recognition is `MailDigest.TryParseArgs` itself, policy is `PolicyResolution.Resolve` + `Evaluate` (`Core/DispatchPolicy.cs`), registrations are `ExecHandlersFile.Resolve` (`Core/ExecHandlersFile.cs`). Pinned by `dotnet/captainHookTests/MailStatusTests.cs` (36 — line goldens, per-cursor counts, handler/event/project denials, multi-seam collapse, the refused registration, four silences, unreadable stdin, a drive proving it creates and changes nothing, the four instance cases, and the two unicast ones. The `30` here was measured at the mail-status slice and never re-measured when d3 and d4 added cases) |
 | envelope parse table (117, measured — the older `26` counted methods, not the theory cases they expand to) + `MailAddressTests` (17) | `dotnet/captainHookTests/MailEnvelopeTests.cs` |
 | store: chain, flock, torn tails, write gate, the unicast + forwarded round trips (51) | `dotnet/captainHookTests/MailStoreTests.cs` |
 | cursor: frontier/held, TTL, re-anchor (32) | `dotnet/captainHookTests/MailCursorTests.cs` |

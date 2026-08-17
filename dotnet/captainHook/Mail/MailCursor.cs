@@ -57,6 +57,17 @@ namespace CaptainHook.Mail;
 // deliver-or-degrade rather than hold at seams that will advance, and only
 // advance when writing state worth the opportunity.
 //
+// WHO READS WHAT (ADR-0018 d4, slice `plan-unicast`). A cursor is keyed role ×
+// instance, but the key is not the entitlement: what this mailbox may read is
+// `MailAddress.Accepts` — its role's broadcast always, plus its own unicast
+// `role@instance` when the registration NAMED it. Both places that filter by
+// recipient call that one predicate (the pending scan and `LoadOrAnchor`'s
+// held-entry verification), because a disagreement between them is not a
+// half-working feature but a re-anchor loop: held mail dropped and redelivered
+// on every read, blamed on the store. An unnamed reader matches its role and
+// nothing else — never `role@<its session id>`, which would make windows
+// addressable and resurrect the model ADR-0016 d6 rejected.
+//
 // RE-ANCHOR SEMANTICS (d13: cursors are pure delivery state — deletable
 // anytime). An ABSENT cursor anchors at offset 0: store-and-forward is the
 // point, and mail sent to a role while nobody held it must reach the next
@@ -495,10 +506,20 @@ public sealed class MailCursors(MailStore store)
     /// Read the store through this recipient's cursor: what is pending, what
     /// has expired, and where the frontier sits. Never throws; every anomaly
     /// lands as a loud re-anchor, and an unreadable store reads as empty.
-    /// Read a mailbox whose name IS its window's — every reader before
-    /// ADR-0018, and every unnamed reader after it. Delegates with the key as
-    /// the window, which is what makes the split invisible here: the trail
-    /// keeps naming exactly what it always named.
+    /// Read an UNNAMED mailbox, keyed by `key` — every reader before ADR-0018,
+    /// and every unnamed reader after it. The key goes in as the window too,
+    /// which is what makes the split invisible here: the trail keeps naming
+    /// exactly what it always named.
+    ///
+    /// Unnamed is a routing fact, not only a naming one (d4): this reader takes
+    /// its role's broadcast and no unicast at all, `role@<key>` emphatically
+    /// included. That is right for every caller that has one — and it is also
+    /// what the OBSERVATION surface must say, because a cursor FILE cannot tell
+    /// an instance-keyed mailbox from a session-keyed one (the file name is
+    /// just the key). The snapshot therefore under-claims rather than guesses:
+    /// a named mailbox's unicast mail shows as pending for nobody, and drawing
+    /// it belongs to `canvas-instances`, which has the trail's `instance`
+    /// column to work from.
     ///
     /// An OVERLOAD rather than an optional parameter, deliberately. A defaulted
     /// `hookSession = null` reads as harmless and is not: any caller that took
@@ -506,13 +527,27 @@ public sealed class MailCursors(MailStore store)
     /// `sessionId`, silently unlinking the choreography from the window that
     /// drove it. The golden corpus caught exactly that, which is the argument
     /// for making the safe call the SHORT one and the split explicit.
-    public MailPendingView Pending(string role, string? key) => Pending(role, key, key);
+    public MailPendingView Pending(string role, string? key) =>
+        Pending(new MailAddress(role, null), key);
 
-    /// `instance` is the cursor key's second half (`--as`, else the session
-    /// id); `hookSession` is the session the dispatch actually came from and
-    /// rides the trail untouched. They differ only for a named registration.
-    public MailPendingView Pending(string role, string? instance, string? hookSession)
+    /// Read the mailbox at `mailbox` on behalf of the window `hookSession`.
+    ///
+    /// The two arguments answer two different questions and the slice that
+    /// split them is why they are both here: `mailbox` is WHAT is being read —
+    /// role plus the `--as` name when a registration gave one — and it decides
+    /// both the cursor key (`Instance ?? hookSession`, d3) and which envelopes
+    /// this reader is entitled to (`MailAddress.Accepts`, d4). `hookSession` is
+    /// WHO is reading, and it only ever rides the trail.
+    ///
+    /// Note that named-ness is carried, never inferred from the two being
+    /// different. A registration whose `--as` happens to equal its window's
+    /// session id is still a NAMED mailbox and still reads its unicast mail;
+    /// inferring would silently un-route it, and "silently" is the whole
+    /// failure mode this address kind exists to remove.
+    public MailPendingView Pending(MailAddress mailbox, string? hookSession)
     {
+        var role = mailbox.Role;
+        var instance = mailbox.Instance ?? hookSession;
         var lines = Store.Read();
 
         // The frontier stops BEFORE an unterminated tail: those bytes may be
@@ -529,7 +564,7 @@ public sealed class MailCursors(MailStore store)
         // append completes — a tamper-flavored false alarm on a healthy store.
         var head = complete.Count > 0 ? complete[0].Hash : null;
 
-        var (cursor, reanchorReason) = LoadOrAnchor(role, instance, head, frontier, complete);
+        var (cursor, reanchorReason) = LoadOrAnchor(mailbox, instance, head, frontier, complete);
 
         var byOffset = complete.ToDictionary(l => l.Offset);
         var pending = new List<PendingMail>();
@@ -567,7 +602,11 @@ public sealed class MailCursors(MailStore store)
                 skipped++;
                 continue;
             }
-            if (line.Envelope.To != role) continue;   // other roles' mail: invisible, consumed by the frontier
+            // Not addressed to this mailbox: invisible, consumed by the
+            // frontier. `Accepts` is d4's predicate — this role's broadcast,
+            // plus this instance's unicast when the reader is named — and it is
+            // the same call `LoadOrAnchor` makes over the held list.
+            if (!mailbox.Accepts(line.Envelope.To)) continue;
             pending.Add(new PendingMail(line.Offset, line.Envelope, SeenAt: null));
         }
 
@@ -785,8 +824,9 @@ public sealed class MailCursors(MailStore store)
     /// the monotonic `deliveries` counter whenever the old value is readable
     /// (the TTL clock survives what the position does not).
     private (MailCursor Cursor, string? ReanchorReason) LoadOrAnchor(
-        string role, string? session, string? head, long frontier, List<MailLine> complete)
+        MailAddress mailbox, string? session, string? head, long frontier, List<MailLine> complete)
     {
+        var role = mailbox.Role;
         var path = CursorPath(role, session);
         string text;
         try
@@ -841,12 +881,22 @@ public sealed class MailCursors(MailStore store)
             if (line?.Envelope is null || line.Envelope.Id != h.Id)
                 return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Store,
                     $"held entry at {h.Offset} (id '{h.Id}') no longer matches the file");
-            if (line.Envelope.To != role)
-                // A held entry may only ever name this role's own mail — a
-                // cursor claiming another role's line is a changed file or a
-                // hand edit, never a substitutable delivery.
+            if (!mailbox.Accepts(line.Envelope.To))
+                // A held entry may only ever name mail THIS MAILBOX reads — a
+                // cursor claiming a line addressed elsewhere is a changed file
+                // or a hand edit, never a substitutable delivery.
+                //
+                // THE SECOND PREDICATE COPY (d4's named hazard). This check and
+                // the pending scan must accept exactly the same set, or a named
+                // reader that holds a unicast envelope re-anchors here on its
+                // very next read — dropping every held entry and redelivering
+                // what it already delivered — with a warn that blames the store
+                // for a disagreement between two lines of our own code. One
+                // `Accepts` is what makes that unrepresentable rather than
+                // merely tested for.
                 return Reanchor(role, session, path, head, cursor.Deliveries, ReanchorCause.Store,
-                    $"held entry at {h.Offset} is addressed to '{line.Envelope.To}', not '{role}'");
+                    $"held entry at {h.Offset} is addressed to '{line.Envelope.To}', "
+                    + $"which the mailbox '{mailbox}' does not read");
         }
 
         return (cursor, null);
