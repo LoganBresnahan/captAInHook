@@ -129,8 +129,20 @@ public sealed record MailDigestOptions(
     string Harness,
     MailSeam Seam,
     int MaxChars,
-    bool Resident)
+    bool Resident,
+    string? Instance = null)
 {
+    /// The mailbox this registration reads, given the session it was dispatched
+    /// for: `--as` when it names one, else the window's own session (ADR-0018
+    /// d3). An UNNAMED reader is therefore exactly today's reader — one
+    /// ephemeral cursor per window — and a NAMED one has a mailbox that
+    /// outlives every window that ever serves it.
+    ///
+    /// Two windows registered under one name share one cursor, which is the
+    /// correct meaning of "one agent" as opposed to "one window": first pickup
+    /// consumes, and `Advance`'s per-cursor flock already decides who wins.
+    public string? CursorKey(string? sessionId) => Instance ?? sessionId;
+
     /// Per-seam default render caps, in characters (the deterministic proxy
     /// for d5's "hard token cap"): the mid-turn class fires on every tool
     /// call, so its budget is a quarter of the session-edge classes'.
@@ -146,8 +158,8 @@ public sealed record DigestRequest(string DispatchId, string EventType, string? 
 public static class MailDigest
 {
     private const string Usage =
-        "usage: captainHook mail digest --role <role> [--harness <name>] [--seam ambient|urgent|reconcile] "
-        + "[--max-chars <n>] [--resident]  (exec-wire envelope(s) on stdin)";
+        "usage: captainHook mail digest --role <role> [--as <instance>] [--harness <name>] "
+        + "[--seam ambient|urgent|reconcile] [--max-chars <n>] [--resident]  (exec-wire envelope(s) on stdin)";
 
     /// Strict argv parse: every violation collected, all-or-nothing (the
     /// house parser shape, applied to flags). A bad registration must fail
@@ -159,7 +171,7 @@ public static class MailDigest
         var errs = new List<string>();
         errors = errs;
 
-        string? role = null, harness = null;
+        string? role = null, harness = null, instance = null;
         MailSeam seam = MailSeam.Ambient;
         int? maxChars = null;
         var resident = false;
@@ -170,6 +182,9 @@ public static class MailDigest
             {
                 case "--role" when i + 1 < args.Count:
                     role = args[++i];
+                    break;
+                case "--as" when i + 1 < args.Count:
+                    instance = args[++i];
                     break;
                 case "--harness" when i + 1 < args.Count:
                     harness = args[++i];
@@ -204,6 +219,20 @@ public static class MailDigest
         if (string.IsNullOrWhiteSpace(role))
             errs.Add("--role is required: a digest without a role would have to guess whose mail to read");
 
+        // Both halves of the address obey ONE grammar (ADR-0018 d2), checked
+        // against the same predicate the envelope parser uses — never a second
+        // spelling of it. A registration naming a role no sender could address
+        // would be a mailbox nothing can ever reach, and a registration whose
+        // `--as` is ungrammatical would be a mailbox no `to: role@instance`
+        // could ever name: both are silent forever, which is the failure this
+        // whole ADR exists to refuse. Loud at dispatch instead.
+        if (!string.IsNullOrWhiteSpace(role) && !MailAddress.IsRole(role))
+            errs.Add($"--role must match [a-z0-9][a-z0-9-]* (got '{role}') — "
+                + "no sender could address a role spelled this way");
+        if (instance is not null && !MailAddress.IsRole(instance))
+            errs.Add($"--as must match [a-z0-9][a-z0-9-]* (got '{instance}') — "
+                + $"no sender could address '{role}@{instance}'");
+
         return errs.Count > 0
             ? null
             : new MailDigestOptions(
@@ -211,7 +240,7 @@ public static class MailDigest
                 maxChars ?? (seam == MailSeam.Urgent
                     ? MailDigestOptions.DefaultUrgentMaxChars
                     : MailDigestOptions.DefaultMaxChars),
-                resident);
+                resident, instance);
     }
 
     /// Strict parse of the exec-wire stdin envelope. The only writer is
@@ -539,7 +568,8 @@ public static class MailDigest
         }
 
         var verbs = spec.Events.TryGetValue(req.EventType, out var declared) ? declared : null;
-        var view = cursors.Pending(opts.Role, req.SessionId);
+        // The cursor keys on the INSTANCE; the trail keeps the real session.
+        var view = cursors.Pending(opts.Role, opts.CursorKey(req.SessionId), req.SessionId);
         var plan = Plan(view.Pending, opts.Seam, verbs);
 
         if (plan.Vehicle == MailVehicle.None || plan.Deliver.Count == 0)

@@ -68,7 +68,12 @@ public sealed class MailReadPort
         var cursors = new MailCursors(store);
         return new MailReadPort(
             store.Dir, store.FilePath, store.Read, store.VerifyChain, store.HeadHash,
-            () => MailCursors.List(store.Dir), cursors.Pending);
+            // The names on disk ARE cursor keys (role × instance, ADR-0018 d3),
+            // so the second half goes in as the instance and no hook session
+            // goes in at all: an observation reads a mailbox, it does not
+            // happen inside anyone's dispatch, and nothing it does writes a
+            // trail line that would need a window's name.
+            () => MailCursors.List(store.Dir), (role, instance) => cursors.Pending(role, instance));
     }
 
     /// The store generation cursors compare against (`MailCursors.CurrentGen`

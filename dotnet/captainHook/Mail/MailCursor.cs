@@ -300,9 +300,22 @@ public sealed record PendingMail(long Offset, MailEnvelope Envelope, long? SeenA
 /// digest can say so), dropped by the next Advance. `SkippedMalformed` counts
 /// this-role's unreadable lines being stepped over — warn-and-skip made
 /// visible, mirroring the envelope's failure direction.
+/// `Session` IS THE CURSOR KEY — the instance half of role × instance
+/// (ADR-0018 d3), which is `mail digest --as <instance>` when a registration
+/// names one and the hook's session id when it does not. `HookSession` is the
+/// REAL session the dispatch came from, and it exists only so the trail can
+/// keep naming the window that did the work.
+///
+/// The two are equal for every unnamed reader, which is every reader that
+/// predates ADR-0018 — so the split is invisible until a registration is named,
+/// and then it says the thing neither field could say alone: *which mailbox*
+/// moved, and *who* moved it. Collapsing them would cost one or the other —
+/// key on the session and a named mailbox stops being durable; log the instance
+/// and two windows sharing a name become indistinguishable in the trail.
 public sealed record MailPendingView(
     string Role,
     string? Session,
+    string? HookSession,
     int Gen,
     string? Head,
     long Offset,
@@ -313,7 +326,18 @@ public sealed record MailPendingView(
     string? ReanchorReason,
     IReadOnlyList<PendingMail> Pending,
     IReadOnlyList<PendingMail> Expired,
-    int SkippedMalformed);
+    int SkippedMalformed)
+{
+    /// Does this read go through a mailbox whose name is not its window's?
+    ///
+    /// Inferred from the two fields rather than carried as a third, and correct
+    /// in every case BECAUSE it is inferred: an unnamed reader passes its own
+    /// session as the instance, and a registration whose `--as` happens to
+    /// equal the session id keys the same cursor an unnamed one would — so
+    /// "equal" always means "there is nothing extra to say", and the trail can
+    /// stay byte-identical for every reader that predates ADR-0018.
+    public bool Named => Session != HookSession;
+}
 
 /// The result of one Advance — closed set, never a throw (MailAppend's rule:
 /// delivery state must not take a digest run down over a permission bit).
@@ -471,7 +495,23 @@ public sealed class MailCursors(MailStore store)
     /// Read the store through this recipient's cursor: what is pending, what
     /// has expired, and where the frontier sits. Never throws; every anomaly
     /// lands as a loud re-anchor, and an unreadable store reads as empty.
-    public MailPendingView Pending(string role, string? session)
+    /// Read a mailbox whose name IS its window's — every reader before
+    /// ADR-0018, and every unnamed reader after it. Delegates with the key as
+    /// the window, which is what makes the split invisible here: the trail
+    /// keeps naming exactly what it always named.
+    ///
+    /// An OVERLOAD rather than an optional parameter, deliberately. A defaulted
+    /// `hookSession = null` reads as harmless and is not: any caller that took
+    /// the default and then advanced would write trail lines with no
+    /// `sessionId`, silently unlinking the choreography from the window that
+    /// drove it. The golden corpus caught exactly that, which is the argument
+    /// for making the safe call the SHORT one and the split explicit.
+    public MailPendingView Pending(string role, string? key) => Pending(role, key, key);
+
+    /// `instance` is the cursor key's second half (`--as`, else the session
+    /// id); `hookSession` is the session the dispatch actually came from and
+    /// rides the trail untouched. They differ only for a named registration.
+    public MailPendingView Pending(string role, string? instance, string? hookSession)
     {
         var lines = Store.Read();
 
@@ -489,7 +529,7 @@ public sealed class MailCursors(MailStore store)
         // append completes — a tamper-flavored false alarm on a healthy store.
         var head = complete.Count > 0 ? complete[0].Hash : null;
 
-        var (cursor, reanchorReason) = LoadOrAnchor(role, session, head, frontier, complete);
+        var (cursor, reanchorReason) = LoadOrAnchor(role, instance, head, frontier, complete);
 
         var byOffset = complete.ToDictionary(l => l.Offset);
         var pending = new List<PendingMail>();
@@ -532,7 +572,7 @@ public sealed class MailCursors(MailStore store)
         }
 
         return new MailPendingView(
-            role, session, cursor.Gen, head, cursor.Offset, frontier,
+            role, instance, hookSession, cursor.Gen, head, cursor.Offset, frontier,
             cursor.Deliveries, cursor.LastDeliveredId,
             reanchorReason is not null, reanchorReason,
             pending, expired, skipped);
@@ -608,7 +648,7 @@ public sealed class MailCursors(MailStore store)
             // direction; the silent-clobber shape needs a head flap.)
             var currentHead = Store.HeadHash();
             if (currentHead != view.Head)
-                return Refused(view.Role, view.Session, path,
+                return Refused(view.Role, view.HookSession, path,
                     $"the store's chain changed between the read and the advance (view read head "
                     + $"'{view.Head ?? "(none)"}', store now has '{currentHead ?? "(none)"}') "
                     + "— re-read before advancing");
@@ -627,7 +667,7 @@ public sealed class MailCursors(MailStore store)
                 if (MailCursor.TryParse(File.ReadAllText(path), out _) is { } disk
                     && disk.Gen == view.Gen && disk.Head == view.Head
                     && disk.Deliveries != view.Deliveries)
-                    return Refused(view.Role, view.Session, path,
+                    return Refused(view.Role, view.HookSession, path,
                         $"view is stale: it was read at {view.Deliveries} deliveries but the cursor "
                         + $"is at {disk.Deliveries} — re-read before advancing");
             }
@@ -643,7 +683,7 @@ public sealed class MailCursors(MailStore store)
                 // CANNOT be loud, pinned as such by the edge campaign.)
                 Log.Warn("mail", "mail.cursorVanished", new LogFields
                 {
-                    SessionId = view.Session,
+                    SessionId = view.HookSession,
                     Msg = "the cursor this view was read from no longer exists — advancing starts a fresh lineage",
                     Data = new Dictionary<string, object>
                     {
@@ -688,7 +728,7 @@ public sealed class MailCursors(MailStore store)
             foreach (var e in view.Expired)
                 Log.Info("mail", "mail.expire", new LogFields
                 {
-                    SessionId = view.Session,
+                    SessionId = view.HookSession,
                     Msg = "mail expired undelivered: passed over at its full ttlDeliveries of opportunities",
                     Data = new Dictionary<string, object>
                     {
@@ -703,17 +743,32 @@ public sealed class MailCursors(MailStore store)
                     },
                 });
 
+            var advanceData = new Dictionary<string, object>
+            {
+                ["role"] = view.Role, ["offset"] = view.Frontier,
+                ["delivered"] = delivered.Count,
+                ["deliveredOffsets"] = delivered.OrderBy(o => o).ToList(),
+                ["held"] = heldList.Count,
+                ["expired"] = view.Expired.Count, ["deliveries"] = deliveries,
+            };
+            // WHICH MAILBOX, when that is not the same question as which window
+            // (ADR-0018 d3). `sessionId` names the window that did the work;
+            // `instance` names the cursor the work moved. They differ only for a
+            // NAMED registration, and the column is written only then — so every
+            // line a pre-ADR-0018 reader has ever seen keeps its exact shape,
+            // and a reader that cares can tell one durable mailbox's advances
+            // from another's without inferring anything from the session.
+            //
+            // This matters before the canvas learns instances (`canvas-instances`):
+            // two windows sharing one `--as` are ONE cursor with one counter, and
+            // a reader keying on `sessionId` alone would model two, then flag
+            // every second advance as out-of-sequence.
+            if (view.Named) advanceData["instance"] = view.Session!;
+
             Log.Debug("mail", "mail.cursorAdvance", new LogFields
             {
-                SessionId = view.Session,
-                Data = new Dictionary<string, object>
-                {
-                    ["role"] = view.Role, ["offset"] = view.Frontier,
-                    ["delivered"] = delivered.Count,
-                    ["deliveredOffsets"] = delivered.OrderBy(o => o).ToList(),
-                    ["held"] = heldList.Count,
-                    ["expired"] = view.Expired.Count, ["deliveries"] = deliveries,
-                },
+                SessionId = view.HookSession,
+                Data = advanceData,
             });
             return new MailCursorWrite.Written(cursor, path);
         }

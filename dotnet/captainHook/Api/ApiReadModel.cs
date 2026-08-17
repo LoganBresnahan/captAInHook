@@ -301,6 +301,19 @@ public sealed class ApiReadModel
         p.Offset, p.Envelope.Id, Camel(p.Envelope.Priority.ToString()), p.Envelope.TtlDeliveries,
         p.SeenAt, p.SeenAt is { } seen ? deliveries - seen + 1 : 0);
 
+    // KNOWN LIMIT, ADR-0018 d3: `c.Session` is a CURSOR KEY, which since
+    // `instance-registration` is the `--as` name when a registration has one.
+    // A named mailbox therefore appears here as a session that no window is
+    // ever called, and its age is always null (no dispatch is attributed to a
+    // name). Nothing in the SNAPSHOT can tell the two apart — the file name is
+    // just the key, and learning which keys are names would mean reading
+    // `handlers.json` from a port that deliberately reads only the mail dir.
+    // The live trail CAN tell (`mail.cursorAdvance` carries `instance` exactly
+    // when the two differ), so the picture is recoverable from the stream;
+    // making the snapshot say it is `canvas-instances`' decision to make, with
+    // its sub-lanes. Left as an honest gap rather than papered over with a
+    // heuristic that would guess a mailbox's kind from its name.
+    //
     // Presence = cursor files ∪ recently-dispatched sessions (ADR-0016 d14).
     // Both halves are INFERENCE: the first says "this session was delivered to
     // once", the second "this daemon served a hook of its N ms ago". Neither is

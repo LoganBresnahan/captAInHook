@@ -36,7 +36,7 @@ static class DigestFixtures
         IReadOnlyList<PendingMail> pending,
         IReadOnlyList<PendingMail>? expired = null,
         long deliveries = 0, string role = "main") =>
-        new(role, "s-1", Gen: 1, Head: null, Offset: 0, Frontier: 0, deliveries,
+        new(role, "s-1", HookSession: "s-1", Gen: 1, Head: null, Offset: 0, Frontier: 0, deliveries,
             LastDeliveredId: null, Reanchored: false, ReanchorReason: null,
             pending, expired ?? [], SkippedMalformed: 0);
 
@@ -1430,5 +1430,185 @@ public class MailDigestDaemonSmokeTests : IDisposable
 
         stop.Cancel();
         Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));
+    }
+}
+
+/// ADR-0018 d3 (roadmap item 23, slice `instance-registration`) — `mail digest
+/// --as <instance>`: the cursor keys on the INSTANCE while the trail keeps
+/// naming the WINDOW. The whole slice is that one split, so these pin both
+/// halves of it and the byte-identity of everything that predates it.
+public class MailInstanceRegistrationTests
+{
+    private static (int Exit, string Out, string Err) RunArgs(string dir, string stdin, string[] argv)
+    {
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var exit = MailDigest.Run(argv, new StringReader(stdin), stdout, stderr,
+            mailDir: dir, harnessDir: NoHarnessDir());
+        return (exit, stdout.ToString(), stderr.ToString());
+    }
+
+    private static void Send(MailStoreTempDir tmp, MailEnvelope e) =>
+        Assert.IsType<MailAppend.Appended>(tmp.Store().Append(e));
+
+    private static string[] CursorFiles(MailStoreTempDir tmp) =>
+        [.. Directory.GetFiles(tmp.Dir, "cursor.*.json")
+            .Select(Path.GetFileName).Select(f => f!).OrderBy(f => f, StringComparer.Ordinal)];
+
+    // ---- the flag ----------------------------------------------------------
+
+    [Fact]
+    public void As_NamesTheInstance_AndTheCursorKeyFallsBackToTheSession()
+    {
+        var named = MailDigest.TryParseArgs(["--role", "main", "--as", "laptop-a"], out _)!;
+        Assert.Equal("laptop-a", named.Instance);
+        Assert.Equal("laptop-a", named.CursorKey("s-1"));
+        // The name is the mailbox: it does not move when the window does.
+        Assert.Equal("laptop-a", named.CursorKey(null));
+
+        var unnamed = MailDigest.TryParseArgs(["--role", "main"], out _)!;
+        Assert.Null(unnamed.Instance);
+        Assert.Equal("s-1", unnamed.CursorKey("s-1"));
+        Assert.Null(unnamed.CursorKey(null));
+    }
+
+    [Theory]
+    [InlineData("--role", "Main")]
+    [InlineData("--role", "team_a")]
+    [InlineData("--as", "Laptop-A")]
+    [InlineData("--as", "laptop a")]
+    [InlineData("--as", "a@b")]
+    public void UngrammaticalRegistration_IsRefusedAtParse(string flag, string value)
+    {
+        // ONE grammar for both halves of an address (d2), checked against the
+        // envelope parser's own predicate. A registration spelled this way
+        // could never be addressed by any sender — it would read nothing,
+        // forever, silently. Loud at dispatch instead.
+        string[] argv = flag == "--role" ? ["--role", value] : ["--role", "main", "--as", value];
+
+        Assert.Null(MailDigest.TryParseArgs(argv, out var errors));
+        Assert.Contains(errors, e => e.Contains("[a-z0-9][a-z0-9-]*"));
+    }
+
+    // ---- the cursor key ----------------------------------------------------
+
+    [Fact]
+    public void NamedRegistration_ReadsTheInstancesCursor_NotTheWindows()
+    {
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        RunArgs(tmp.Dir, DigestFixtures.Request(sessionId: "s-77"),
+            ["--role", "main", "--as", "laptop-a"]);
+
+        // ONE cursor, named for the mailbox rather than the window that served
+        // it — which is the whole point: the window is gone tomorrow.
+        Assert.Equal(["cursor.main.laptop-a.json"], CursorFiles(tmp));
+    }
+
+    [Fact]
+    public void UnnamedRegistration_IsByteIdenticalToBeforeThisSlice()
+    {
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        RunArgs(tmp.Dir, DigestFixtures.Request(sessionId: "s-77"), ["--role", "main"]);
+
+        Assert.Equal(["cursor.main.s-77.json"], CursorFiles(tmp));
+    }
+
+    [Fact]
+    public void TwoWindowsUnderOneName_ShareOneCursor_AndTheFirstPickupConsumes()
+    {
+        // The correct meaning of "one agent" as opposed to "one window" (d3).
+        // No new concurrency machinery: Advance's per-cursor flock already
+        // decides who wins, and the loser simply finds nothing pending.
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        var first = RunArgs(tmp.Dir, DigestFixtures.Request(dispatchId: "d-1", sessionId: "s-1"),
+            ["--role", "main", "--as", "ci"]);
+        var second = RunArgs(tmp.Dir, DigestFixtures.Request(dispatchId: "d-2", sessionId: "s-2"),
+            ["--role", "main", "--as", "ci"]);
+
+        Assert.Equal(["cursor.main.ci.json"], CursorFiles(tmp));
+        Assert.Contains("m-1", first.Out);
+        // The second window is a different SESSION and the same MAILBOX, so the
+        // mail is already spent — not redelivered as it would be to a second
+        // unnamed window.
+        Assert.DoesNotContain("m-1", second.Out);
+    }
+
+    [Fact]
+    public void TwoUNNAMEDWindows_StillEachGetIt_TheBroadcastCaseIsUnchanged()
+    {
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        var first = RunArgs(tmp.Dir, DigestFixtures.Request(dispatchId: "d-1", sessionId: "s-1"), ["--role", "main"]);
+        var second = RunArgs(tmp.Dir, DigestFixtures.Request(dispatchId: "d-2", sessionId: "s-2"), ["--role", "main"]);
+
+        Assert.Equal(["cursor.main.s-1.json", "cursor.main.s-2.json"], CursorFiles(tmp));
+        Assert.Contains("m-1", first.Out);
+        Assert.Contains("m-1", second.Out);
+    }
+
+    // ---- the split, on the trail -------------------------------------------
+
+    [Fact]
+    public void Advance_NamesTheWindowInSessionId_AndTheMailboxInInstance()
+    {
+        // THE SHARP EDGE of this slice. `sessionId` answers "who moved it" and
+        // `instance` answers "which mailbox moved" — two questions that were
+        // one question until a registration could be named, and a trail that
+        // collapsed them would leave the canvas unable to tell one durable
+        // mailbox's advances from another's.
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        RunArgs(tmp.Dir, DigestFixtures.Request(sessionId: "s-77"), ["--role", "main", "--as", "laptop-a"]);
+
+        var advance = Assert.Single(log.Events.Where(e => e.Evt == "mail.cursorAdvance"));
+        var json = JsonDocument.Parse(advance.ToJson()).RootElement;
+        Assert.Equal("s-77", json.GetProperty("sessionId").GetString());
+        Assert.Equal("laptop-a", json.GetProperty("data").GetProperty("instance").GetString());
+    }
+
+    [Fact]
+    public void Advance_ForAnUnnamedReader_HasNoInstanceColumnAtAll()
+    {
+        // Byte-identity for every reader that predates ADR-0018: the column is
+        // written only when it would say something the session does not. (The
+        // reducer's checked-in golden corpus is the other half of this proof —
+        // it did not have to be regenerated for this slice.)
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        RunArgs(tmp.Dir, DigestFixtures.Request(sessionId: "s-77"), ["--role", "main"]);
+
+        var advance = Assert.Single(log.Events.Where(e => e.Evt == "mail.cursorAdvance"));
+        var data = JsonDocument.Parse(advance.ToJson()).RootElement.GetProperty("data");
+        Assert.False(data.TryGetProperty("instance", out _));
+    }
+
+    [Fact]
+    public void ASessionlessWindow_UnderAName_StillNamesTheMailbox()
+    {
+        // A write-only/hookless member has no session to log, but its mailbox
+        // is still named — so `instance` is exactly the column that keeps this
+        // advance attributable at all.
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, DigestFixtures.Env("m-1"));
+
+        RunArgs(tmp.Dir, DigestFixtures.Request(sessionId: null), ["--role", "main", "--as", "cron"]);
+
+        var advance = Assert.Single(log.Events.Where(e => e.Evt == "mail.cursorAdvance"));
+        var json = JsonDocument.Parse(advance.ToJson()).RootElement;
+        Assert.False(json.TryGetProperty("sessionId", out _));
+        Assert.Equal("cron", json.GetProperty("data").GetProperty("instance").GetString());
+        Assert.Equal(["cursor.main.cron.json"], CursorFiles(tmp));
     }
 }

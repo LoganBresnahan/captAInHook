@@ -249,6 +249,44 @@ with**, so members address *peers* rather than a shared "everybody" role —
 nothing in the digest filters by sender, so a shared role would hand every
 member its own traffic back.
 
+### A mailbox is named by its registration (ADR-0018 d3)
+
+`mail digest --role R --as I` names the mailbox a registration reads. **The
+cursor key becomes role × instance**, where instance is `--as` when given and
+the hook's session id when not — so an unnamed reader is exactly the reader
+ADR-0016 built (one ephemeral cursor per window, `cursor.<role>.<session>.json`
+unchanged), and a named one has a durable mailbox that outlives every window
+that serves it. Two windows registered under one name **share one cursor**:
+first pickup consumes, the other sees nothing. That is the correct meaning of
+"one agent" as opposed to "one window", and it needed no new concurrency —
+`Advance`'s per-cursor flock already decides who wins.
+
+Both halves of an address obey the one grammar, checked at registration against
+the same predicate the envelope parser uses. A `--role` or `--as` that no
+sender could address would be a mailbox nothing can ever reach; refusing it at
+dispatch is loud, where letting it register is silent forever.
+
+**The split that makes this work: the cursor keys on the instance, the trail
+keeps the window.** `sessionId` on every `mail.*` event still answers *who
+moved it*; a new `instance` column answers *which mailbox moved*, and is
+written **only when the two differ** — so every line a pre-ADR-0018 reader has
+seen keeps its exact shape (the reducer's checked-in golden corpus did not have
+to be regenerated for this slice, which is the proof). Collapsing them would
+cost one or the other: key on the session and a named mailbox stops being
+durable; log the instance and two windows sharing a name become
+indistinguishable in the trail. The count on a status bar follows the same key
+— `mail status` reads `--as` through the same registration parser, because
+counting the window's own cursor for a named registration would report a
+mailbox nobody reads.
+
+*Known gap, deliberate:* the read-only SNAPSHOT cannot tell an instance-keyed
+cursor from a session-keyed one — the file name is just the key, and learning
+which keys are names would mean reading `handlers.json` from a port that reads
+only the mail dir. The live trail can (that `instance` column), so the picture
+is recoverable from the stream; making the snapshot say it belongs to
+`canvas-instances` and its sub-lanes. Until then a named mailbox shows up in
+the presence list as a session no window is called, with no dispatch age.
+
 ### The address grammar (ADR-0018 d2)
 
 `to` used to accept any non-blank string. It now parses as **`role`** or
@@ -477,6 +515,7 @@ prose, not ground truth.
 |---|---|
 | `MailEnvelope`, `MailSender`, `MailKind`, `MailPriority`, `TryParse`/`TryParseLine` | `dotnet/captainHook/Mail/MailEnvelope.cs` |
 | unicast has NO TTL (ADR-0018 d5, slice 2) — `ttlDeliveries` REFUSED on a `role@instance` address (not ignored), `MailEnvelope.TtlDeliveries` nullable, omitted from the stored line and from `mail.append`, null through DTO → reducer → canvas; expiry simply does not run, so a held unicast is never spent. No new write-side guard was needed: `Append` already re-parses what it renders | `MailEnvelope.TryParse` + `HasTtl`; `MailStore.Render`/`Append`; `MailCursors.Pending`'s expiry guard (`MailCursor.cs`); `MailEnvelopeDto`/`MailPendingDto` (`Api/ApiDtos.cs`); `isExpired` + `onAppend`'s ttl-applies rule (`web/src/mail.ts`); the three renderings in `web/src/MailPanel.tsx` (mark reads `n held`, the card reads `none — unicast`, the standing line says unicast mail does not expire). Pinned by the parse table's d5 block, `MailStoreFormatTests.Render_UnicastLine_ReParsesCleanWithNoTtl` + `Append_RefusesAUnicastEnvelopeCarryingATtl` (the adversarial case: a contradiction constructible in process, refused at the append), and `mail.skeptic.test.ts` § 9 |
+| INSTANCE registration (ADR-0018 d3, slice 3) — `mail digest --as <instance>`; cursor key = role × instance (`--as` ?? session id) so the unnamed path is byte-identical; `--role`/`--as` both grammar-checked at registration; the cursor keys on the instance while the trail keeps the window (`sessionId` = who moved it, a new `instance` column = which mailbox, written only when they differ); `mail status` follows the same key and names a qualified line by its full address | `MailDigestOptions.Instance`/`CursorKey` + `--as` in `MailDigest.TryParseArgs` (`Mail/MailDigest.cs`); `MailPendingView.HookSession`/`Named` and the two `MailCursors.Pending` overloads — the 2-arg one is the SAFE one on purpose (`Mail/MailCursor.cs`); `MailStatus.ReadableMailboxes`/`MailboxOf` (`Mail/MailStatus.cs`). Pinned by `MailInstanceRegistrationTests` (13) and four `MailStatusTests` cases; byte-identity proven by the reducer's golden corpus needing no regeneration |
 | the ADDRESS grammar (ADR-0018 d2, slice 1) — `to` parses as `role` or `role@instance`, `[a-z0-9][a-z0-9-]*` per half, one `@`, both halves non-empty; refused not guessed; lowercase pinned rather than folded; ASCII by hand (no homoglyph mailboxes); applied to `to` and nothing else. Routing on the instance is NOT built here | `MailAddress` (`TryParse`, `IsRole`, `Role`, `Instance`, `IsUnicast`, `GrammarHelp`) in `dotnet/captainHook/Mail/MailAddress.cs`, called from `MailEnvelope.TryParse`; `MailAddressTests` (17) + the address block in `MailEnvelopeTests` (30: the legacy-role corpus, unicast accept, 17 refusals, the blank-vs-ungrammatical split, and the message that teaches the grammar) |
 | `MailStore` (`Append`, `Read`, `VerifyChain`, `HeadHash`, `Render`, `HashOf`, `ResolveDir`, `TryLock`), `Genesis`, `MaxLineBytes` | `dotnet/captainHook/Mail/MailStore.cs` |
 | `MailAppend` (Appended/Failed), `MailLine`, `MailChainFault`, `MailChainFaultKind` | `dotnet/captainHook/Mail/MailStore.cs` |
@@ -500,7 +539,7 @@ prose, not ground truth.
 | store: chain, flock, torn tails, write gate, the unicast round trip (49) | `dotnet/captainHookTests/MailStoreTests.cs` |
 | cursor: frontier/held, TTL, re-anchor (32) | `dotnet/captainHookTests/MailCursorTests.cs` |
 | exactly-once races, chain-changed guard, drain soak (15) | `dotnet/captainHookTests/MailCursorEdgeTests.cs` |
-| planner matrix, golden renders, verb, ledger, daemon + Stop smokes (70) | `dotnet/captainHookTests/MailDigestTests.cs` |
+| planner matrix, golden renders, verb, ledger, daemon + Stop smokes, instance registration (83) | `dotnet/captainHookTests/MailDigestTests.cs` |
 | `mail send` verb end to end (9) | `dotnet/captainHookTests/MailSendTests.cs` |
 | reentrancy guard proven by stub `claude`; two-role swarm smoke (5) | `dotnet/captainHookTests/MailDogfoodTests.cs` |
 | field report — first members live | `doc/dogfood/2026-08-14-first-bus-members.md` |

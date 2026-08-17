@@ -58,20 +58,24 @@ public static class MailStatus
 
         var (session, cwd) = ReadCaller(stdin);
 
-        var roles = ReadableRoles(cwd, session, handlersPath, policyPath);
-        if (roles.Count == 0) return 0;
+        var mailboxes = ReadableMailboxes(cwd, session, handlersPath, policyPath);
+        if (mailboxes.Count == 0) return 0;
 
-        // Named only when the window may read more than one role: the single-role
-        // case is every human window, and a bare count is what fits a status bar.
-        // A swarm window reading two roles cannot be told "2 · 1 urgent" about
+        // Named only when the window may read more than one mailbox: the single
+        // case is every human window, and a bare count is what fits a status
+        // bar. A swarm window reading two cannot be told "2 · 1 urgent" about
         // which, so there the name is not decoration.
-        var qualify = roles.Count > 1;
+        var qualify = mailboxes.Count > 1;
 
         var cursors = new MailCursors(new MailStore(MailStore.ResolveDir(mailDir)));
-        foreach (var role in roles)
+        foreach (var box in mailboxes)
         {
-            var view = cursors.Pending(role, session);
-            var line = Line(role, view, qualify);
+            // The count follows the CURSOR, and `--as` is what decides which
+            // cursor this window reads (ADR-0018 d3). Counting the session's own
+            // cursor for a named registration would report a mailbox nobody
+            // reads — worse than silence, because it looks like an answer.
+            var view = cursors.Pending(box.Role, box.Instance ?? session);
+            var line = Line(box.ToString(), view, qualify);
             if (line is not null) stdout.WriteLine(line);
         }
         return 0;
@@ -83,13 +87,16 @@ public static class MailStatus
     /// ask a human to go read something no digest will ever hand over. Held mail
     /// IS counted — it has not been delivered yet, which is exactly the state
     /// this line exists to surface.
-    public static string? Line(string role, MailPendingView view, bool qualify)
+    /// `address` is what to CALL this mailbox when the line names one — a bare
+    /// role for an unnamed reader, `role@instance` for a named one (ADR-0018
+    /// d3), which is the same spelling a sender would address it by.
+    public static string? Line(string address, MailPendingView view, bool qualify)
     {
         var total = view.Pending.Count;
         if (total == 0) return null;
         var urgent = view.Pending.Count(p => p.Envelope.Priority == MailPriority.Urgent);
 
-        var head = qualify ? $"{Glyph} {role} {total}" : $"{Glyph} {total}";
+        var head = qualify ? $"{Glyph} {address} {total}" : $"{Glyph} {total}";
         return urgent > 0 ? $"{head} · {urgent} urgent" : head;
     }
 
@@ -128,7 +135,7 @@ public static class MailStatus
     /// The roles this caller may read, sorted, deduped. A role served by two
     /// registrations (an ambient seam and an urgent one — the normal shape)
     /// appears once: the cursor is per role × session, not per registration.
-    private static IReadOnlyList<string> ReadableRoles(
+    private static IReadOnlyList<MailAddress> ReadableMailboxes(
         string? cwd, string? session, string? handlersPath, string? policyPath)
     {
         if (ExecHandlersFile.Resolve(ExecHandlersFile.ResolvePath(handlersPath))
@@ -141,10 +148,13 @@ public static class MailStatus
         // deliver it, including when the answer is "none".
         var policy = PolicyResolution.Resolve(DispatchPolicy.ResolvePath(policyPath));
 
-        var roles = new SortedSet<string>(StringComparer.Ordinal);
+        // Keyed by the ADDRESS, so a role registered at two seams stays one
+        // line (one cursor, one count) while the same role under two different
+        // `--as` names is honestly two mailboxes.
+        var boxes = new SortedDictionary<string, MailAddress>(StringComparer.Ordinal);
         foreach (var entry in loaded.Entries)
         {
-            if (RoleOf(entry) is not { } role) continue;
+            if (MailboxOf(entry) is not { } box) continue;
             // Registered on several events, delivered at whichever comes first:
             // surviving policy for ANY of them means this window will be handed
             // this role's mail, so the count belongs on its status bar.
@@ -153,18 +163,22 @@ public static class MailStatus
                 var outcome = policy.Evaluate(ev, cwd, session);
                 return outcome.Work && !outcome.ExcludedHandlers.Contains(entry.Name);
             });
-            if (reachable) roles.Add(role);
+            if (reachable) boxes[box.ToString()] = box;
         }
-        return [.. roles];
+        return [.. boxes.Values];
     }
 
-    /// The role a registration reads for, or null if it is not a digest at all.
-    /// The gate is the real verb's own argument parser — a registration this
-    /// returns a role for is one `MailDigest.Run` would accept.
-    private static string? RoleOf(ExecEntry entry)
+    /// The MAILBOX a registration reads — its role, and the instance when
+    /// `--as` names one — or null if it is not a digest at all. The gate is the
+    /// real verb's own argument parser, so a registration this returns a
+    /// mailbox for is one `MailDigest.Run` would accept, ADR-0018's grammar
+    /// check on `--role`/`--as` included.
+    private static MailAddress? MailboxOf(ExecEntry entry)
     {
         if (entry.Args.Count < 2 || entry.Args[0] != "mail" || entry.Args[1] != "digest") return null;
-        return MailDigest.TryParseArgs([.. entry.Args.Skip(2)], out _)?.Role;
+        return MailDigest.TryParseArgs([.. entry.Args.Skip(2)], out _) is { } opts
+            ? new MailAddress(opts.Role, opts.Instance)
+            : null;
     }
 
     private static string? Str(JsonElement o, string name)

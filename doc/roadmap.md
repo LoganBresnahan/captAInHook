@@ -1558,6 +1558,43 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `instance-registration` (2026-08-17; phase 2 — `mail digest
+  --as <instance>` names the mailbox a registration reads, and the cursor key
+  becomes role × instance (`--as` ?? session id) through the existing
+  `CursorPath`. An unnamed reader is EXACTLY the reader ADR-0016 built —
+  proven, not asserted: the reducer's checked-in golden corpus did not have to
+  be regenerated for this slice. A named one is durable, and two windows under
+  one name share one cursor (first pickup consumes), which needed no new
+  concurrency because `Advance`'s per-cursor flock already decides who wins.
+  Both halves of an address are grammar-checked AT REGISTRATION against
+  `MailAddress.IsRole` — the envelope parser's own predicate, never a second
+  spelling — since a `--role`/`--as` no sender could address is a mailbox that
+  reads nothing forever, silently. **The sharp edge, and what it cost:** the
+  cursor keys on the instance while the trail keeps the window, so
+  `MailPendingView` grows `HookSession` beside `Session` (which IS the cursor
+  key); `sessionId` still answers *who moved it* and a new `instance` column
+  answers *which mailbox*, written ONLY when the two differ. Collapsing them
+  would cost one or the other — key on the session and a named mailbox stops
+  being durable; log the instance and two windows sharing a name become
+  indistinguishable. `MailCursors.Pending` became two OVERLOADS rather than one
+  optional parameter, and the golden corpus is why: a defaulted
+  `hookSession = null` reads as harmless and silently unlinked every trail line
+  from its window, which the golden caught on the first run — so the SHORT call
+  is the safe one and the split has to be spelled out to be taken.
+  `mail status` had to follow the same key in the same commit (the phase-4
+  slice `mail-status-per-instance`, folded in as the plan allows) or a named
+  window's bar would count a mailbox nobody reads; a qualified line now names
+  its full address, the spelling a sender would use. **One gap left honest:**
+  the read-only snapshot cannot tell an instance-keyed cursor from a
+  session-keyed one — the file name is just the key, and learning otherwise
+  means reading `handlers.json` from a port that deliberately reads only the
+  mail dir — so a named mailbox shows in presence as a session no window is
+  called. The live trail CAN tell (that `instance` column), so the picture is
+  recoverable from the stream; making the SNAPSHOT say it belongs to
+  `canvas-instances` with its sub-lanes, rather than to a heuristic here that
+  would guess a mailbox's kind from its name. 17 tests
+  (`MailInstanceRegistrationTests` 13, four `MailStatusTests` cases); suite
+  1057 → 1074 green twice.)
   Slices landed: `unicast-refuses-ttl` (2026-08-17; phase 2 — taken
   immediately after slice 1 rather than in parallel with its phase-mates,
   because slice 1 opened a window worth closing: `MailStore.Serialize` writes

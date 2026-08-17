@@ -302,7 +302,7 @@ public class MailStatusTests
         var spent = new List<PendingMail>();
         for (var i = 0; i < expired; i++, offset += 100)
             spent.Add(new PendingMail(offset, DigestFixtures.Env($"e-{i}"), 1));
-        return new MailPendingView(role, session, 1, "h0", 0, offset, 1, null, false, null, items, spent, 0);
+        return new MailPendingView(role, session, session, 1, "h0", 0, offset, 1, null, false, null, items, spent, 0);
     }
 
     private static object Digest(string name, string role, params string[] events) => new
@@ -314,6 +314,80 @@ public class MailStatusTests
         mode = "oneshot",
         failMode = "open",
     };
+
+    /// A registration that names its mailbox (ADR-0018 d3).
+    private static object NamedDigest(string name, string role, string instance) => new
+    {
+        name,
+        command = "/usr/bin/captainHook",
+        args = new[] { "mail", "digest", "--role", role, "--as", instance, "--seam", "ambient" },
+        events = new[] { "user-prompt-submit" },
+        mode = "oneshot",
+        failMode = "open",
+    };
+
+    // ---- instance addressing (ADR-0018 d3) ---------------------------------
+
+    [Fact]
+    public void NamedRegistration_CountsTheInstancesMailbox_NotTheWindows()
+    {
+        // `--as` decides which cursor this window reads, so the count has to
+        // follow the same key. Counting the session's own cursor would report a
+        // mailbox nobody reads — worse than silence, because it looks like an
+        // answer. (Here the instance cursor has consumed the mail and the
+        // session-keyed cursor does not exist: the wrong key would say "1".)
+        using var w = new StatusWorld();
+        w.Register(NamedDigest("mail-main", "main", "laptop-a"));
+        w.Policy();
+        w.Send("m-1", "main");
+        w.Digest("main", session: "s-77", instance: "laptop-a");
+
+        Assert.Empty(w.Run(session: "s-77"));
+    }
+
+    [Fact]
+    public void NamedRegistration_ReportsWhatItsOwnMailboxStillHolds()
+    {
+        using var w = new StatusWorld();
+        w.Register(NamedDigest("mail-main", "main", "laptop-a"));
+        w.Policy();
+        w.Send("m-1", "main");
+
+        // No digest has run: the named mailbox is at first contact and the mail
+        // is pending FOR IT, whichever window happens to be asking.
+        Assert.Equal(["📬 1"], w.Run(session: "s-77"));
+        Assert.Equal(["📬 1"], w.Run(session: "some-other-window"));
+    }
+
+    [Fact]
+    public void TwoMailboxes_AreNamedByTheirFullAddress()
+    {
+        // The qualifying rule is unchanged — name them only when a bare count
+        // could not say which — but the NAME is now the address a sender would
+        // use, which is the only spelling that distinguishes two mailboxes of
+        // one role.
+        using var w = new StatusWorld();
+        w.Register(Digest("mail-main", "main"), NamedDigest("mail-ci", "main", "ci"));
+        w.Policy();
+        w.Send("m-1", "main");
+
+        Assert.Equal(["📬 main 1", "📬 main@ci 1"], w.Run(session: "s-77"));
+    }
+
+    [Fact]
+    public void AnUngrammaticalRegistration_ContributesNoMailbox()
+    {
+        // Recognition is the real parser (the slice-1 rule, extended): a
+        // registration the verb would refuse contributes nothing, so a typo'd
+        // `--as` produces a silent bar rather than a count for mail that will
+        // never be handed over.
+        using var w = new StatusWorld();
+        w.Register(NamedDigest("mail-main", "main", "Laptop-A"));
+        w.Policy();
+        w.Send("m-1", "main");
+
+        Assert.Empty(w.Run(session: "s-77"));
+    }
 
     /// A world with its own HOME-shaped tree: a mail store, a handlers.json and
     /// a dispatch.json, all passed explicitly. Nothing here can reach the
@@ -341,11 +415,14 @@ public class MailStatusTests
                 MailFixtures.Envelope(id: id, to: to, priority: priority));
 
         /// The real digest verb, so a cursor moves exactly as it does in life.
-        public void Digest(string role, string? session)
+        public void Digest(string role, string? session, string? instance = null)
         {
             var stdout = new StringWriter();
             var stderr = new StringWriter();
-            var exit = MailDigest.Run(["--role", role, "--seam", "ambient"],
+            string[] argv = instance is null
+                ? ["--role", role, "--seam", "ambient"]
+                : ["--role", role, "--as", instance, "--seam", "ambient"];
+            var exit = MailDigest.Run(argv,
                 new StringReader(DigestFixtures.Request("d-1", "UserPromptSubmit", session)),
                 stdout, stderr, mailDir: MailDir, harnessDir: TestUtil.NoHarnessDir());
             Assert.True(exit == 0, $"digest exited {exit}: {stderr}");
