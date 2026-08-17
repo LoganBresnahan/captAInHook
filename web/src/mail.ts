@@ -68,6 +68,10 @@ export type MailEnvelopeView = {
   topic: string;
   priority: string;
   inReplyTo: string | null;
+  /** Where a forward came from (ADR-0018 d8) — which envelope, and whose
+   * mailbox it was stranded in. Snapshot-only, like `body` and `ts`: the trail
+   * carries provenance, not the envelope's own references. */
+  forwardedFrom: { id: string; address: string } | null;
   /** null = UNICAST, which has no TTL at all (ADR-0018 d5) — not unknown, not
    * zero. Nothing counts down for it; it is held until its one addressee
    * takes it. */
@@ -353,7 +357,8 @@ function lineFromDto(l: MailLineDto): MailLedgerLine {
       id: e.id, ts: e.ts,
       from: { agent: e.from.agent, harness: e.from.harness, session: e.from.session },
       to: e.to, kind: e.kind, topic: e.topic, priority: e.priority,
-      inReplyTo: e.inReplyTo, ttlDeliveries: e.ttlDeliveries, body: e.body, prev: e.prev,
+      inReplyTo: e.inReplyTo, forwardedFrom: e.forwardedFrom,
+      ttlDeliveries: e.ttlDeliveries, body: e.body, prev: e.prev,
     },
     errors: [...l.errors],
     source: "snapshot",
@@ -569,7 +574,8 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
   const line: MailLedgerLine = {
     offset, bytes, terminated: true, hash: null,
     envelope: { id, ts: null, from: { agent, harness, session: fromSession }, to, kind, topic, priority,
-      inReplyTo: null, ttlDeliveries: ttlApplies ? ttl : null, body: null, prev: null },
+      inReplyTo: null, forwardedFrom: null,
+      ttlDeliveries: ttlApplies ? ttl : null, body: null, prev: null },
     errors: [], source: "trail",
   };
 

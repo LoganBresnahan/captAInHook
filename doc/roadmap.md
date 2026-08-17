@@ -1558,6 +1558,24 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `forwarded-from-provenance` (2026-08-17; phase 2, the
+  mechanical one — `forwardedFrom {id, address}` on the envelope, cloned along
+  the `inReplyTo` path across parser → store → DTO → schema → `api.gen.ts` →
+  reducer view. Two calls the clone did NOT make blindly: the id is
+  presence-only as d8 requires (the ledger rotates, and a forward that stopped
+  parsing the moment its original aged out would destroy the provenance it
+  exists to keep) but the ADDRESS is grammar-checked, because the two halves
+  are different kinds of reference and an address no sender could write names
+  no mailbox that ever existed; and the record carries the address BESIDE the
+  id because the id alone cannot say whose mailbox the mail was stranded in —
+  the original's `to` may be a bare role a dozen mailboxes hold, which is
+  exactly the fact a forward is for. Object-shaped and strictly walked like
+  `from`, since a half-read provenance link would name an origin nobody can
+  check. Nothing reads it yet: `reaper-payloads` is what writes one. The
+  reducer's golden corpus regenerated to 62 pure `"forwardedFrom": null`
+  insertions and NOTHING else, which is as good a mechanical-clone proof as
+  this repo can produce. 8 tests (six parse cases, two store round trips);
+  suite 1074 → 1089 green twice, web 253 unchanged.)
   Slices landed: `instance-registration` (2026-08-17; phase 2 — `mail digest
   --as <instance>` names the mailbox a registration reads, and the cursor key
   becomes role × instance (`--as` ?? session id) through the existing

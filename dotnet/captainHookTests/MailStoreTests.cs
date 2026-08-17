@@ -52,6 +52,7 @@ internal static class MailFixtures
         MailPriority priority = MailPriority.Ambient,
         string? session = "s-77",
         string? inReplyTo = null,
+        MailForwardedFrom? forwardedFrom = null,
         int? ttl = 3) =>
         new(
             Id: id,
@@ -62,6 +63,7 @@ internal static class MailFixtures
             Topic: "build",
             Priority: priority,
             InReplyTo: inReplyTo,
+            ForwardedFrom: forwardedFrom,
             TtlDeliveries: ttl,
             Body: body,
             Prev: null);
@@ -134,6 +136,37 @@ public class MailStoreFormatTests
         var line = MailStore.Render(MailFixtures.Envelope(), MailStore.Genesis);
         Assert.Contains("\"priority\":\"ambient\"", line);
         Assert.Contains("\"ttlDeliveries\":3", line);
+    }
+
+    /// ADR-0018 d8, the second envelope-to-envelope reference: written as the
+    /// sender's object, field for field, beside `inReplyTo` — the store never
+    /// reshapes provenance — and omitted entirely when absent.
+    [Fact]
+    public void Render_WritesForwardedFromAsAnObject_AndOmitsItWhenAbsent()
+    {
+        var forwarded = MailStore.Render(
+            MailFixtures.Envelope(forwardedFrom: new MailForwardedFrom("m-00", "maintainer@laptop-a")),
+            MailStore.Genesis);
+
+        Assert.Contains("""
+            "forwardedFrom":{"id":"m-00","address":"maintainer@laptop-a"}
+            """.Trim(), forwarded);
+        Assert.DoesNotContain("forwardedFrom", MailStore.Render(MailFixtures.Envelope(), MailStore.Genesis));
+    }
+
+    [Fact]
+    public void Render_ForwardedLine_ReParsesClean()
+    {
+        // The same round trip every field on this chain owes: what the store
+        // writes, the strict parser reads back — value-equal, nested record
+        // included.
+        var original = MailFixtures.Envelope(
+            forwardedFrom: new MailForwardedFrom("m-00", "maintainer@laptop-a"), inReplyTo: "m-99");
+        var line = MailStore.Render(original, MailStore.Genesis);
+
+        var reparsed = MailEnvelope.TryParseLine(line, out var errors);
+        Assert.True(reparsed is not null, $"the store wrote a line it cannot read: {string.Join("; ", errors)}");
+        Assert.Equal(original with { Prev = MailStore.Genesis }, reparsed);
     }
 
     /// ADR-0018 d5, the WRITE side: a unicast envelope has no ttl, so the field

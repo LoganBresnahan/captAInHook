@@ -177,9 +177,16 @@ public sealed record MailLineDto(
 /// payload-readable and therefore carries provenance only (d14).
 public sealed record MailEnvelopeDto(
     string Id, string Ts, MailSenderDto From, string To, string Kind, string Topic,
-    string Priority, string? InReplyTo, int? TtlDeliveries, string Body, string? Prev);
+    string Priority, string? InReplyTo, MailForwardedFromDto? ForwardedFrom,
+    int? TtlDeliveries, string Body, string? Prev);
 
 public sealed record MailSenderDto(string Agent, string Harness, string? Session);
+
+/// A forward's origin (ADR-0018 d8): which envelope, and whose mailbox it was
+/// stranded in. Present only on an envelope the reaper appended in place of one
+/// it could not deliver; the original stays on the chain and this is the only
+/// link back to it.
+public sealed record MailForwardedFromDto(string Id, string Address);
 
 /// One cursor file's view of the store — `MailCursors.Pending` verbatim, which
 /// is what keeps the drawn mailbox and the delivered mailbox the same thing.

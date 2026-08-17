@@ -429,6 +429,17 @@ public sealed class MailStore(string dir)
             // a future reader whose default has moved.
             w.WriteString("priority", Wire(e.Priority));
             if (e.InReplyTo is not null) w.WriteString("inReplyTo", e.InReplyTo);
+            // The two envelope-to-envelope references sit together (ADR-0018
+            // d8) and both omit when absent. Written as the sender's object,
+            // field for field — the store never reshapes provenance.
+            if (e.ForwardedFrom is { } fwd)
+            {
+                w.WritePropertyName("forwardedFrom");
+                w.WriteStartObject();
+                w.WriteString("id", fwd.Id);
+                w.WriteString("address", fwd.Address);
+                w.WriteEndObject();
+            }
             // A unicast envelope has NO ttl (ADR-0018 d5) and the field is
             // omitted rather than written as 0 or null — omission is this
             // format's spelling of "absent" (`session`, `inReplyTo` above), and

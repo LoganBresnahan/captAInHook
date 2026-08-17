@@ -437,6 +437,72 @@ public class MailEnvelopeParseTests
         Assert.Contains(errors, e => e.Contains("got \"Ops\""));
     }
 
+    // ---- forwardedFrom: the second envelope-to-envelope reference (d8) -----
+
+    [Fact]
+    public void ForwardedFrom_IsParsedAndCarried()
+    {
+        // A forward is a NEW envelope; the original stays on the chain and this
+        // is the only link back to it. The ADDRESS is carried beside the id
+        // because the id alone cannot say whose mailbox the mail was stranded
+        // in — the original's `to` may be a bare role a dozen mailboxes hold.
+        var e = ParseValid(With("""
+            "forwardedFrom": { "id": "m-00", "address": "maintainer@laptop-a" }
+            """.Trim()));
+
+        Assert.Equal("m-00", e.ForwardedFrom!.Id);
+        Assert.Equal("maintainer@laptop-a", e.ForwardedFrom.Address);
+    }
+
+    [Fact]
+    public void ForwardedFrom_IsAbsentOnAnOrdinaryEnvelope()
+    {
+        Assert.Null(ParseValid(AdrEnvelope).ForwardedFrom);
+        // Explicit null is the `inReplyTo` spelling: nothing, not a violation.
+        Assert.Null(ParseValid(With("\"forwardedFrom\": null")).ForwardedFrom);
+    }
+
+    [Fact]
+    public void ForwardedFrom_AcceptsAnIdThisStoreDoesNotHave()
+    {
+        // PRESENCE-ONLY validation (d8): the ledger rotates, and a forward that
+        // stopped parsing the moment its original aged out would destroy the
+        // provenance it exists to preserve. Nothing here resolves the id.
+        var e = ParseValid(With("""
+            "forwardedFrom": { "id": "gone-long-ago", "address": "scribe" }
+            """.Trim()));
+
+        Assert.Equal("gone-long-ago", e.ForwardedFrom!.Id);
+    }
+
+    [Theory]
+    [InlineData("\"forwardedFrom\": \"m-00\"")]                                   // the id alone: which mailbox?
+    [InlineData("\"forwardedFrom\": { \"id\": \"m-00\" }")]                       // no address
+    [InlineData("\"forwardedFrom\": { \"address\": \"scribe\" }")]                // no id
+    [InlineData("\"forwardedFrom\": { \"id\": \"\", \"address\": \"scribe\" }")]  // blank id
+    [InlineData("\"forwardedFrom\": { \"id\": \"m\", \"address\": \"\" }")]
+    [InlineData("\"forwardedFrom\": { \"id\": \"m\", \"address\": \"Scribe\" }")] // the address obeys the grammar
+    [InlineData("\"forwardedFrom\": { \"id\": \"m\", \"address\": \"a@b@c\" }")]
+    [InlineData("\"forwardedFrom\": { \"id\": \"m\", \"address\": \"s\", \"why\": \"x\" }")]  // unknown member
+    [InlineData("\"forwardedFrom\": []")]
+    public void BadForwardedFrom_IsMalformed(string field)
+    {
+        // A half-read provenance link is worse than none: it would name an
+        // origin nobody can check. Same strict walk `from` gets.
+        Assert.Contains(ParseInvalid(With(field)), e => e.Contains("forwardedFrom"));
+    }
+
+    [Fact]
+    public void ForwardedFrom_NamesItsPathInErrors()
+    {
+        Assert.Contains(
+            ParseInvalid(With("\"forwardedFrom\": { \"id\": \"m\", \"addr\": \"s\" }")),
+            e => e.Contains("unknown field 'forwardedFrom.addr'"));
+        Assert.Contains(
+            ParseInvalid(With("\"forwardedFrom\": { \"id\": \"m\", \"address\": \"Scribe\" }")),
+            e => e.Contains("'forwardedFrom.address' must be"));
+    }
+
     // ---- unicast has no TTL (ADR-0018 d5) ----------------------------------
 
     [Theory]

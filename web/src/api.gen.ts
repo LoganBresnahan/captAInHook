@@ -119,6 +119,10 @@ export interface MailLineDto {
     topic: string;
     priority: string;
     inReplyTo: string | null;
+    forwardedFrom: {
+      id: string;
+      address: string;
+    } | null;
     ttlDeliveries: number | null;
     body: string;
     prev: string | null;

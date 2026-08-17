@@ -40,6 +40,24 @@ public enum MailPriority { Ambient, Reconcile, Urgent }
 /// `agent`/`harness` are required — provenance rendering (d10) always names both.
 public sealed record MailSender(string Agent, string Harness, string? Session);
 
+/// Where a forwarded envelope came from (ADR-0018 d8): the id of the original
+/// on the chain, and the address whose mailbox held it.
+///
+/// A forward is a NEW envelope — the reaper appends it to a live address when
+/// a dead mailbox still holds something worth passing on (d6), and the original
+/// stays on the chain untouched. This record is the only link between the two,
+/// which is why it carries the address as well as the id: the id says *which
+/// envelope*, and the address says *whose mailbox it was stranded in* — the
+/// half a reader cannot recover, since the original's `to` may be a bare role
+/// that a dozen mailboxes hold.
+///
+/// The id is validated PRESENCE-ONLY (d8): a reference to an id this store no
+/// longer has still parses, because the ledger may have rotated and a forward
+/// that stopped being readable the moment its original aged out would destroy
+/// the provenance it exists to preserve. The address is grammar-checked, since
+/// an address no sender could write names no mailbox that ever existed.
+public sealed record MailForwardedFrom(string Id, string Address);
+
 /// One mail envelope, v1 (ADR-0016 d2).
 ///
 /// `InReplyTo` is RESERVED AND UNREAD in v1 (d9): the parser accepts and
@@ -61,6 +79,7 @@ public sealed record MailEnvelope(
     string Topic,
     MailPriority Priority,
     string? InReplyTo,
+    MailForwardedFrom? ForwardedFrom,
     int? TtlDeliveries,
     string Body,
     string? Prev)
@@ -87,11 +106,14 @@ public sealed record MailEnvelope(
         new HashSet<string>
         {
             "v", "id", "ts", "from", "to", "kind", "topic",
-            "priority", "inReplyTo", "ttlDeliveries", "body", "prev",
+            "priority", "inReplyTo", "forwardedFrom", "ttlDeliveries", "body", "prev",
         };
 
     private static readonly IReadOnlySet<string> KnownFromFields =
         new HashSet<string> { "agent", "harness", "session" };
+
+    private static readonly IReadOnlySet<string> KnownForwardedFields =
+        new HashSet<string> { "id", "address" };
 
     /// Strict parse of one envelope object: the envelope, or null plus one error
     /// per violation. NEVER throws on bad DATA — a JsonException from malformed
@@ -204,11 +226,14 @@ public sealed record MailEnvelope(
             errs.Add($"'body' must be a string (got {RawText(b)})");
 
         var inReplyTo = Optional(root, "inReplyTo", errs);
+        var forwardedFrom = ParseForwardedFrom(root, errs);
         var prev = Optional(root, "prev", errs);
 
         return errs.Count > 0
             ? null
-            : new MailEnvelope(id!, ts!, from!, to!, kind, topic!, priority, inReplyTo, ttl, body!, prev);
+            : new MailEnvelope(
+                id!, ts!, from!, to!, kind, topic!, priority,
+                inReplyTo, forwardedFrom, ttl, body!, prev);
     }
 
     /// One STORE LINE: the JSONL reader's entry point. Bad bytes (not JSON, or
@@ -232,6 +257,35 @@ public sealed record MailEnvelope(
             errors = new[] { $"not valid JSON: {ex.Message}" };
             return null;
         }
+    }
+
+    /// `forwardedFrom`: optional, and an OBJECT when present — the same strict
+    /// walk `from` gets, because a half-read provenance link is worse than none
+    /// (it would name an origin nobody can check).
+    private static MailForwardedFrom? ParseForwardedFrom(JsonElement root, List<string> errs)
+    {
+        if (!root.TryGetProperty("forwardedFrom", out var f) || f.ValueKind == JsonValueKind.Null)
+            return null;
+        if (f.ValueKind != JsonValueKind.Object)
+        {
+            errs.Add($"'forwardedFrom' must be a JSON object with 'id' and 'address' (got {RawText(f)})");
+            return null;
+        }
+
+        var before = errs.Count;
+        CheckFields(f, KnownForwardedFields, prefix: "forwardedFrom", errs);
+        var id = Required(f, "id", errs, prefix: "forwardedFrom");
+        var address = Required(f, "address", errs, prefix: "forwardedFrom");
+
+        // The id is NOT resolved against the store (d8, presence-only): the
+        // ledger may have rotated, and a forward that became unreadable when
+        // its original aged out would lose exactly the provenance it exists to
+        // keep. The address IS checked, because an address no sender could
+        // write names no mailbox that ever existed.
+        if (address is not null && !MailAddress.TryParse(address, out _))
+            errs.Add($"'forwardedFrom.address' must be {MailAddress.GrammarHelp} (got \"{address}\")");
+
+        return errs.Count == before ? new MailForwardedFrom(id!, address!) : null;
     }
 
     private static MailSender? ParseFrom(JsonElement root, List<string> errs)

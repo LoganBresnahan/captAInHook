@@ -500,6 +500,24 @@
                       "null"
                     ]
                   },
+                  "forwardedFrom": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "address": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "address"
+                    ]
+                  },
                   "ttlDeliveries": {
                     "type": [
                       "integer",
@@ -525,6 +543,7 @@
                   "topic",
                   "priority",
                   "inReplyTo",
+                  "forwardedFrom",
                   "ttlDeliveries",
                   "body",
                   "prev"

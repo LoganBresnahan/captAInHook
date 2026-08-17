@@ -27,7 +27,7 @@ static class DigestFixtures
         MailKind kind = MailKind.Status, string topic = "build", int ttl = 3,
         string agent = "intent-watcher", string to = "main") =>
         new(id, "2026-08-12T19:00:00Z", new MailSender(agent, "claude-code", "s-77"),
-            to, kind, topic, priority, InReplyTo: null, ttl, body, Prev: null);
+            to, kind, topic, priority, InReplyTo: null, ForwardedFrom: null, ttl, body, Prev: null);
 
     public static PendingMail Pending(long offset, MailEnvelope e, long? seenAt = null) =>
         new(offset, e, seenAt);
