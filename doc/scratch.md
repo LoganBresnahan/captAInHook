@@ -192,3 +192,81 @@ spawn a wire-speaking child**, so most of this is *already available* and the
       `Core/ExecWire.cs` (payload stdout — external data). Sweep them onto the
       same helper when next touching each file; the handlers.json one is the
       most exposed (API surface).
+
+## Per-instance mailboxes: addressing an AGENT, not only a role
+
+*(Raised 2026-08-17 by the maintainer, watching the Mail canvas show six
+cursors on one `maintainer` lane — two of them live windows that both received
+everything. **Graduated the same day into
+[ADR-0018](adr/0018-instance-addressing.md)** — the sketch below is kept as the
+raw note; the ADR is authoritative and adds the reaper role.)*
+
+**The idea.** Today `to` names a ROLE and delivery fans out: every session
+running a `mail digest --role R` gets every envelope addressed to R, each
+spending its own TTL opportunities. That is right for "all maintainers, read
+this" and wrong for "*you*, the instance I am talking to, read this". The ask is
+a second address kind — a per-agent mailbox — so a sender can choose:
+
+```
+to: maintainer            → the ROLE: every instance holding it (today's behavior)
+to: maintainer/laptop-a   → ONE instance (unicast), whoever that agent is
+```
+
+Two "maintainers" then means two agents holding one role, each with a mailbox of
+its own, addressable either way.
+
+**What already exists (do not rebuild it).**
+- Cursors are already keyed **role × session** (`cursor.<role>.<session>.json`),
+  so "a mailbox per reader" is half-built — what is missing is the ability to
+  ADDRESS one.
+- `dispatch.json` already scopes which digest runs in which window (project
+  path-prefix, session id), which is how two windows get two roles today.
+- One append-only ledger with one hash chain serves every role; "two mailboxes"
+  almost certainly should NOT mean two files — an address is a routing key over
+  the one chain, and keeping that preserves the chain, the canvas, and the
+  audit story.
+- `from` already carries `{agent, harness, session}`, so senders are already
+  identified; recipients are the half that is not.
+
+**The five decisions a plan has to make.**
+
+1. **What is an instance's name, and where does it come from?** A session id is
+   ephemeral — a new window is a new id, so a mailbox keyed to it dies when the
+   window closes (visible today: four of the six `maintainer` cursors are dead
+   sessions holding pending mail forever). A durable name has to be assigned at
+   BOOT: an env var the window carries, a cwd-derived name, or a registration
+   flag (`mail digest --role maintainer --as laptop-a`). This is the crux; the
+   rest follows from it.
+2. **Address syntax that cannot collide.** Role names and instance names share
+   one `to` namespace. Either a separator with a rule (`role` vs `role/instance`)
+   or explicit kinds (`role:maintainer`, `agent:laptop-a`). Whatever it is, the
+   parser must refuse ambiguity rather than guess — a misrouted envelope is
+   silent.
+3. **Role delivery stays broadcast — or does it?** "Every reader gets it" and
+   "any ONE reader claims it" are different systems: the second needs claim /
+   lease semantics, which the current cursor model deliberately does not have.
+   Recommend: keep role = broadcast, instance = unicast, and put a work-queue
+   role kind explicitly out of scope until something needs it.
+4. **What TTL means for a unicast envelope.** Per-cursor delivery opportunities
+   make sense for a broadcast (nobody can say "it was read"). With exactly one
+   addressee, "delivered / not delivered" becomes answerable — and probably
+   wants a different expiry story than "spent after N seams somebody else
+   attended".
+5. **Dead mailboxes.** Per-instance addressing multiplies cursors, and nothing
+   reaps them today (`doctor` does not touch mail). A named instance that never
+   comes back holds pending mail forever, and its lane grows monotonically.
+
+**Why it entangles with ADR-0017.** `mail ask --wait` and `inReplyTo` want the
+ANSWER to come back to the asker, not to everyone wearing the asker's role —
+i.e. ask/reply is unicast by nature, and today the only available unicast key is
+the ephemeral session. Deciding instance identity first would make the reply
+path fall out; deciding it after would mean reworking it. Likewise the watcher's
+role-kind inference (d3) is stated per role and would need to say what a
+per-instance address means for human-held vs robot-servable.
+
+**Surfaces it would touch:** `MailEnvelope` (`to` parse + validation),
+`MailCursors` (key shape), `MailDigest.Plan` (which addresses a registration
+reads), the read model + `web/src/mail.ts` + the canvas (a lane per role with
+per-instance sub-lanes, or lanes per address), and `handlers.json` registration
+args. The wire is versioned by nothing — `to` is a bare string today, so the
+syntax choice in (2) is effectively permanent once mail is written with it.

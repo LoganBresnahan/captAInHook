@@ -1503,6 +1503,19 @@ run live*. The framework underneath is what exists today.
   against the maintainer's own bus, and in a sandbox for the two-role and
   policy-denied renderings.)
 
+- [ ] **23. Instance addressing + the reaper** —
+  [ADR-0018](adr/0018-instance-addressing.md) (Proposed 2026-08-17).
+  `to: role` stays broadcast; `to: role@instance` is unicast to one durable
+  mailbox named by its registration (`mail digest --as`); cursor key becomes
+  role × instance (session id as the unnamed fallback — backward compatible);
+  unicast has no TTL (refused, not ignored); dead mailboxes are detected by
+  the watcher and disposed of by a `reaper` role — forward with
+  `forwardedFrom` / drop / hold, then a logged `mail reap` — never deleted
+  automatically. `address-grammar` + `instance-registration` precede ADR-0017
+  phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
+  disappears). Reaper authority left open until its slice. Slices via
+  `/adr-plan`.
+
 - [x] **20. The mailbox bus — cross-harness agent communication** — the hub
   reframe: N external agent loops (Claude Code + any hook-bearing harness),
   one daemon as the store-and-forward bus. Mail is written by appending an
