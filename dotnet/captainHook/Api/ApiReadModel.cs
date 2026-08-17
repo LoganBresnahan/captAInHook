@@ -255,8 +255,20 @@ public sealed class ApiReadModel
             .Select(id => Cursor(_mail.Pending(id.Role, id.Session)))
             .ToList();
 
+        // The delivery preload (6a). Read AFTER the stamp on purpose: a record
+        // written into the window lands in this snapshot and replays from the
+        // stream, which is a duplicate the reducer drops by content identity —
+        // where the other order would drop it into neither. Nothing here can
+        // fail the snapshot: an unreadable trail folds to "no history", exactly
+        // as it stamps to "0".
+        var fold = MailDeliveryFold.Read(_trailPath);
+
         return new MailDto(_mail.Dir, chain, since, aligned, frontier, trailEventId,
-            lineDtos, cursors, Presence(cursors));
+            lineDtos, cursors, Presence(cursors),
+            fold.Records.Select(r => new MailDeliveryDto(
+                r.Role, r.SessionId, r.DispatchId, r.HookEvent, r.Seam, r.Vehicle,
+                r.EnvelopeIds, r.RenderHash, r.BytesInjected, r.Ts)).ToList(),
+            fold.Complete);
     }
 
     /// The trail's current end — the same stat `TrailSubscription` takes when a

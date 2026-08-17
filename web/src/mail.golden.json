@@ -25,7 +25,9 @@
         "trailEventId": null,
         "lines": [],
         "cursors": [],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-01\",\"to\":\"main\",\"offset\":0,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -123,7 +125,9 @@
           }
         ],
         "cursors": [],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -223,7 +227,9 @@
           }
         ],
         "cursors": [],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":910,\"delivered\":2,\"deliveredOffsets\":[0,608],\"held\":0,\"expired\":0,\"deliveries\":1}}",
@@ -344,7 +350,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -453,7 +461,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"urg-2\",\"to\":\"main\",\"offset\":605,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"urgent\",\"ttlDeliveries\":3}}",
@@ -603,7 +613,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -703,7 +715,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-03\",\"to\":\"main\",\"offset\":604,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -849,7 +863,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -949,7 +965,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-03\",\"to\":\"main\",\"offset\":604,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -1072,7 +1090,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -1164,7 +1184,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.torn\",\"msg\":\"terminated a torn final line rather than repairing it\",\"data\":{\"path\":\"<mail>/mail.jsonl\",\"offset\":302}}",
@@ -1286,7 +1308,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -1379,7 +1403,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-04\",\"to\":\"main\",\"offset\":908,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -1477,7 +1503,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -1572,7 +1600,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.cursorReanchor\",\"sessionId\":\"s-1\",\"msg\":\"cursor re-anchored at 0 \\u2014 retained mail for this role is pending again\",\"data\":{\"role\":\"main\",\"path\":\"<mail>/cursor.main.s-1.json\",\"reason\":\"cursor gen 4, store gen 1 \\u2014 rotated\",\"cause\":\"cursor\",\"deliveries\":1}}",
@@ -1646,7 +1676,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -1746,7 +1778,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-03\",\"to\":\"main\",\"offset\":604,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -1868,7 +1902,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -1969,7 +2005,9 @@
             "skippedMalformed": 0
           }
         ],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"data\":{\"role\":\"main\",\"offset\":604,\"delivered\":1,\"deliveredOffsets\":[302],\"held\":0,\"expired\":0,\"deliveries\":2}}",
@@ -2058,7 +2096,9 @@
             "skippedMalformed": 0
           }
         ],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -2134,7 +2174,9 @@
           }
         ],
         "cursors": [],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":604,\"delivered\":0,\"deliveredOffsets\":[],\"held\":2,\"expired\":0,\"deliveries\":1}}"
@@ -2247,7 +2289,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -2323,7 +2367,9 @@
           }
         ],
         "cursors": [],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":604,\"delivered\":1,\"deliveredOffsets\":[0],\"held\":1,\"expired\":0,\"deliveries\":1}}",
@@ -2429,7 +2475,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -2538,7 +2586,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.cursorVanished\",\"sessionId\":\"s-1\",\"msg\":\"the cursor this view was read from no longer exists \\u2014 advancing starts a fresh lineage\",\"data\":{\"role\":\"main\",\"path\":\"<mail>/cursor.main.s-1.json\",\"viewDeliveries\":1}}",
@@ -2635,7 +2685,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -2761,7 +2813,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.cursorReanchor\",\"sessionId\":\"s-1\",\"msg\":\"cursor re-anchored at 0 \\u2014 retained mail for this role is pending again\",\"data\":{\"role\":\"main\",\"path\":\"<mail>/cursor.main.s-1.json\",\"reason\":\"cursor offset 906 past the frontier 302 \\u2014 store truncated\",\"cause\":\"store\",\"deliveries\":1}}",
@@ -2835,7 +2889,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     },
     {
@@ -2911,7 +2967,9 @@
           }
         ],
         "cursors": [],
-        "presence": []
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":608,\"delivered\":2,\"deliveredOffsets\":[0,305],\"held\":0,\"expired\":0,\"deliveries\":1}}",
@@ -3008,7 +3066,9 @@
             ],
             "lastDispatchAgeMs": null
           }
-        ]
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false
       }
     }
   ]

@@ -46,6 +46,15 @@ import type { MailState } from "./mail.ts";
 // no record*. The live fold is what supplies the record, and an envelope with
 // no record behind a cursor still reads exactly that, honestly.
 //
+// **And the record no longer has to arrive while you watch** (6a): the snapshot
+// preloads `mail.deliver` lines the daemon folded out of the trail, so a pickup
+// that happened before the page was open reads ✓ like any other. The rule did
+// not move — it is still a ledger line and nothing else — only how far back the
+// picture can see one. That reach is finite (the trail's own lifetime, the
+// fold's window), so when the fold reports itself INCOMPLETE the detail card
+// says which of the two "no record" means: nobody read it, or nobody can still
+// prove they did.
+//
 // EVERY COORDINATE BELOW IS A CSS PIXEL. The svg's viewBox is 1:1 with its box,
 // and the only thing pan/zoom touches is the ledger's x — see `MailView`. That
 // is why no font size, stroke or label offset is scaled anywhere in this file.
@@ -667,7 +676,11 @@ function Detail(
                   : line.offset >= c.offset ? <>has not reached it yet</>
                   : records.length > 0
                     ? <>delivered at the <code>{records[0].seam}</code> seam by <code>{records[0].vehicle}</code></>
-                    : <>is past it · <span className="muted">no delivery record in this picture</span></>}
+                    : <>is past it · <span className="muted" data-no-record={state.deliveriesComplete ? "complete" : "bounded"}>
+                        {state.deliveriesComplete
+                          ? "no delivery record in this picture"
+                          : "no delivery record — the trail fold reaches back only so far"}
+                      </span></>}
               </li>
             );
           })}

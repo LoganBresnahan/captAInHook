@@ -188,8 +188,11 @@ test.describe("mail", () => {
     // "before cursor · no record". Now the record arrives on the stream.
     const mail = page.locator('[data-island="mail"]');
     const builder = mail.locator('[data-lane="builder"]');
-    await expect(builder.locator('[data-glyph][data-status="delivered"]')).toHaveCount(0);
-
+    // No zero-count premise here: since 6a the snapshot PRELOADS the records
+    // the daemon folded out of its trail, so the seed's own pickups already
+    // read delivered on first paint — asserting otherwise would be asserting
+    // the blindness this view used to have. The claim is about THIS envelope,
+    // whose record has to arrive on the stream while the page watches.
     daemon.mailSend(mailEnvelope("live-delivery-01", "builder", {
       kind: "request", topic: "read me now",
       body: "The next ambient seam should deliver this and say so on the ledger.",
@@ -217,6 +220,60 @@ test.describe("mail", () => {
     // nothing is the claim.)
     const motion = await builder.locator("[data-track]").getAttribute("data-motion");
     expect(["advance", "deliver"]).toContain(motion);
+  });
+
+  test("a pickup nobody watched is still delivered: the snapshot preloads the record", async ({ page, daemon }) => {
+    // 6a, and the field report's complaint. `delivered` comes from a
+    // `mail.deliver` line and nowhere else — but a stream starts NOW, so before
+    // the preload every pickup older than the page read *before cursor · no
+    // record*, which is honest about the picture and wrong-looking about mail
+    // the maintainer had plainly read. Here the delivery happens, and then the
+    // only witness to it goes away.
+    const mail = page.locator('[data-island="mail"]');
+    const builder = mail.locator('[data-lane="builder"]');
+
+    // One envelope, put on the bus and picked up while this page watches — so
+    // the assertion after the reload is about a KNOWN envelope (its ledger
+    // offset), never a count the seed could satisfy on its own.
+    daemon.mailSend(mailEnvelope("preload-pickup-01", "builder", {
+      kind: "request", topic: "read before the page opens",
+      body: "Delivered while nobody is looking; the next page must still know.",
+    }));
+    const arrived = builder.locator('[data-arrival="trail"]');
+    await expect(arrived).toHaveCount(1);
+    const offset = await arrived.getAttribute("data-glyph");
+
+    daemon.fireHook("user-prompt-submit", { session_id: "sess-alpha-4f21" });
+    await expect(arrived).toHaveAttribute("data-status", "delivered");
+
+    // A fresh page opens its stream AT the fresh snapshot's stamp, so no frame
+    // about that delivery can ever reach it. Whatever it knows, it was told.
+    const snapshots: Record<string, any>[] = [];
+    page.on("response", async (r) => {
+      if (!r.url().includes("/api/v1/mail")) return;
+      const dto = await r.json().catch(() => null);
+      if (dto !== null) snapshots.push(dto);
+    });
+    await page.reload();
+    await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
+    await gotoView(page, "mail");
+    await expect(mail.locator("[data-mail-canvas]")).toBeVisible();
+
+    const same = builder.locator(`[data-glyph="${offset}"]`);
+    await expect(same).toHaveAttribute("data-status", "delivered");
+    // …and it is a SNAPSHOT line, not an arrival: nothing came over the stream
+    // to make it delivered, so the record can only have come with the picture.
+    await expect(same).toHaveAttribute("data-arrival", "snapshot");
+
+    // The wire says the same: the daemon folded real records out of its trail,
+    // and — having read the file whole — is willing to claim that an envelope
+    // with no record here really was read by nobody.
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots[0].deliveries.length).toBeGreaterThan(0);
+    expect(snapshots[0].deliveriesComplete).toBe(true);
+    // The whole history, oldest first — the seed's own pickups included — so
+    // the one this test made is somewhere in it, not necessarily at the front.
+    expect(snapshots[0].deliveries.some((d: Record<string, any>) => d.role === "builder")).toBe(true);
   });
 
   test("the live picture is a fold, not a poll: no /mail request follows the first", async ({ page, daemon }) => {

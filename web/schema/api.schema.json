@@ -686,6 +686,81 @@
             ],
             "title": "MailPresenceDto"
           }
+        },
+        "deliveries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dispatchId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hookEvent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "seam": {
+                "type": "string"
+              },
+              "vehicle": {
+                "type": "string"
+              },
+              "envelopeIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "renderHash": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "bytesInjected": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "ts": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "role",
+              "session",
+              "dispatchId",
+              "hookEvent",
+              "seam",
+              "vehicle",
+              "envelopeIds",
+              "renderHash",
+              "bytesInjected",
+              "ts"
+            ],
+            "title": "MailDeliveryDto"
+          }
+        },
+        "deliveriesComplete": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -697,7 +772,9 @@
         "trailEventId",
         "lines",
         "cursors",
-        "presence"
+        "presence",
+        "deliveries",
+        "deliveriesComplete"
       ],
       "title": "MailDto"
     },

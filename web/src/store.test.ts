@@ -13,7 +13,7 @@ const mailDto = (trailEventId: string | null): MailDto => ({
   dir: "<mail>",
   chain: { ok: true, head: null, gen: 1, lines: 0, bytes: 0, dirMode: "700", fileMode: "600", faults: [] },
   since: 0, sinceAligned: true, frontier: 0, trailEventId,
-  lines: [], cursors: [], presence: [],
+  lines: [], cursors: [], presence: [], deliveries: [], deliveriesComplete: true,
 });
 
 const fold = (trace: TraceEntry[], truncated: number, ...frames: Parameters<typeof foldTrace>[2][]) =>

@@ -836,8 +836,23 @@ Model names are session aliases; effort is the session effort setting.*
 | 3 | `mail-reducer` — pure TS `(state, line) → state` + snapshot seed; frontier/held/TTL/expired mirrored from `MailCursors.Pending`; presence decay; anomaly surfacing (deliver for an unknown cursor, advance past frontier, reanchor); `Gap`/`Reset` ⇒ resnapshot flag | **fable** | **high** | The one adversarial pass: golden sequences ported from `MailCursorTests`/`MailCursorEdgeTests` fixtures (same inputs ⇒ same pending set as C#), then an independent skeptic attacks reducer ⇄ `Pending` divergence, out-of-order lines, a deliver with no matching append (trail truncated), and the "no record ≠ delivered" rule. `node --test`. |
 | 4 | `mail-canvas` — the SVG bus: ledger spine, role lanes, session cursors, envelope glyphs; semantic-zoom tiers; pointer pan / wheel zoom on a `viewBox` in the store slice; sidebar entry `Mail`; both themes | opus[1m] | **high** | `/ui-loop`: seeded preview daemon with a scripted swarm (two roles, two sessions, held + expired envelopes), snap all three zoom tiers × 2 themes and READ them; a `mail.spec` e2e (zoom in on a lane ⇒ envelope cards; the ledger stays legible at far zoom); axe/contrast pass on the glyph palette. Big surface, fails visibly. |
 | 5 | `mail-live-choreography` — SSE subscription filtered to `mail.*`, one animation per event kind (drop-on-bus / cursor slide with seam tag / grey-out / reanchor jump), presence fade, resnapshot on `Gap`/`Reset`/reconnect | opus[1m] | medium | e2e through the preview daemon's fireHook: `mail send` then a digest at a seam ⇒ the envelope lights and the cursor passes it, asserted on DOM state not timing; `Gap` injected via the sse-backpressure test seam ⇒ resnapshot observed. Snap mid-animation frames read. |
+| 6a | `mail-replay` part a — the delivery-record PRELOAD: the daemon folds `mail.deliver` out of its trail into the snapshot, so a pickup that predates the page reads ✓ instead of *before cursor · no record* **(landed 2026-08-17)** | opus[1m] | low | Placement is the reducer's one rule, shared with the live path; the fold is pinned against an engine-written line and against a payload-stderr forgery; e2e reloads onto a delivery nobody watched. |
 | 6 | `mail-replay` *(optional)* — scrub bar: reducer fed from `/api/v1/events?Last-Event-ID=<older>` at variable rate; live resumes at the head | opus[1m] | low | Reducer determinism already pinned by 3; one e2e (scrub back ⇒ pending set matches the golden at that offset). Skippable if the live view alone satisfies the field report. |
 | 7 | `mail-view-docs` — flow doc § *The observation surface* (diagram of the bus canvas over the mechanism, ground-truth rows), this ADR's Ground truth rows for d14, ADR-0015 d1 note honored, roadmap tick | opus[1m] | low | `/shipshape`: every symbol named exists; a field report entry from watching the maintainer's real session in `doc/dogfood/`. |
+
+**As-built on 6a (2026-08-17):** the sketch above feeds the reducer from
+`/api/v1/events?Last-Event-ID=<older>`, and that is **not available** — ADR-0009
+d2 makes the resume id an opaque token a client echoes and never interprets, so
+naming an id *older than* the snapshot's stamp is arithmetic the contract
+forbids, and the only constant a client may legitimately spell is `"0"`, which
+replays the entire trail as live (exactly what `mail-stream-alignment` exists to
+stop). So the DAEMON folds: `GET /api/v1/mail` gains `deliveries` — the
+`mail.deliver` lines as the trail stated them, columns verbatim and no ledger
+offsets, since placing an envelope id is the reducer's arithmetic and a second
+implementation of it in C# is N8 again — plus `deliveriesComplete`, the narrow
+claim that the whole file was read and nothing trimmed. Pin iii is untouched:
+delivered still comes from a ledger line and nowhere else. What changed is how
+far back the picture can see one, and it now says how far that is.
 
 **Phases:** (1) slices 1 + 2, one sitting, independent commits → (2) slice 3
 alone, verify hard before any pixel is drawn — the picture inherits the

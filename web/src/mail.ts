@@ -241,6 +241,12 @@ export type MailState = {
   cursors: MailCursorState[];
   presence: MailPresenceEntry[];
   deliveries: MailDeliveryRecord[];
+  /** True = the daemon read the WHOLE trail and trimmed nothing, so "no record"
+   * means exactly that: nobody read it. False = the fold saw a suffix at best
+   * (scan window, record cap) or had no trail to read, so an envelope with no
+   * record may simply predate what can still be proven. Unseeded state is
+   * false — it has read nothing and may not claim otherwise. */
+  deliveriesComplete: boolean;
   notes: MailNote[];
   notesDropped: number;
   /** Non-null = the picture may be behind or wrong; the choreography should
@@ -315,6 +321,7 @@ export function emptyMailState(): MailState {
     cursors: [],
     presence: [],
     deliveries: [],
+    deliveriesComplete: false,
     notes: [],
     notesDropped: 0,
     resnapshot: null,
@@ -377,11 +384,53 @@ function cursorFromDto(c: MailCursorDto): MailCursorState {
   };
 }
 
+/** The snapshot's delivery PRELOAD (6a): `mail.deliver` lines the daemon folded
+ * out of the trail, placed on this picture's ledger by `resolveDelivery` — the
+ * same rule the live path uses for a record that arrives without its advance.
+ *
+ * Three things it deliberately does not do. It raises NO note for an id it
+ * cannot place: the fold reaches back only as far as the trail does, so a
+ * record naming an envelope outside this snapshot is the expected case, not an
+ * anomaly (the live path's `deliver-unmatched` still means what it meant —
+ * something arrived that should have matched). It touches NO cursor and NO
+ * presence: a seed's cursors are the daemon's authoritative view, and a
+ * historical record is a fact beside them, never evidence about where a cursor
+ * is now. And a record that fails to place is still KEPT, with null offsets —
+ * `deliveriesFor` matches on offset, so it shows nowhere, but it stays a
+ * counted part of the history rather than being quietly dropped. */
+function preloadDeliveries(
+  dto: MailDto, lines: MailLedgerLine[], cursors: MailCursorState[], atMs: number, prev?: MailState,
+): MailDeliveryRecord[] {
+  const out: MailDeliveryRecord[] = [];
+  for (const d of dto.deliveries) {
+    const c = cursors.find((x) => x.role === d.role && sameSession(x.session, d.session))
+      ?? blankCursor(d.role, d.session);
+    const { offsets } = resolveDelivery(lines, c, d.role, d.envelopeIds, []);
+    const record: MailDeliveryRecord = {
+      role: d.role, session: d.session, dispatchId: d.dispatchId, hookEvent: d.hookEvent,
+      seam: d.seam, vehicle: d.vehicle, envelopeIds: [...d.envelopeIds], offsets,
+      renderHash: d.renderHash, bytesInjected: d.bytesInjected, ts: d.ts, atMs,
+    };
+    if (!out.some((r) => sameDelivery(r, record))) out.push(record);
+  }
+  // The preload is history and `prev` is what this client watched happen, so
+  // history goes first: the cap trims the OLDEST, and a record the client saw
+  // live keeps its own observation time where the two describe one delivery.
+  for (const r of prev?.deliveries ?? []) {
+    const at = out.findIndex((x) => sameDelivery(x, r));
+    if (at >= 0) out[at] = r; else out.push(r);
+  }
+  if (out.length > MAIL_DELIVERIES_CAP) out.splice(0, out.length - MAIL_DELIVERIES_CAP);
+  return out;
+}
+
 /** Seed from a snapshot — the authoritative read. This REPLACES the reduced
- * state (N8: interpolator, not store). What carries over from `prev` are the
- * two things a snapshot cannot contain because they live only in the trail:
- * delivery RECORDS (facts the ledger stated, not derived state) and the
- * notes log. Everything else is the daemon's view, verbatim. */
+ * state (N8: interpolator, not store). What carries over from `prev` is the
+ * notes log, and the delivery RECORDS this client watched arrive — which the
+ * snapshot now also preloads from the trail (6a), so a pickup that predates the
+ * page reads as delivered instead of *before cursor · no record*. The union of
+ * the two is deduped by a record's content, its only identity. Everything else
+ * is the daemon's view, verbatim. */
 export function seedMail(dto: MailDto, atMs: number, prev?: MailState): MailState {
   const lines = dto.lines.map(lineFromDto).sort(byOffset);
   const last = lines.length > 0 ? lines[lines.length - 1] : null;
@@ -409,7 +458,8 @@ export function seedMail(dto: MailDto, atMs: number, prev?: MailState): MailStat
     lines,
     cursors,
     presence,
-    deliveries: prev?.deliveries ?? [],
+    deliveries: preloadDeliveries(dto, lines, cursors, atMs, prev),
+    deliveriesComplete: dto.deliveriesComplete,
     notes: prev?.notes ?? [],
     notesDropped: prev?.notesDropped ?? 0,
     // A misaligned `since` means the bytes this client last read are gone:
@@ -844,18 +894,7 @@ function onDeliver(s: MailState, d: Record<string, unknown>, session: MailSessio
   // (a replay after a re-seed), against consumed lines — accepted only when
   // UNIQUE, since a wrong duplicate is a false picture too. Else null.
   const pool = c.lastAdvance !== null && c.lastAdvance.seam === null ? [...c.lastAdvance.delivered] : [];
-  const offsets: (number | null)[] = [];
-  const unmatched: string[] = [];
-  for (const id of ids) {
-    let hit = pool.findIndex((p) => clampField(p.id) === id);
-    if (hit >= 0) { offsets.push(pool[hit].offset); pool.splice(hit, 1); continue; }
-    const behind = c.offset;
-    const cands = next.lines.filter((l) => l.envelope !== null && l.envelope.to === role && clampField(l.envelope.id) === id
-      && (behind === null || l.offset < behind) && !c!.held.some((h) => h.offset === l.offset));
-    if (cands.length === 1) { offsets.push(cands[0].offset); continue; }
-    offsets.push(null);
-    unmatched.push(id);
-  }
+  const { offsets, unmatched } = resolveDelivery(next.lines, c, role, ids, pool);
   if (unmatched.length > 0)
     next = note(next, { kind: "deliver-unmatched", severity: "warn", role, session, offset: null,
       message: `a delivery to ${label(role, session)} names ${unmatched.length} envelope(s) the picture cannot place (${unmatched.map((u) => `'${u}'`).join(", ")}) — the trail may be truncated, or the append predates this picture`, atMs });
@@ -876,6 +915,31 @@ function onDeliver(s: MailState, d: Record<string, unknown>, session: MailSessio
     ? { ...c.lastAdvance, seam, vehicle, dispatchId } : c.lastAdvance;
   const cursor: MailCursorState = { ...c, lastAdvance, lastEventKind: "deliver", lastEventAtMs: atMs };
   return replaceCursor({ ...next, deliveries }, idx, cursor);
+}
+
+/** Place a record's envelope ids on the ledger, by ONE rule wherever a record
+ * comes from — the live stream (`onDeliver`) or the snapshot's preload
+ * (`seedMail`). First against the advance this delivery belongs to, when there
+ * is one (the exact consumed set, each entry matched once so duplicate ids map
+ * to distinct offsets); then against consumed lines, accepted only when UNIQUE,
+ * since a wrong duplicate is a false picture too. Else null — an id the picture
+ * cannot place honestly is placed nowhere. */
+function resolveDelivery(
+  lines: MailLedgerLine[], c: MailCursorState, role: string, ids: string[], pool: { id: string; offset: number }[],
+): { offsets: (number | null)[]; unmatched: string[] } {
+  const offsets: (number | null)[] = [];
+  const unmatched: string[] = [];
+  for (const id of ids) {
+    const hit = pool.findIndex((p) => clampField(p.id) === id);
+    if (hit >= 0) { offsets.push(pool[hit].offset); pool.splice(hit, 1); continue; }
+    const behind = c.offset;
+    const cands = lines.filter((l) => l.envelope !== null && l.envelope.to === role && clampField(l.envelope.id) === id
+      && (behind === null || l.offset < behind) && !c.held.some((h) => h.offset === l.offset));
+    if (cands.length === 1) { offsets.push(cands[0].offset); continue; }
+    offsets.push(null);
+    unmatched.push(id);
+  }
+  return { offsets, unmatched };
 }
 
 function sameDelivery(a: MailDeliveryRecord, b: MailDeliveryRecord): boolean {

@@ -113,12 +113,37 @@ public sealed record HandlerDto(
 /// the arithmetic that contract forbids, and would put "0" and absent on the
 /// same side of a falsy test — the one comparison that must never collapse,
 /// since "0" means replay everything and absent means do not resume at all.
+///
+/// `Deliveries` is the delivery-record PRELOAD (6a). A `mail.deliver` line is
+/// the only thing that makes an envelope delivered (d14 pin iii) and the store
+/// cannot contain one, so before this field a picture could only ever say
+/// *before cursor · no record* about a pickup that predated the page — true,
+/// and misleading about mail that was demonstrably read. These are the trail's
+/// own lines, folded server-side because the client cannot ask for them: the
+/// resume id is opaque (ADR-0009 d2), so "an id older than the stamp" is
+/// arithmetic the contract forbids. `DeliveriesComplete` false means the fold
+/// saw only a suffix of the history (scan window or record cap), which is what
+/// lets the view distinguish "nobody read it" from "further back than I can
+/// see". Records carry NO ledger offsets: placing an id on the ledger is the
+/// reducer's arithmetic, and a second implementation of it here is N8 again.
 public sealed record MailDto(
     string Dir, MailChainDto Chain, long Since, bool SinceAligned, long Frontier,
     string? TrailEventId,
     IReadOnlyList<MailLineDto> Lines,
     IReadOnlyList<MailCursorDto> Cursors,
-    IReadOnlyList<MailPresenceDto> Presence);
+    IReadOnlyList<MailPresenceDto> Presence,
+    IReadOnlyList<MailDeliveryDto> Deliveries,
+    bool DeliveriesComplete);
+
+/// One `mail.deliver` ledger line as the trail stated it — the columns d10
+/// gives it, and nothing derived. `Session` is the recipient session (absent
+/// for a sessionless reader), `Ts` the wall-clock stamp the line carries; the
+/// browser uses it for display only, never for control flow.
+public sealed record MailDeliveryDto(
+    string Role, string? Session, string? DispatchId, string? HookEvent,
+    string Seam, string Vehicle,
+    IReadOnlyList<string> EnvelopeIds,
+    string? RenderHash, long? BytesInjected, string? Ts);
 
 /// The store's health as one object: `Ok` iff `VerifyChain` reported nothing.
 /// `Gen` is the store generation cursors compare against (rotation is ADR-0016

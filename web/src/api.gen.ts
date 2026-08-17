@@ -87,6 +87,8 @@ export interface MailDto {
   lines: MailLineDto[];
   cursors: MailCursorDto[];
   presence: MailPresenceDto[];
+  deliveries: MailDeliveryDto[];
+  deliveriesComplete: boolean;
 }
 export interface MailChainDto {
   ok: boolean;
@@ -155,6 +157,18 @@ export interface MailPresenceDto {
   session: string;
   roles: string[];
   lastDispatchAgeMs: number | null;
+}
+export interface MailDeliveryDto {
+  role: string;
+  session: string | null;
+  dispatchId: string | null;
+  hookEvent: string | null;
+  seam: string;
+  vehicle: string;
+  envelopeIds: string[];
+  renderHash: string | null;
+  bytesInjected: number | null;
+  ts: string | null;
 }
 
 export interface ApiDiscovery {

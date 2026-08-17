@@ -44,8 +44,56 @@ run live*. The framework underneath is what exists today.
   it: **build**, as (a) a delivery-record preload (fold `mail.deliver`
   history so cards read ✓ for pickups before page-open — the thing that read
   *"is past it · no delivery record in this picture"* all day) then (b) the
-  scrub bar. Remaining here: 6a, 6b, 7 (field report + docs + this tick).
+  scrub bar. Remaining here: 6b (the scrub bar) and 7 (field report + docs + this
+  tick); **6a landed 2026-08-17** — see the slice note below.
   What the exchange asked for beyond this item is **ADR-0017** (item 22).
+  Slices landed: `mail-replay-preload` (2026-08-17; phase 4, slice 6a — the
+  half of `mail-replay` the dogfood pass asked for first. `delivered` comes from
+  a `mail.deliver` line and nowhere else (d14 pin iii) and a live stream starts
+  NOW, so every pickup older than the page read *before cursor · no record* —
+  honest about the picture, and wrong-looking about mail that had plainly been
+  read; it is what the whole dogfood day looked at. The rule did not move: the
+  daemon now hands the picture the older LINES. `MailDeliveryFold` scans the
+  trail file and `MailDto` carries the records, because **the client cannot ask
+  for them** — the SSE resume id is an opaque token (ADR-0009 d2), so "subscribe
+  from an id older than the stamp" is arithmetic the contract forbids, and the
+  one constant a client may spell, `"0"`, replays the entire trail as live,
+  which is precisely what `mail-stream-alignment` exists to prevent. Read AFTER
+  the stamp on purpose, so the window can only ever duplicate (dropped by
+  content identity) and never lose. The fold ships the ledger line's columns
+  VERBATIM and no offsets: placing an envelope id on the ledger is the
+  reducer's arithmetic, and a second implementation in C# is N8 wearing a
+  different hat — so `resolveDelivery` is lifted out of `onDeliver` and the
+  preload places records by the SAME rule the live path uses for a record that
+  arrives without its advance. `deliveriesComplete` is a narrow, checkable
+  claim — this fold read the whole file from byte 0 and trimmed nothing — and
+  is false for a scan window, a hit cap, and equally for a trail that is
+  absent or unserved, because none of those can prove nobody read anything;
+  the detail card spends it on the one sentence that changes ("no record"
+  vs "no record — the fold reaches back only so far"). Two rules keep a
+  historical fact from becoming a present claim: a preloaded record raises no
+  anomaly when it cannot be placed (the fold reaches only as far as the trail
+  does, so an unplaceable record is the EXPECTED case, unlike the live path's
+  `deliver-unmatched`), and it moves no cursor and claims no presence — the
+  live path may infer a cursor from a delivery it watched arrive, a seed may
+  not, since its cursors are the daemon's own view. Two traps pinned rather
+  than trusted: the substring gate is a filter and never a decision (payload
+  stderr puts arbitrary text in this file, so a forged `mail.deliver` inside
+  an `exec.stderr` line must contribute nothing — driven), and the read is
+  guarded against the deferred-unescape trap the policy skeptic pass found
+  (a lone surrogate parses fine and throws at `GetString`, which would turn
+  one bad log line into a 500 on the whole snapshot). The e2e is the claim
+  itself: a delivery happens, the page that watched it is thrown away, and a
+  RELOADED page reads the same envelope as delivered with `data-arrival=
+  "snapshot"` — nothing came over the stream to make it so. It also falsified
+  a premise two specs had inherited from the old blindness (`delivered` count
+  0 on first paint); the seed's own pickups now read ✓ before a single frame
+  arrives, which is the fix, so the assertions moved onto the envelope each
+  test actually makes. 11 C# tests (`MailDeliveryPreloadTests`), 5 web units,
+  1 e2e; C# 960 → 971 green twice, web units 244 → 249, e2e 41 → 42 per
+  browser (84 across both) green;
+  Mail snapped at all three tiers × both themes and read — the delivered
+  glyphs are green on a picture that streamed nothing.)
   Slices landed: `mail-read-endpoint` (2026-08-15; phase 1, slice 1 —
   `GET /api/v1/mail?since=` returns the bus as one snapshot: chain status
   (`VerifyChain`, head, gen, line count, and the 0700/0600 modes d13 promises,
