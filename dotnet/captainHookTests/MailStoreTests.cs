@@ -52,6 +52,7 @@ internal static class MailFixtures
         MailPriority priority = MailPriority.Ambient,
         string? session = "s-77",
         string? inReplyTo = null,
+        string? replyTo = null,
         MailForwardedFrom? forwardedFrom = null,
         int? ttl = 3) =>
         new(
@@ -63,6 +64,7 @@ internal static class MailFixtures
             Topic: "build",
             Priority: priority,
             InReplyTo: inReplyTo,
+            ReplyTo: replyTo,
             ForwardedFrom: forwardedFrom,
             TtlDeliveries: ttl,
             Body: body,
@@ -167,6 +169,23 @@ public class MailStoreFormatTests
         var reparsed = MailEnvelope.TryParseLine(line, out var errors);
         Assert.True(reparsed is not null, $"the store wrote a line it cannot read: {string.Join("; ", errors)}");
         Assert.Equal(original with { Prev = MailStore.Genesis }, reparsed);
+    }
+
+    /// ADR-0018 d4 (`answer-by-address`): `replyTo` sits beside `inReplyTo` —
+    /// the thread's two halves together — and omits when absent, like every
+    /// optional field on this line.
+    [Fact]
+    public void Render_WritesReplyTo_BesideInReplyTo_AndOmitsItWhenAbsent()
+    {
+        var line = MailStore.Render(
+            MailFixtures.Envelope(inReplyTo: "m-99", replyTo: "maintainer@laptop-a"), MailStore.Genesis);
+
+        Assert.Contains("\"inReplyTo\":\"m-99\",\"replyTo\":\"maintainer@laptop-a\"", line);
+        Assert.DoesNotContain("replyTo", MailStore.Render(MailFixtures.Envelope(), MailStore.Genesis));
+
+        var reparsed = MailEnvelope.TryParseLine(line, out var errors);
+        Assert.True(reparsed is not null, $"the store wrote a line it cannot read: {string.Join("; ", errors)}");
+        Assert.Equal("maintainer@laptop-a", reparsed!.ReplyTo);
     }
 
     /// ADR-0018 d5, the WRITE side: a unicast envelope has no ttl, so the field

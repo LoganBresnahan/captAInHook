@@ -240,6 +240,11 @@ public static class MailDigest
         if (instance is not null && !MailAddress.IsRole(instance))
             errs.Add($"--as must match [a-z0-9][a-z0-9-]* (got '{instance}') — "
                 + $"no sender could address '{role}@{instance}'");
+        // And the WHOLE address obeys the grammar's one length bound, for the
+        // same reason: past it, no `to` can name this mailbox.
+        if (role is not null && (instance is null ? role : $"{role}@{instance}") is { Length: > MailAddress.MaxChars } spelled)
+            errs.Add($"the address '{spelled}' is {spelled.Length} characters; an address is at most "
+                + $"{MailAddress.MaxChars} — no sender could write it");
 
         return errs.Count > 0
             ? null
@@ -450,8 +455,20 @@ public static class MailDigest
     /// every sender-controlled field is display-clamped. The id sits BEFORE
     /// the topic so no rendering path can lose it — it is the join key from a
     /// digest line back to the durable store line (d10's causality chain) and
-    /// the handle a future ask/reply (d9) would quote. Age is measured in
-    /// delivery opportunities — the only clock this layer has (d3).
+    /// the handle an answer quotes in `inReplyTo`. Age is measured in delivery
+    /// opportunities — the only clock this layer has (d3).
+    ///
+    /// `reply to <address>` (ADR-0018 d4, `answer-by-address`) is rendered
+    /// whenever the sender set one, and rendered in the HEAD rather than left
+    /// to the body: the reader that has to answer is very often a model, and
+    /// the return address it should write into `to` has to be where its eye
+    /// lands, in the grammar it should copy verbatim. NOT clamped, on
+    /// purpose: the grammar bounds the alphabet and not the length, so a legal
+    /// address can be long — but a truncated return address is worse than
+    /// none, because a model will copy it exactly as shown and the answer
+    /// goes to a mailbox that does not exist. The head is bounded anyway by
+    /// the whole-item budget in `Render` (an item that cannot fit is cut with
+    /// a marker), so an absurd address costs its own delivery, not the digest.
     private static (string Head, string BodyPart) ItemBlock(
         PendingMail item, int ordinal, long deliveries)
     {
@@ -460,7 +477,8 @@ public static class MailDigest
             ? $"waited {deliveries - seen + 1} opportunit{(deliveries - seen + 1 == 1 ? "y" : "ies")}"
             : "new";
         var head = $"{ordinal}. from {Clamp(e.From.Agent)} ({Clamp(e.From.Harness)}) · "
-            + $"{Wire(e.Kind)}/{Wire(e.Priority)} · id {Clamp(e.Id)} · topic: {Clamp(e.Topic)} · {age}";
+            + $"{Wire(e.Kind)}/{Wire(e.Priority)} · id {Clamp(e.Id)} · topic: {Clamp(e.Topic)} · {age}"
+            + (e.ReplyTo is not null ? $" · reply to {e.ReplyTo}" : "");
         if (e.Body.Length == 0) return (head, "");
         var body = string.Join('\n', e.Body.Split('\n').Select(l => "   " + l));
         return (head, "\n" + body);

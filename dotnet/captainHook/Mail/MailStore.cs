@@ -429,6 +429,10 @@ public sealed class MailStore(string dir)
             // a future reader whose default has moved.
             w.WriteString("priority", Wire(e.Priority));
             if (e.InReplyTo is not null) w.WriteString("inReplyTo", e.InReplyTo);
+            // The thread's routing half beside its correlation half (ADR-0018
+            // d4, `answer-by-address`); omitted when absent, like everything
+            // optional on this line.
+            if (e.ReplyTo is not null) w.WriteString("replyTo", e.ReplyTo);
             // The two envelope-to-envelope references sit together (ADR-0018
             // d8) and both omit when absent. Written as the sender's object,
             // field for field — the store never reshapes provenance.

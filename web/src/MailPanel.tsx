@@ -652,6 +652,12 @@ function Detail(
               {e.from.session !== null ? <> · <code>{e.from.session}</code></> : <> · <span className="muted">write-only member</span></>}
             </dd></div>
             <div><dt>kind</dt><dd>{e.kind} · {e.priority}</dd></div>
+            {/* The thread's two halves, shown only when set: `inReplyTo` says
+                which envelope this answers, `replyTo` where an answer to THIS
+                one should go (ADR-0018 d4). Snapshot-only fields, so a card
+                for a trail-learned line simply lacks them. */}
+            {e.inReplyTo !== null && <div><dt>answers</dt><dd><code>{e.inReplyTo}</code></dd></div>}
+            {e.replyTo !== null && <div><dt>reply to</dt><dd><code data-detail-reply-to>{e.replyTo}</code></dd></div>}
             <div><dt>ttl</dt><dd>{e.ttlDeliveries === null
               ? <>none — unicast, delivered once to <code>{e.to}</code></>
               : <>{e.ttlDeliveries} delivery opportunit{e.ttlDeliveries === 1 ? "y" : "ies"}</>}</dd></div>

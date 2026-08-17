@@ -153,12 +153,21 @@ new subsystem.
    token-bill bound in one place — and the digest *says* the budget state.
 
 8. **Ask/reply: `inReplyTo` becomes read; addresses stay roles.** An `answer`
-   whose `inReplyTo` names a request **closes** it. Delivery becomes
+   whose `inReplyTo` names a request **closes** it. ~~Delivery becomes
    thread-aware without becoming session-addressed: the answer is still `to`
    a role, but the digest prefers the *asking session's* cursor and treats it
-   as urgent-class there, ambient for any other session in the role — ADR-0016
-   N5 (fan-out is wrong for ask/reply) resolved exactly where it was recorded.
-   `mail.append` provenance grows `inReplyTo`. A new verb **`captainHook mail
+   as urgent-class there, ambient for any other session in the role~~ —
+   ***simplified 2026-08-17 by [ADR-0018](0018-instance-addressing.md) d4 as
+   built (`answer-by-address`), before this ADR's phase 2 built it:*** the
+   answer is addressed `to` the asker's mailbox — the request's `replyTo`, or
+   since 0018's d3 amendment simply `role@<asking session>` — and reaches that
+   one cursor by ROUTING, so no delivery preference exists and `inReplyTo` is
+   correlation only. What survives of this decision unchanged: an answer to
+   the asker's own mailbox is a unicast, and `thread-aware-delivery` should
+   treat it urgent-class there (it is the thing the asker is waiting on) — the
+   class is now a fact about the address, not a preference over cursors.
+   ADR-0016 N5 (fan-out is wrong for ask/reply) is closed by an address, not a
+   heuristic. `mail.append` provenance grows `inReplyTo`. A new verb **`captainHook mail
    ask --to <role> [--wait <s>]`** appends the request and, with `--wait`,
    blocks up to the deadline polling the store for a matching answer, then
    prints it or `unanswered` — the asker *chooses* to yield its turn (a bounded

@@ -330,6 +330,16 @@ shared edit log. The bus must not know or care what backs a member:
    holding the role has its own cursor and receives its own delivery).
    Sessions are ephemeral; a mailbox that addressed them would strand mail on
    every restart.
+   *Amended 2026-08-17 by [ADR-0018](0018-instance-addressing.md) d3, twice.*
+   First: a role stays the broadcast address, and a `role@instance` unicast
+   address is added beside it. Then, the same evening: **a window's own
+   mailbox is addressable at `role@<session id>`** — this decision's premise
+   ("addressing a session strands mail") stopped holding once ADR-0018 d6 put a
+   reaper on the bus to dispose of stranded mail, and keeping a mailbox that was
+   *keyed* by a session but not *reachable* there cost every reader a "which
+   kind of mailbox is this?" it could not answer from disk. Roles remain the
+   stable, durable, *default* thing to address; a session address is a
+   deliberately ephemeral one an asker hands out for one answer.
 
 7. **Mailbox tooling ships as engine CLI verbs; the dispatcher never learns
    about mail.** `captainHook mail send` (append one validated envelope;

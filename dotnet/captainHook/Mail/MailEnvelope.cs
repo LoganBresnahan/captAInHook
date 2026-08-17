@@ -64,6 +64,19 @@ public sealed record MailForwardedFrom(string Id, string Address);
 /// preserves it so today's envelopes survive a future ask/reply design without
 /// a version bump, and nothing in v1 may branch on it.
 ///
+/// `ReplyTo` (ADR-0018 d4, slice `answer-by-address`) is the other half of a
+/// thread: `InReplyTo` says which envelope this one answers (correlation),
+/// `ReplyTo` says where an answer to THIS one should go (routing). It is an
+/// address in `to`'s grammar — a role, or a role@instance — and it is OPTIONAL
+/// with no default: absent means the sender named no reply address, and an
+/// answerer falls back to the sender's role, which stays legal (d4). It is a
+/// property of the REQUEST rather than of the sender, which is why it is not
+/// folded into `from`: a forwarded envelope's sender is the reaper and its
+/// reply address is the original asker's — two different facts about one
+/// envelope, and one field cannot carry both. Nothing routes on it in the
+/// engine (an answerer READS it and addresses its answer `to` it); the digest
+/// renders it so the reader that has to answer can see where.
+///
 /// `Prev` is the hash-chain link (d11). The store — not the sender — writes it,
 /// so it is absent on a freshly built envelope and present on a stored line.
 /// Phase 1 reserves the FIELD NAME only, so a stored line does not read as
@@ -79,6 +92,7 @@ public sealed record MailEnvelope(
     string Topic,
     MailPriority Priority,
     string? InReplyTo,
+    string? ReplyTo,
     MailForwardedFrom? ForwardedFrom,
     int? TtlDeliveries,
     string Body,
@@ -106,7 +120,7 @@ public sealed record MailEnvelope(
         new HashSet<string>
         {
             "v", "id", "ts", "from", "to", "kind", "topic",
-            "priority", "inReplyTo", "forwardedFrom", "ttlDeliveries", "body", "prev",
+            "priority", "inReplyTo", "replyTo", "forwardedFrom", "ttlDeliveries", "body", "prev",
         };
 
     private static readonly IReadOnlySet<string> KnownFromFields =
@@ -226,6 +240,18 @@ public sealed record MailEnvelope(
             errs.Add($"'body' must be a string (got {RawText(b)})");
 
         var inReplyTo = Optional(root, "inReplyTo", errs);
+
+        // replyTo: optional, and an ADDRESS when present — `to`'s grammar,
+        // `to`'s refusal. It is where an answer to this envelope should be
+        // sent, so an ungrammatical one names a mailbox no answer can reach and
+        // the envelope is refused rather than carried with a dead return
+        // address. NOT resolved against any registry (there is none, and a
+        // mailbox that does not exist yet is a legitimate thing to ask an
+        // answer be sent to — d3 anchors it on first contact).
+        var replyTo = Optional(root, "replyTo", errs);
+        if (replyTo is not null && !MailAddress.TryParse(replyTo, out _))
+            errs.Add($"'replyTo' must be {MailAddress.GrammarHelp} (got \"{replyTo}\")");
+
         var forwardedFrom = ParseForwardedFrom(root, errs);
         var prev = Optional(root, "prev", errs);
 
@@ -233,7 +259,7 @@ public sealed record MailEnvelope(
             ? null
             : new MailEnvelope(
                 id!, ts!, from!, to!, kind, topic!, priority,
-                inReplyTo, forwardedFrom, ttl, body!, prev);
+                inReplyTo, replyTo, forwardedFrom, ttl, body!, prev);
     }
 
     /// One STORE LINE: the JSONL reader's entry point. Bad bytes (not JSON, or

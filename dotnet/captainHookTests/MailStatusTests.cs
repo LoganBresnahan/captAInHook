@@ -393,19 +393,21 @@ public class MailStatusTests
         Assert.Equal(["📬 2 · 1 urgent"], w.Run(session: "s-77"));
     }
 
-    /// And an UNNAMED window is not addressable by its session id (d4's
-    /// refusal): the bar must not count mail addressed to `main@s-77`, because
-    /// no digest of this window's will ever be handed it.
+    /// A window with no `--as` is reachable at `role@<its session id>` (ADR-0018
+    /// d3 as amended), so its bar counts unicast sent there — and not unicast
+    /// sent to a sibling window.
     [Fact]
-    public void UnnamedRegistration_DoesNotCountUnicastAddressedToItsSession()
+    public void UnnamedRegistration_CountsUnicastAddressedToItsSession()
     {
         using var w = new StatusWorld();
         w.Register(Digest("mail-main", "main"));
         w.Policy();
         w.Send("b-1", "main");
-        w.Send("u-1", "main@s-77", ttl: null);
+        w.Send("u-1", "main@s-77", MailPriority.Urgent, ttl: null);
+        w.Send("u-2", "main@s-78", ttl: null);
 
-        Assert.Equal(["📬 1"], w.Run(session: "s-77"));
+        Assert.Equal(["📬 2 · 1 urgent"], w.Run(session: "s-77"));
+        Assert.Equal(["📬 2"], w.Run(session: "s-78"));
     }
 
     [Fact]

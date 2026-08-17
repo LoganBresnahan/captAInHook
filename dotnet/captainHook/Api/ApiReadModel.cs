@@ -349,7 +349,7 @@ public sealed class ApiReadModel
     private static MailEnvelopeDto Envelope(MailEnvelope e) => new(
         e.Id, e.Ts, new MailSenderDto(e.From.Agent, e.From.Harness, e.From.Session),
         e.To, Camel(e.Kind.ToString()), e.Topic, Camel(e.Priority.ToString()),
-        e.InReplyTo,
+        e.InReplyTo, e.ReplyTo,
         e.ForwardedFrom is { } f ? new MailForwardedFromDto(f.Id, f.Address) : null,
         e.TtlDeliveries, e.Body, e.Prev);
 

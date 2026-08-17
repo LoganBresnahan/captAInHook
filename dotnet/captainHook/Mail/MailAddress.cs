@@ -81,24 +81,26 @@ public readonly record struct MailAddress(string Role, string? Instance)
     /// (d4, slice `plan-unicast` — the recipient predicate, and the ONE
     /// spelling of it.)
     ///
-    /// A registration reads its role's BROADCAST, as every holder of the role
-    /// does, plus — only when it is NAMED — the unicast addressed to it alone.
-    /// Both predicate sites in `MailCursors` call this, which is not tidiness:
-    /// the sites disagreeing is a specific, silent failure. The pending scan
-    /// decides what a digest may deliver; `LoadOrAnchor`'s held-entry check
-    /// decides whether a cursor's own held list still describes this mailbox's
-    /// mail. A scan that accepted a unicast the held check then rejected would
-    /// hold the envelope, re-anchor on the next read ("addressed to someone
-    /// else"), and drop every held entry with it — mail delivered twice, held
-    /// state lost, and a loud warn blaming the store for a predicate's
-    /// disagreement with itself.
+    /// A mailbox reads its role's BROADCAST, as every holder of the role does,
+    /// plus the unicast addressed to it alone. Both predicate sites in
+    /// `MailCursors` call this, which is not tidiness: the sites disagreeing is
+    /// a specific, silent failure. The pending scan decides what a digest may
+    /// deliver; `LoadOrAnchor`'s held-entry check decides whether a cursor's own
+    /// held list still describes this mailbox's mail. A scan that accepted a
+    /// unicast the held check then rejected would hold the envelope, re-anchor
+    /// on the next read ("addressed to someone else"), and drop every held
+    /// entry with it — mail delivered twice, held state lost, and a loud warn
+    /// blaming the store for a predicate's disagreement with itself.
     ///
-    /// **An UNNAMED reader does not match `role@<its own session id>`.** That
-    /// is the refusal this predicate exists to make: matching there would make
-    /// sessions addressable, which ADR-0016 d6 rejected outright and this ADR
-    /// re-rejected (a mailbox keyed to a window dies with the window, and four
-    /// of the six cursors on the live lane are that failure). A session id is
-    /// the cursor KEY's fallback (d3) — never a name a sender may spell.
+    /// `Instance is null` reads the broadcast alone. Since the 2026-08-17
+    /// amendment to d3 that is only ever the SESSIONLESS reader — a window is
+    /// addressable at `role@<its session id>` (its default, ephemeral mailbox)
+    /// and `MailCursors.Pending` resolves the window's session in as the
+    /// instance before this is called, so the caller never has to know which
+    /// kind of mailbox it holds. The old model (windows keyed by session but
+    /// NOT reachable there) is what ADR-0016 d6 chose to avoid stranded mail;
+    /// the reaper (d6 of ADR-0018) is what handles stranded mail, and once it
+    /// existed the asymmetry cost more than it saved.
     public bool Accepts(string to)
     {
         // Broadcast only. Spelled as the first branch because it is the whole
@@ -119,8 +121,27 @@ public readonly record struct MailAddress(string Role, string? Instance)
             && to.AsSpan(at + 1).SequenceEqual(Instance);
     }
 
+    /// The one bound the grammar has: an address is at most this many
+    /// characters, `@` included (added 2026-08-17 with `answer-by-address`; the
+    /// grammar as first landed bounded the alphabet and not the length).
+    ///
+    /// It is `MailEnvelope.HeadFieldChars` and not a number of its own because
+    /// that is the reason it exists: a `replyTo` is rendered in the digest HEAD
+    /// — the return address a model copies verbatim — and a head field must be
+    /// bounded (the render skeptic's finding 1: a sender-controlled field longer
+    /// than the cap eats the digest). Every other head field is display-CLAMPED
+    /// to this width; an address cannot be, since a clamped return address is
+    /// worse than none (the answer goes to a mailbox that does not exist), so
+    /// it is REFUSED at this width instead. The same bound happens to sit well
+    /// under the platform fact that would otherwise bite first: a mailbox's
+    /// cursor is a FILE named `cursor.<role>.<instance>.json`, and NAME_MAX is
+    /// 255 on every filesystem this runs on (doc/platform.md), so an address
+    /// past ~242 characters is a mailbox whose cursor can never be written.
+    public const int MaxChars = MailEnvelope.HeadFieldChars;
+
     /// Parse an address, or fail. At most one `@`; both halves non-empty and
-    /// role-valid; anything else is a refusal.
+    /// role-valid; the whole no longer than `MaxChars`; anything else is a
+    /// refusal.
     ///
     /// A second `@` is a refusal rather than a split-on-first or split-on-last:
     /// `a@b@c` has two readings, both plausible, and picking either is guessing
@@ -128,6 +149,7 @@ public readonly record struct MailAddress(string Role, string? Instance)
     public static bool TryParse(string s, out MailAddress address)
     {
         address = default;
+        if (s.Length > MaxChars) return false;
 
         var at = s.IndexOf('@');
         if (at < 0)
@@ -151,5 +173,5 @@ public readonly record struct MailAddress(string Role, string? Instance)
     /// grammar at the seam where it was refused (`mail send`'s stderr today;
     /// a registration's, once `instance-registration` lands).
     public const string GrammarHelp =
-        "a role or role@instance, each half matching [a-z0-9][a-z0-9-]* (lowercase, at most one '@')";
+        "a role or role@instance, each half matching [a-z0-9][a-z0-9-]* (lowercase, at most one '@', at most 120 characters in all)";
 }

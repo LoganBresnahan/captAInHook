@@ -57,16 +57,17 @@ namespace CaptainHook.Mail;
 // deliver-or-degrade rather than hold at seams that will advance, and only
 // advance when writing state worth the opportunity.
 //
-// WHO READS WHAT (ADR-0018 d4, slice `plan-unicast`). A cursor is keyed role ×
-// instance, but the key is not the entitlement: what this mailbox may read is
-// `MailAddress.Accepts` — its role's broadcast always, plus its own unicast
-// `role@instance` when the registration NAMED it. Both places that filter by
+// WHO READS WHAT (ADR-0018 d3/d4, slices `plan-unicast` + the 2026-08-17
+// amendment). A cursor is keyed role × instance, and THE KEY IS THE ADDRESS:
+// `instance` is `--as` when the registration named one, else the window's
+// session id, and the mailbox `role@instance` is reachable either way — the
+// difference between the two is lifetime (durable vs. dies with the window),
+// never reachability. What a mailbox may read is `MailAddress.Accepts` — its
+// role's broadcast always, plus its own unicast. Both places that filter by
 // recipient call that one predicate (the pending scan and `LoadOrAnchor`'s
 // held-entry verification), because a disagreement between them is not a
 // half-working feature but a re-anchor loop: held mail dropped and redelivered
-// on every read, blamed on the store. An unnamed reader matches its role and
-// nothing else — never `role@<its session id>`, which would make windows
-// addressable and resurrect the model ADR-0016 d6 rejected.
+// on every read, blamed on the store.
 //
 // RE-ANCHOR SEMANTICS (d13: cursors are pure delivery state — deletable
 // anytime). An ABSENT cursor anchors at offset 0: store-and-forward is the
@@ -506,20 +507,11 @@ public sealed class MailCursors(MailStore store)
     /// Read the store through this recipient's cursor: what is pending, what
     /// has expired, and where the frontier sits. Never throws; every anomaly
     /// lands as a loud re-anchor, and an unreadable store reads as empty.
-    /// Read an UNNAMED mailbox, keyed by `key` — every reader before ADR-0018,
-    /// and every unnamed reader after it. The key goes in as the window too,
-    /// which is what makes the split invisible here: the trail keeps naming
-    /// exactly what it always named.
-    ///
-    /// Unnamed is a routing fact, not only a naming one (d4): this reader takes
-    /// its role's broadcast and no unicast at all, `role@<key>` emphatically
-    /// included. That is right for every caller that has one — and it is also
-    /// what the OBSERVATION surface must say, because a cursor FILE cannot tell
-    /// an instance-keyed mailbox from a session-keyed one (the file name is
-    /// just the key). The snapshot therefore under-claims rather than guesses:
-    /// a named mailbox's unicast mail shows as pending for nobody, and drawing
-    /// it belongs to `canvas-instances`, which has the trail's `instance`
-    /// column to work from.
+    /// Read the mailbox a WINDOW holds by default — `role@<key>`, keyed and
+    /// addressed by its session. Every reader before ADR-0018 is this reader,
+    /// and so is every reader after it that did not say `--as`. The key goes in
+    /// as the window too, which is what keeps the trail byte-identical: the
+    /// `instance` column is written only when the two differ.
     ///
     /// An OVERLOAD rather than an optional parameter, deliberately. A defaulted
     /// `hookSession = null` reads as harmless and is not: any caller that took
@@ -530,24 +522,31 @@ public sealed class MailCursors(MailStore store)
     public MailPendingView Pending(string role, string? key) =>
         Pending(new MailAddress(role, null), key);
 
-    /// Read the mailbox at `mailbox` on behalf of the window `hookSession`.
+    /// Read the mailbox `requested` on behalf of the window `hookSession`.
     ///
-    /// The two arguments answer two different questions and the slice that
-    /// split them is why they are both here: `mailbox` is WHAT is being read —
-    /// role plus the `--as` name when a registration gave one — and it decides
-    /// both the cursor key (`Instance ?? hookSession`, d3) and which envelopes
-    /// this reader is entitled to (`MailAddress.Accepts`, d4). `hookSession` is
-    /// WHO is reading, and it only ever rides the trail.
+    /// ONE RESOLUTION RULE, and everything else follows from it (ADR-0018 d3
+    /// as amended 2026-08-17): **the mailbox you read is the one you named,
+    /// else your window's** — `role@(Instance ?? hookSession)`. That resolved
+    /// address is BOTH the cursor key and the entitlement (`MailAddress.Accepts`
+    /// — the role's broadcast, plus this mailbox's own unicast). There is no
+    /// mailbox that has a key and no address, and no reader that is keyed by a
+    /// name it cannot be reached at; the two used to come apart for the
+    /// unnamed reader, and every place that had to say "which kind of mailbox
+    /// is this?" was paying for the seam.
     ///
-    /// Note that named-ness is carried, never inferred from the two being
-    /// different. A registration whose `--as` happens to equal its window's
-    /// session id is still a NAMED mailbox and still reads its unicast mail;
-    /// inferring would silently un-route it, and "silently" is the whole
-    /// failure mode this address kind exists to remove.
-    public MailPendingView Pending(MailAddress mailbox, string? hookSession)
+    /// The window-keyed mailbox is EPHEMERAL (dies with the session; a unicast
+    /// sent to it after that is stranded until the reaper, d6) and the `--as`
+    /// one is DURABLE. Both are addressable; the difference is lifetime, not
+    /// reachability. A sessionless reader (`hookSession` null, no `--as`) has
+    /// no address at all and reads its role's broadcast alone — not a special
+    /// case, just what "no instance" means.
+    ///
+    /// `hookSession` is WHO is reading, and it only ever rides the trail.
+    public MailPendingView Pending(MailAddress requested, string? hookSession)
     {
+        var mailbox = new MailAddress(requested.Role, requested.Instance ?? hookSession);
         var role = mailbox.Role;
-        var instance = mailbox.Instance ?? hookSession;
+        var instance = mailbox.Instance;
         var lines = Store.Read();
 
         // The frontier stops BEFORE an unterminated tail: those bytes may be

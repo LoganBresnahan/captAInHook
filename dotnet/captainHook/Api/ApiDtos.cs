@@ -177,7 +177,7 @@ public sealed record MailLineDto(
 /// payload-readable and therefore carries provenance only (d14).
 public sealed record MailEnvelopeDto(
     string Id, string Ts, MailSenderDto From, string To, string Kind, string Topic,
-    string Priority, string? InReplyTo, MailForwardedFromDto? ForwardedFrom,
+    string Priority, string? InReplyTo, string? ReplyTo, MailForwardedFromDto? ForwardedFrom,
     int? TtlDeliveries, string Body, string? Prev);
 
 public sealed record MailSenderDto(string Agent, string Harness, string? Session);

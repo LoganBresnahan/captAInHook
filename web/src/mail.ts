@@ -68,6 +68,10 @@ export type MailEnvelopeView = {
   topic: string;
   priority: string;
   inReplyTo: string | null;
+  /** Where an answer to THIS envelope should go (ADR-0018 d4) — an address
+   * in `to`'s grammar. The thread's routing half beside `inReplyTo`'s
+   * correlation half. Snapshot-only, like `inReplyTo`. */
+  replyTo: string | null;
   /** Where a forward came from (ADR-0018 d8) — which envelope, and whose
    * mailbox it was stranded in. Snapshot-only, like `body` and `ts`: the trail
    * carries provenance, not the envelope's own references. */
@@ -357,7 +361,7 @@ function lineFromDto(l: MailLineDto): MailLedgerLine {
       id: e.id, ts: e.ts,
       from: { agent: e.from.agent, harness: e.from.harness, session: e.from.session },
       to: e.to, kind: e.kind, topic: e.topic, priority: e.priority,
-      inReplyTo: e.inReplyTo, forwardedFrom: e.forwardedFrom,
+      inReplyTo: e.inReplyTo, replyTo: e.replyTo, forwardedFrom: e.forwardedFrom,
       ttlDeliveries: e.ttlDeliveries, body: e.body, prev: e.prev,
     },
     errors: [...l.errors],
@@ -574,7 +578,7 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
   const line: MailLedgerLine = {
     offset, bytes, terminated: true, hash: null,
     envelope: { id, ts: null, from: { agent, harness, session: fromSession }, to, kind, topic, priority,
-      inReplyTo: null, forwardedFrom: null,
+      inReplyTo: null, replyTo: null, forwardedFrom: null,
       ttlDeliveries: ttlApplies ? ttl : null, body: null, prev: null },
     errors: [], source: "trail",
   };

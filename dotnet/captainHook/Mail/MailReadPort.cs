@@ -68,24 +68,17 @@ public sealed class MailReadPort
         var cursors = new MailCursors(store);
         return new MailReadPort(
             store.Dir, store.FilePath, store.Read, store.VerifyChain, store.HeadHash,
-            // The names on disk ARE cursor keys (role × instance, ADR-0018 d3),
-            // so the second half goes in as the key and no hook session goes in
-            // at all: an observation reads a mailbox, it does not happen inside
-            // anyone's dispatch, and nothing it does writes a trail line that
-            // would need a window's name.
-            //
-            // It goes in through the UNNAMED overload, and that is a decision
-            // rather than a convenience (d4). A cursor file cannot say whether
-            // its key is an `--as` name or a session id, so this surface cannot
-            // know whether the mailbox is entitled to `role@key` unicast — and
-            // between under-claiming and guessing, a read-only picture
-            // under-claims: unicast mail shows as pending for nobody here.
-            // Guessing the other way would be worse than wrong, since it would
-            // paint every window as addressable by its session id, which is the
-            // routing model d4 refuses. The live trail CAN tell (the `instance`
-            // column on advances and deliveries), so the picture is recoverable
-            // from the stream, and saying it in the SNAPSHOT is
-            // `canvas-instances`' to design.
+            // The names on disk ARE addresses (role × instance, ADR-0018 d3 as
+            // amended: the key IS the address), so the second half goes in as
+            // the mailbox's instance and no hook session goes in at all — an
+            // observation reads a mailbox, it does not happen inside anyone's
+            // dispatch, and nothing it does writes a trail line that would
+            // need a window's name. The port cannot tell a durable `--as`
+            // mailbox from a window's ephemeral one, and it does not need to:
+            // both are reachable at exactly the name on disk, so the picture
+            // says the same thing about each. Lifetime is the trail's story
+            // (the `instance` column on advances and deliveries) and the
+            // canvas's to draw.
             () => MailCursors.List(store.Dir), (role, instance) => cursors.Pending(role, instance));
     }
 

@@ -25,9 +25,9 @@ static class DigestFixtures
     public static MailEnvelope Env(
         string id, MailPriority priority = MailPriority.Ambient, string body = "opaque prose",
         MailKind kind = MailKind.Status, string topic = "build", int? ttl = 3,
-        string agent = "intent-watcher", string to = "main") =>
+        string agent = "intent-watcher", string to = "main", string? replyTo = null) =>
         new(id, "2026-08-12T19:00:00Z", new MailSender(agent, "claude-code", "s-77"),
-            to, kind, topic, priority, InReplyTo: null, ForwardedFrom: null, ttl, body, Prev: null);
+            to, kind, topic, priority, InReplyTo: null, ReplyTo: replyTo, ForwardedFrom: null, ttl, body, Prev: null);
 
     public static PendingMail Pending(long offset, MailEnvelope e, long? seenAt = null) =>
         new(offset, e, seenAt);
@@ -1488,6 +1488,18 @@ public class MailInstanceRegistrationTests
 
         Assert.Null(MailDigest.TryParseArgs(argv, out var errors));
         Assert.Contains(errors, e => e.Contains("[a-z0-9][a-z0-9-]*"));
+    }
+
+    [Fact]
+    public void AnAddressPastTheLengthBound_IsRefusedAtRegistration()
+    {
+        // The whole address obeys the grammar's one length bound; past it no
+        // `to` could name this mailbox, so it would read nothing forever.
+        var role = new string('r', 60);
+        var inst = new string('i', 60);                            // 60 + 1 + 60 = 121
+        Assert.Null(MailDigest.TryParseArgs(["--role", role, "--as", inst], out var errors));
+        Assert.Contains(errors, e => e.Contains("121 characters"));
+        Assert.NotNull(MailDigest.TryParseArgs(["--role", role, "--as", inst[..59]], out _));   // 120: legal
     }
 
     // ---- the cursor key ----------------------------------------------------

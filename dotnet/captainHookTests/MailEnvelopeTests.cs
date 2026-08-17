@@ -437,6 +437,54 @@ public class MailEnvelopeParseTests
         Assert.Contains(errors, e => e.Contains("got \"Ops\""));
     }
 
+    // ---- replyTo: where an answer to THIS envelope goes (ADR-0018 d4) ------
+
+    [Fact]
+    public void ReplyTo_IsParsedAndCarried()
+    {
+        // The thread's ROUTING half beside `inReplyTo`'s correlation half. It is
+        // an address in `to`'s grammar and it is a property of the REQUEST, not
+        // of the sender — a forwarded envelope's sender is the reaper and its
+        // reply address is the original asker's, two facts one `from` could
+        // not carry.
+        var e = ParseValid(With("\"replyTo\": \"maintainer@laptop-a\""));
+        Assert.Equal("maintainer@laptop-a", e.ReplyTo);
+        Assert.Equal("scribe", ParseValid(With("\"replyTo\": \"scribe\"")).ReplyTo);   // a role is a legal return address
+    }
+
+    [Fact]
+    public void ReplyTo_IsAbsentOnAnOrdinaryEnvelope()
+    {
+        // No default and no inference: absent means the sender named no reply
+        // address, and an answerer falls back to the sender's role (d4 keeps a
+        // role-addressed answer legal). Explicit null is the `inReplyTo` spelling.
+        Assert.Null(ParseValid(AdrEnvelope).ReplyTo);
+        Assert.Null(ParseValid(With("\"replyTo\": null")).ReplyTo);
+    }
+
+    [Theory]
+    [InlineData("\"replyTo\": \"Maintainer\"")]        // the address obeys the grammar…
+    [InlineData("\"replyTo\": \"a@b@c\"")]
+    [InlineData("\"replyTo\": \"laptop a\"")]
+    [InlineData("\"replyTo\": \"\"")]                  // …and blank is not an address
+    [InlineData("\"replyTo\": 7")]
+    [InlineData("\"replyTo\": { \"role\": \"m\" }")]
+    public void BadReplyTo_IsMalformed(string field)
+    {
+        // A dead return address is refused rather than carried: an answerer
+        // that copied it would send its answer to a mailbox no sender can
+        // spell, silently.
+        Assert.Contains(ParseInvalid(With(field)), e => e.Contains("replyTo"));
+    }
+
+    [Fact]
+    public void ReplyTo_IsNotResolvedAgainstAnything()
+    {
+        // No registry exists, and a mailbox that does not exist YET is a
+        // legitimate return address (d3 anchors it on first contact).
+        Assert.Equal("nobody-yet@anywhere", ParseValid(With("\"replyTo\": \"nobody-yet@anywhere\"")).ReplyTo);
+    }
+
     // ---- forwardedFrom: the second envelope-to-envelope reference (d8) -----
 
     [Fact]
@@ -661,6 +709,30 @@ public class MailAddressTests
     [InlineData("a@b")]       // the separator is never part of a HALF
     [InlineData("é")]
     public void IsRole_Refuses(string s) => Assert.False(MailAddress.IsRole(s));
+
+    [Theory]
+    [InlineData(120, true)]
+    [InlineData(121, false)]
+    public void TheWhole_IsBoundedAtMaxChars_RoleAlone(int length, bool ok)
+    {
+        // The grammar's one length bound (added with `answer-by-address`). An
+        // address is rendered UNCLAMPED in the digest head — a truncated return
+        // address is worse than none — so it is refused past the head-field
+        // width instead. It also sits well under NAME_MAX for the cursor file
+        // `cursor.<role>.<instance>.json` (doc/platform.md).
+        Assert.Equal(MailEnvelope.HeadFieldChars, MailAddress.MaxChars);
+        Assert.Equal(ok, MailAddress.TryParse(new string('a', length), out _));
+    }
+
+    [Theory]
+    [InlineData(120, true)]
+    [InlineData(121, false)]
+    public void TheWhole_IsBoundedAtMaxChars_SeparatorIncluded(int length, bool ok)
+    {
+        var s = "r@" + new string('i', length - 2);
+        Assert.Equal(length, s.Length);
+        Assert.Equal(ok, MailAddress.TryParse(s, out _));
+    }
 
     [Fact]
     public void FailedParse_YieldsDefault_NeverAPartialAddress()

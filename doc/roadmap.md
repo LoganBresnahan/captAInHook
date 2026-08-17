@@ -1558,6 +1558,64 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `answer-by-address` (2026-08-17; phase 4, slice 6 — and the
+  evening's one AMENDMENT, taken first because the slice got simpler on top of
+  it. **d3 amended: the cursor key IS the address.** As first landed an
+  unnamed reader was keyed `role × session` but NOT reachable at
+  `role@<session>` — refused, on ADR-0016 d6's ground that addressing a session
+  strands mail. Stepping back over the whole system showed that asymmetry
+  fighting its own gravity: five spellings of "who" (`role`, `session`,
+  `hookSession`, `instance`, cursor key), a cursor file that could not say
+  which kind of mailbox it was, a read model forced to under-claim, and ADR-0017
+  d8's "prefer the asking session's cursor" — session addressing wearing a
+  disguise, because everything in ask/reply WANTS to answer the window that
+  asked. And the refusal's premise had already been eaten by a later decision:
+  the reaper (0018 d6) is precisely the mechanism for stranded mail. So now
+  `MailCursors.Pending(MailAddress requested, hookSession)` resolves the
+  mailbox as `role@(--as ?? session)` and that ONE string is both the cursor
+  key and the entitlement — a window is reachable at its session (ephemeral),
+  a `--as` mailbox is durable, the difference is lifetime never reachability,
+  and a sessionless reader has no instance and reads broadcast alone. Two lines
+  of engine code; the predicate did not move. The snapshot's under-claim from
+  the previous slice CLOSED (the read model reads every cursor file as the
+  mailbox its name spells), `mail status` counts a window's own unicast, the
+  trail is byte-identical, the four tests that pinned the refusal flipped to
+  pin the reachability with the reasoning rewritten, and both ADRs (0016 d6,
+  0018 d3 + the rejected-alternatives row, half-reversed) carry the note.
+  **Then the slice.** The asker's address rides on the request as a top-level
+  `replyTo` — an address in `to`'s grammar with `to`'s refusal, optional, no
+  default, NOT resolved against anything (a mailbox that does not exist yet is
+  a legitimate return address) — and not as a member of `from`, decided by the
+  reaper: a forwarded request's sender is the reaper and its reply address is
+  the original asker's, two facts one `from` cannot carry (`forwardedFrom`
+  exists for the same reason). Threaded parser → store → DTO → schema →
+  `api.gen.ts` → reducer → the detail card's `reply to` row, the same path
+  `forwardedFrom` took; golden corpus regenerated to 62 pure `"replyTo": null`
+  insertions. The digest renders it in the item HEAD, `· reply to <address>`,
+  verbatim and unclamped, because the reader that has to answer is very often
+  a model and the address it copies into `to` has to be where its eye lands —
+  **which reopened the render skeptic's finding 1** (a sender-controlled head
+  field longer than the cap eats the digest) and clamping is not available for
+  an address (a model copies `…` verbatim and the answer goes to a mailbox
+  nobody named). So the address grammar gained its ONE length bound:
+  `MailAddress.MaxChars` = `HeadFieldChars` (120), refused at parse and at
+  registration; checking the number found a latent platform bug from slice 1
+  underneath it — a mailbox's cursor is a FILE under NAME_MAX 255, so an
+  address past ~242 was already a mailbox whose cursor could never be written
+  (doc/platform.md row added; a harness with long or non-ASCII session ids is
+  named as the residual and as a revisit trigger). ADR-0017 d8 marked
+  simplified: an answer reaches the asker's ONE cursor by routing, so no
+  delivery preference exists and `inReplyTo` is correlation only; what survives
+  is that a unicast answer is urgent-class at the asker's box, now a fact about
+  the address rather than a preference over cursors. Nothing FILLS `replyTo`
+  yet — `mail ask` (0017) will, from the caller's own registration the way
+  `mail status` learns it, so a sender never spells its own address by hand.
+  The plan's "unit test catches misaddressing" is `AnAnswerAddressedToThe
+  RequestsReplyTo_ReachesTheAskerAlone`: request carries the asker's address,
+  answer goes `to` it, ONE mailbox has it and three siblings do not. 18 tests
+  (`MailEnvelopeParseTests` +9, `MailAddressTests` +4, `MailStoreFormatTests`
+  +1, `MailDigestTests` +1, `MailUnicastRoutingTests` +3); suite 1119 → 1137
+  green twice, web 253 unchanged, `ui/` rebuilt.)
   Slices landed: `plan-unicast` (2026-08-17; phase 3, slice 5 — the slice where
   a `role@instance` envelope stops being carried and starts being DELIVERED.
   Four slices built a grammar, a TTL refusal, a named cursor key and a

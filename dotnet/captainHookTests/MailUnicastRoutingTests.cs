@@ -3,31 +3,34 @@ using CaptainHook.Mail;
 
 namespace CaptainHook.Tests;
 
-/// ADR-0018 d4 (roadmap item 23, slice `plan-unicast`) — the slice where a
-/// `role@instance` envelope stops being carried and starts being DELIVERED.
+/// ADR-0018 d4 (roadmap item 23, slice `plan-unicast`, and the 2026-08-17
+/// amendment to d3 that followed it) — the slice where a `role@instance`
+/// envelope stops being carried and starts being DELIVERED.
 ///
 /// Slices 1–4 built an address grammar, a TTL refusal, a named cursor key and a
 /// provenance field; none of them routed anything, so unicast mail parsed,
 /// landed on the chain, and reached nobody. The whole of this slice is one
-/// predicate — a registration reads its role's broadcast, plus its own unicast
-/// when it is NAMED — and the reason it gets its own test file is that every
-/// way it can go wrong is SILENT. Mail delivered to the wrong mailbox is not an
-/// exception, a nonzero exit, or a trail line; it is a digest that reads
-/// slightly wrong to a human who has no idea what they were supposed to see.
+/// predicate — a mailbox reads its role's broadcast, plus its own unicast — and
+/// the reason it gets its own test file is that every way it can go wrong is
+/// SILENT. Mail delivered to the wrong mailbox is not an exception, a nonzero
+/// exit, or a trail line; it is a digest that reads slightly wrong to a human
+/// who has no idea what they were supposed to see.
 ///
 /// Three claims, and the tests are grouped along them:
 ///
-///   * THE REFUSAL. An unnamed reader must not match `role@<its session id>`.
-///     Session ids are grammar-legal instance names, so this is a real address
-///     someone could write, and matching it would make windows addressable —
-///     the model ADR-0016 d6 rejected and this ADR re-rejected, since a mailbox
-///     keyed to a window dies with the window.
+///   * THE KEY IS THE ADDRESS. `Pending` resolves the mailbox as
+///     `role@(--as ?? session)`, and that one string is both where the cursor
+///     lives and what the mailbox answers to. A window's default mailbox is
+///     therefore reachable at `role@<its session id>` — ephemeral, but real. (As
+///     first landed, an unnamed reader was keyed by its session and NOT
+///     reachable there; the amendment removed that asymmetry, and the tests in
+///     the "the window's own address" block are the ones that flipped.)
 ///   * THE SECOND COPY. `MailCursors` filters by recipient in two places, and
 ///     only one of them is on the happy path. `Pending`'s scan decides what may
 ///     be delivered; `LoadOrAnchor`'s held-entry check decides whether a cursor
-///     still describes its own mail. A named reader that HOLDS a unicast is the
-///     state where a disagreement shows, and it shows as a re-anchor loop, not
-///     as a missing feature.
+///     still describes its own mail. A reader that HOLDS a unicast is the state
+///     where a disagreement shows, and it shows as a re-anchor loop, not as a
+///     missing feature.
 ///   * THE LEDGER. A delivery into a named mailbox says which mailbox, in the
 ///     spelling `mail.cursorAdvance` already uses.
 public class MailUnicastRoutingTests
@@ -48,9 +51,10 @@ public class MailUnicastRoutingTests
 
     // ---- the predicate, alone ----------------------------------------------
 
-    /// An unnamed reader is EXACTLY the reader ADR-0016 built: its role's
-    /// broadcast and nothing else. The `main@s-1` row is the whole point — see
-    /// the refusal test below for why it is not merely unnecessary.
+    /// An address with NO instance reads its role's broadcast and nothing else.
+    /// After the amendment that is only ever the sessionless reader — every
+    /// window's mailbox has an instance, its session id — so this table is the
+    /// pure predicate on a bare role, and nothing more.
     [Theory]
     [InlineData("main", true)]
     [InlineData("main@laptop-a", false)]
@@ -60,7 +64,7 @@ public class MailUnicastRoutingTests
     [InlineData("mainx", false)]
     [InlineData("main@", false)]
     [InlineData("@main", false)]
-    public void UnnamedMailbox_ReadsItsBroadcastAndNothingElse(string to, bool accepted) =>
+    public void ABareRoleAddress_ReadsItsBroadcastAndNothingElse(string to, bool accepted) =>
         Assert.Equal(accepted, Unnamed.Accepts(to));
 
     /// A named reader is still a holder of its role — naming a mailbox
@@ -79,46 +83,62 @@ public class MailUnicastRoutingTests
     public void NamedMailbox_ReadsItsBroadcastAndItsOwnUnicast(string to, bool accepted) =>
         Assert.Equal(accepted, Named.Accepts(to));
 
-    /// A registration whose `--as` HAPPENS to equal its window's session id is
-    /// still a named mailbox. Named-ness is carried from the registration, never
-    /// inferred from the cursor key differing from the session — the inference
-    /// is right for the trail (where equal means "nothing extra to say") and
-    /// wrong here, where it would silently un-route a real mailbox's mail.
+    /// `--as s-1` from window s-1 and no `--as` from window s-1 are the SAME
+    /// mailbox — one key, one address, one cursor file. Under the pre-amendment
+    /// rule they differed in reachability alone, which is the kind of
+    /// distinction nothing on disk can record and every reader has to guess.
     [Fact]
-    public void ANameThatEqualsTheSessionId_IsStillANamedMailbox()
+    public void ANameThatEqualsTheSessionId_IsTheWindowsOwnMailbox()
     {
         using var tmp = new MailStoreTempDir();
         Send(tmp, Unicast("u-1", "main@s-1"));
 
         var cursors = new MailCursors(tmp.Store());
-        Assert.Equal(["u-1"], Ids(cursors.Pending(new MailAddress("main", "s-1"), "s-1")));
+        var viaName = cursors.Pending(new MailAddress("main", "s-1"), "s-1");
+        Assert.Equal(["u-1"], Ids(viaName));
+        Assert.IsType<MailCursorWrite.Written>(cursors.Advance(viaName, [viaName.Pending[0].Offset]));
+
+        // Read back through the OTHER spelling: same cursor, already consumed.
+        Assert.Empty(cursors.Pending("main", "s-1").Pending);
+        Assert.Single(Directory.GetFiles(tmp.Dir, "cursor.*.json"));
     }
 
-    // ---- the refusal --------------------------------------------------------
+    // ---- the window's own address --------------------------------------------
 
-    /// THE PIN. A session id is the cursor key's FALLBACK (d3), never a name a
-    /// sender may spell — and it is grammar-legal, so `main@s-1` is an address
-    /// someone can really write. If an unnamed window answered to it, every
-    /// window would be addressable by its session id and mail would be routed
-    /// to mailboxes that die with the window, which is precisely the model
-    /// ADR-0016 d6 rejected and whose failure is on the live ledger (four dead
-    /// cursors holding mail forever).
+    /// THE AMENDMENT'S PIN. A window is reachable at `role@<its session id>` —
+    /// its default mailbox, ephemeral but real. As first landed this was
+    /// REFUSED, on ADR-0016 d6's ground that a session-keyed mailbox dies with
+    /// the window and strands mail; but the reaper (d6 of ADR-0018) exists to
+    /// handle stranded mail, and once it did the asymmetry — a mailbox keyed by
+    /// a name it could not be reached at — bought nothing and cost every reader
+    /// a "which kind of mailbox is this?" it could not answer from disk. Now the
+    /// key is the address, full stop.
     [Fact]
-    public void UnnamedReader_DoesNotReceiveUnicastAddressedToItsOwnSessionId()
+    public void AWindow_ReceivesUnicastAddressedToItsOwnSessionId()
     {
         using var tmp = new MailStoreTempDir();
         Send(tmp, MailFixtures.Envelope(id: "b-1", to: "main"));
         Send(tmp, Unicast("u-1", "main@s-1"));
+        Send(tmp, Unicast("u-2", "main@s-2"));       // another window's
 
         var cursors = new MailCursors(tmp.Store());
         var view = cursors.Pending("main", "s-1");
 
-        Assert.Equal(["b-1"], Ids(view));
-        // And it is not merely unrendered: the frontier consumes it like any
-        // other mailbox's mail, so it does not come back on the next read.
-        Assert.IsType<MailCursorWrite.Written>(
-            cursors.Advance(view, [view.Pending[0].Offset]));
-        Assert.Empty(cursors.Pending("main", "s-1").Pending);
+        Assert.Equal(["b-1", "u-1"], Ids(view));
+        Assert.Equal(["b-1", "u-2"], Ids(cursors.Pending("main", "s-2")));
+    }
+
+    /// The sessionless reader has no instance and therefore no unicast address:
+    /// `role@` is not a spelling anyone can write. It reads the broadcast alone,
+    /// and that is not a special case — it is what "no instance" means.
+    [Fact]
+    public void TheSessionlessReader_HasNoUnicastAddress()
+    {
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, MailFixtures.Envelope(id: "b-1", to: "main"));
+        Send(tmp, Unicast("u-1", "main@laptop-a"));
+
+        Assert.Equal(["b-1"], Ids(new MailCursors(tmp.Store()).Pending("main", null)));
     }
 
     // ---- routing -----------------------------------------------------------
@@ -149,7 +169,7 @@ public class MailUnicastRoutingTests
         var cursors = new MailCursors(tmp.Store());
         Assert.Equal(["b-1", "u-1"], Ids(cursors.Pending(Named, "s-1")));
         Assert.Equal(["b-1"], Ids(cursors.Pending(new MailAddress("main", "laptop-b"), "s-2")));
-        Assert.Equal(["b-1"], Ids(cursors.Pending("main", "s-3")));   // and to an unnamed holder
+        Assert.Equal(["b-1"], Ids(cursors.Pending("main", "s-3")));   // and to a window's own mailbox
     }
 
     /// The cursor key is the INSTANCE, so a named mailbox's unicast mail is
@@ -305,13 +325,13 @@ public class MailUnicastRoutingTests
         Assert.False(data.TryGetProperty("instance", out _));
     }
 
-    /// End to end through the real verb: an unnamed window whose session id is
-    /// spelled out as an instance gets nothing, answers noop, and does not
-    /// advance — the refusal is not a filter in front of a delivery, it is the
-    /// absence of one.
+    /// End to end through the real verb: a window with no `--as` is handed the
+    /// unicast addressed to `role@<its session>` and not a sibling's — the
+    /// default mailbox is a mailbox.
     [Fact]
-    public void UnnamedDigest_NeverDeliversUnicastMail()
+    public void AWindowsDigest_DeliversItsOwnUnicast_AndNotASiblings()
     {
+        using var log = new CapturedLog();
         using var tmp = new MailStoreTempDir();
         Send(tmp, Unicast("u-1", "main@s-1"));
         Send(tmp, Unicast("u-2", "main@laptop-a"));
@@ -319,38 +339,102 @@ public class MailUnicastRoutingTests
         var run = Digest(tmp.Dir, "s-1", ["--role", "main"]);
 
         Assert.Equal(0, run.Exit);
-        Assert.DoesNotContain("u-1", run.Out);
+        Assert.Contains("u-1", run.Out);
         Assert.DoesNotContain("u-2", run.Out);
-        Assert.Contains("\"effect\":\"noop\"", run.Out.Replace(" ", ""));
-        Assert.False(File.Exists(new MailCursors(tmp.Store()).CursorPath("main", "s-1")));
+        // And the trail keeps its pre-ADR-0018 shape for this reader: mailbox
+        // and window are one name, so there is nothing extra to say.
+        var deliver = Assert.Single(log.Events, e => e.Evt == "mail.deliver");
+        Assert.False(JsonDocument.Parse(deliver.ToJson()).RootElement
+            .GetProperty("data").TryGetProperty("instance", out _));
     }
 
-    // ---- the observation surface's honest gap -------------------------------
+    // ---- answer-by-address (ADR-0018 d4, phase 4) --------------------------
 
-    /// The read-only snapshot UNDER-CLAIMS, deliberately (d4 as built). A cursor
-    /// file's name is just its key, so this surface cannot tell an `--as` name
-    /// from a session id and cannot know whether the mailbox is entitled to
-    /// `role@key` — and between under-claiming and guessing, a read-only picture
-    /// under-claims. Guessing the other way would paint every window as
-    /// addressable by its session id, which is the routing model d4 refuses.
-    ///
-    /// Pinned so the gap stays a decision: the live trail carries the `instance`
-    /// column, so the picture is recoverable from the stream, and saying it in
-    /// the snapshot is `canvas-instances`' to design.
+    /// The return address is rendered in the digest HEAD, verbatim and
+    /// unclamped, because the reader that has to answer is very often a model
+    /// and the address it should write into `to` has to be where its eye
+    /// lands, spelled exactly. (Unclamped is safe: the grammar bounds an
+    /// address at `MailAddress.MaxChars`, so the head stays bounded without a
+    /// clamp that would produce a return address nobody can reach.)
     [Fact]
-    public void TheReadOnlySnapshot_ShowsUnicastMailAsPendingForNobody()
+    public void Render_ShowsTheReturnAddress_InTheHead()
+    {
+        var pending = new[]
+        {
+            DigestFixtures.Pending(0, DigestFixtures.Env("q-1", kind: MailKind.Request,
+                replyTo: "reviewer@laptop-a", body: "which branch?")),
+            DigestFixtures.Pending(200, DigestFixtures.Env("s-1")),
+        };
+        var plan = MailDigest.Plan(pending, MailSeam.Ambient, ["inject"]);
+        var render = MailDigest.Render(DigestFixtures.View(pending), plan, maxChars: 4096);
+
+        var lines = render.Text.Split('\n');
+        var q = Assert.Single(lines, l => l.Contains("id q-1"));
+        Assert.EndsWith("· reply to reviewer@laptop-a", q);
+        var st = Assert.Single(lines, l => l.Contains("id s-1"));
+        Assert.DoesNotContain("reply to", st);
+    }
+
+    /// The plan's "unit test catches misaddressing", end to end through the
+    /// real store and cursors: a request carries the asker's address, the
+    /// answer goes `to` exactly that address, and it lands in ONE mailbox — the
+    /// asker's — not in any sibling holding the asker's role. This is the
+    /// exchange the whole ADR was written for (the reviewer's answer that
+    /// reached every maintainer window), now addressed rather than preferred.
+    [Fact]
+    public void AnAnswerAddressedToTheRequestsReplyTo_ReachesTheAskerAlone()
+    {
+        using var tmp = new MailStoreTempDir();
+        var cursors = new MailCursors(tmp.Store());
+
+        // The asker is a maintainer window; its request names its own address.
+        var asker = new MailAddress("maintainer", "s-ask");
+        Send(tmp, MailFixtures.Envelope(id: "q-1", to: "reviewer", replyTo: asker.ToString())
+            with { Kind = MailKind.Request });
+
+        // The reviewer reads the request and can see where to answer.
+        var review = cursors.Pending("reviewer", "s-rev");
+        var request = Assert.Single(review.Pending).Envelope;
+        Assert.Equal("maintainer@s-ask", request.ReplyTo);
+
+        // It answers `to` that address — a unicast, so no ttl (d5).
+        Send(tmp, MailFixtures.Envelope(id: "a-1", to: request.ReplyTo!, inReplyTo: "q-1", ttl: null)
+            with { Kind = MailKind.Answer });
+
+        // The asker's own mailbox has it; two sibling maintainer windows and a
+        // durable maintainer instance do not.
+        Assert.Equal(["a-1"], Ids(cursors.Pending("maintainer", "s-ask")));
+        Assert.Empty(cursors.Pending("maintainer", "s-other").Pending);
+        Assert.Empty(cursors.Pending("maintainer", "s-third").Pending);
+        Assert.Empty(cursors.Pending(new MailAddress("maintainer", "laptop-a"), "s-x").Pending);
+    }
+
+    // ---- the observation surface -------------------------------------------
+
+    /// The read-only snapshot reads every cursor file as the mailbox its name
+    /// spells — which, since the key IS the address, is exactly right for a
+    /// durable `--as` mailbox and for a window's ephemeral one alike. Before
+    /// the amendment this surface had to UNDER-CLAIM (it could not tell the two
+    /// kinds apart and only one was reachable); now there is nothing to tell
+    /// apart for routing purposes, and unicast mail shows as pending for the
+    /// mailbox it was sent to.
+    [Fact]
+    public void TheReadOnlySnapshot_ShowsUnicastMailPendingForItsMailbox()
     {
         using var tmp = new MailStoreTempDir();
         Send(tmp, MailFixtures.Envelope(id: "b-1", to: "main"));
         Send(tmp, Unicast("u-1", "main@laptop-a"));
+        Send(tmp, Unicast("u-2", "main@s-9"));
 
-        // The mailbox exists on disk under exactly the name a sender addresses.
         var cursors = new MailCursors(tmp.Store());
         var view = cursors.Pending(Named, "s-1");
         Assert.IsType<MailCursorWrite.Written>(cursors.Advance(view, [view.Pending[0].Offset]));
+        var win = cursors.Pending("main", "s-9");
+        Assert.IsType<MailCursorWrite.Written>(cursors.Advance(win, []));
 
         var port = MailReadPort.Over(tmp.Dir);
-        Assert.Equal([("main", "laptop-a")], port.Cursors());
-        Assert.Equal(["b-1"], Ids(port.Pending("main", "laptop-a")));
+        Assert.Equal([("main", "laptop-a"), ("main", "s-9")], port.Cursors());
+        Assert.Equal(["u-1"], Ids(port.Pending("main", "laptop-a")));
+        Assert.Equal(["b-1", "u-2"], Ids(port.Pending("main", "s-9")));
     }
 }
