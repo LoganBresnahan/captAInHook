@@ -284,6 +284,79 @@ Role and session are percent-encoded in cursor filenames, so a hostile role name
 cannot escape the mail directory. The mail store grows unbounded until rotation
 mechanics land (ADR-0016 N4); `gen` reserves them.
 
+## The observation surface (d14): watching without touching
+
+Item 20 built a bus nothing could show. The Mail view is the picture, and its
+whole design problem is that a *watcher* must never become a *reader* — the
+cursor is the delivery contract, and a GUI that advanced one would consume the
+operator's mail by looking at it.
+
+```
+  ~/.captainHook/mail/                    logs/captainHook.jsonl
+   mail.jsonl   cursor.<role>.<sess>.json      (the trail)
+        │              │                            │
+        └──────┬───────┘                            │
+               ▼                                    │
+        MailReadPort  ── five method-group delegates: Read / VerifyChain /
+               │          HeadHash / List / Pending.  No Append. No Advance.
+               ▼                                    │
+        ApiReadModel.Mail(since) ◄──────────────────┤ TrailEventId (stamped FIRST)
+               │                                    │ mail.deliver preload (6a)
+               ▼                                    │
+        GET /api/v1/mail?since=  ──┐                │
+                                   │                │
+   browser                         ▼                ▼
+        seedMail(dto) ──────► MailState ◄──── reduceMail(state, line)
+               │                  ▲                 ▲
+               │                  │            SSE  │ Last-Event-ID: <TrailEventId>
+               │                  │        /api/v1/events (its OWN subscription)
+               ▼                  │
+        buildScene(state) ────────┘        resnapshot ⇒ re-seed + re-anchor
+               │
+               ▼
+        the canvas: ledger spine · role lanes · session cursors · zoom tiers
+```
+
+**Observation is not delivery**, pinned three ways rather than promised. The read
+model holds a `MailReadPort` — method-group delegates over a store and cursors it
+creates privately — so there is no handle to append or advance and no interface a
+cast could re-open; a reflection walk over the read model's declared graph
+asserts it, and because captured closures hold what reflection cannot see, a
+SOURCE pin asserts no file under `Api/` even NAMES the writable types or verbs.
+No non-GET method answers under `/mail`, driven as a route-table theory that also
+asserts the store's bytes are unchanged and no cursor file was created: *asking
+cannot create a mailbox.* And `delivered` comes from a `mail.deliver` ledger line
+and nowhere else — never inferred from a cursor being past an envelope.
+
+**The picture is an interpolator, never a second store** (N8). A snapshot is
+authoritative and every re-seed REPLACES reduced state; between snapshots the
+reducer folds trail events under three rules — APPLY what an event states, DERIVE
+what the ledger proves, FLAG what neither gives. When it cannot honestly say
+where a cursor is, it says so and asks for a snapshot instead of guessing; that
+is the only defence against the one failure no screenshot catches, a false
+picture that looks fine.
+
+**Snapshot and stream are joined by a stamp, not by luck.** Subscribing after the
+snapshot loses the window between them; subscribing before it replays. So the
+snapshot carries `trailEventId` — the trail's end, read BEFORE the store, so the
+residual window can only duplicate (idempotent) and never lose — and the client
+opens its subscription exactly there. Mail runs its OWN subscription rather than
+filtering the trace's, because filtering by id would mean interpreting an opaque
+token (ADR-0009 d2) and because the trace's buffer is capped, where dropping the
+oldest line is right for a log and silent corruption for a reduced picture.
+
+**What the trail can prove reaches back further than the page.** A live stream
+starts *now*, so through slice 5 every pickup older than the tab read *before
+cursor · no record*. Slice 6a folds the trail's own `mail.deliver` lines into the
+snapshot (`MailDto.deliveries`), and `deliveriesComplete` says whether the fold
+saw the whole file — which is what lets the detail card distinguish "nobody read
+it" from "further back than I can see". The rule did not move; only the reach.
+
+**Deliberately not built:** a scrub bar (slice 6b, declined 2026-08-17 — the
+trail is queryable JSONL and reading it answers the debugging case; ADR-0016's
+addendum records the reasoning and the revisit trigger), and sending from the
+GUI, which is a consent decision of its own and is not in this ADR.
+
 ## The human channel: `mail status` (ADR-0017 d2)
 
 The bus can now be *watched* (the Mail canvas) and *delivered* (a digest at a
@@ -348,9 +421,11 @@ drown the trail it exists to help you read.
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished` — every cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
-| the observation surface's reducer (d14; the read endpoint and canvas rows land with their slices) | `web/src/mail.ts` — pure `(state, trailLine) → state` seeded from `MailDto`; golden corpus `web/src/mail.golden.json` GENERATED by `dotnet/captainHookTests/MailReducerGoldenTests.cs` (2), replayed + attacked by `web/src/mail.test.ts` / `mail.skeptic.test.ts` (`npm test`) |
+| the read ENDPOINT (d14, slice 1) — one read-only snapshot: chain status, the ledger from `since`, every cursor's pending view, inferred presence; `since` absent ⇒ 0, off-boundary ⇒ `sinceAligned: false` (never a spliced prefix), malformed ⇒ 400 | `ApiReadModel.Mail` + the `/api/v1/mail` route (`dotnet/captainHook/Api/ApiReadModel.cs`, `Api/ApiHost.cs`); DTOs in `Api/ApiDtos.cs`; the write half unreachable by construction via `MailReadPort` (`dotnet/captainHook/Mail/MailReadPort.cs`); presence from `SessionPresence` ∪ cursor files. `MailApiTests.cs` (31) — reflection walk, `Api/` source pin, non-GET route theory asserting nothing is written |
+| the CANVAS (d14, slice 4) — ledger spine, a lane per role, a track per session, marks with the cursor's own arithmetic; semantic zoom in px-per-slot (far < 40 ≤ mid < 132 ≤ near); pan/zoom on ONE axis, every vertical measure a CSS pixel | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`; `data-lane`, `data-glyph`, `data-track`, `data-mark`, `data-tier`, `data-arrival`, `data-motion`) over `web/src/mailCanvas.ts` (`buildScene`, `MailView`); every status is `lineStatus`/`projectCursor`, never the canvas's own. `web/src/mailCanvas.test.ts` (40) against all 16 goldens; `web/e2e/mail.spec.ts` |
+| the observation surface's reducer (d14, slice 3) | `web/src/mail.ts` — pure `(state, trailLine) → state` seeded from `MailDto`; golden corpus `web/src/mail.golden.json` GENERATED by `dotnet/captainHookTests/MailReducerGoldenTests.cs` (2), replayed + attacked by `web/src/mail.test.ts` / `mail.skeptic.test.ts` (`npm test`) |
 | snapshot ⇄ stream alignment (d14 as-built): `MailDto.TrailEventId` is the trail's end STAMPED BEFORE the store is read, so a client subscribing at `Last-Event-ID: <it>` gets zero loss and zero duplicate. A STRING, because the id is opaque (ADR-0009 d2) and because `"0"` (replay everything) must never collapse into absent under a falsy test; null = no trail served ⇒ the picture is real and frozen | `MailDto` in `dotnet/captainHook/Api/ApiDtos.cs`; `ApiReadModel.Mail`/`TrailLength` (`_trailPath`, bound from `sseOptions.TrailPath` in `Core/DaemonHost.cs`); `MailState.trailEventId` in `web/src/mail.ts`; pinned by `MailApiTests` (resume-exactness end to end, null/"0" contracts, the source pin on read order) |
-| the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (9) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |
+| the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (11) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |
 | the delivery PRELOAD (d14, slice 6a) — `delivered` still comes from a `mail.deliver` line and nowhere else, but the picture no longer has to have been watching when it landed: the daemon folds those lines out of the trail into `MailDto.deliveries` (columns verbatim; NO ledger offsets, because placing an id is the reducer's arithmetic and a second implementation is N8), and `MailDto.deliveriesComplete` is the narrow claim that the whole file was read and nothing trimmed — false for a scan window, a hit cap, or no trail at all, which is what lets the detail card distinguish "nobody read it" from "further back than I can see" | `MailDeliveryFold`/`MailDeliveryLine`/`MailDeliveryFoldResult` in `dotnet/captainHook/Api/MailDeliveryFold.cs`; `MailDeliveryDto` + `ApiReadModel.Mail` in `Api/ApiDtos.cs`/`Api/ApiReadModel.cs`; `preloadDeliveries`/`resolveDelivery` (ONE placement rule, shared with `onDeliver`) in `web/src/mail.ts`. Pinned by `dotnet/captainHookTests/MailDeliveryPreloadTests.cs` (11 — a real engine-written line, the payload-stderr forgery, the bounds saying so, and a drive proving three snapshots change nothing on disk), 5 in `web/src/mail.test.ts` (preload ≡ live, dedup, unplaceable-is-quiet, no phantom cursors), and `web/e2e/mail.spec.ts` (a pickup nobody watched, delivered on a reloaded page from a snapshot line) |
 | the human channel (ADR-0017 d2) — `captainHook mail status`: roles from the `mail digest` registrations that survive `dispatch.json` for this cwd/session, counts from `MailCursors.Pending`, one `📬 n · m urgent` line per role, silent when there is nothing to say | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; role recognition is `MailDigest.TryParseArgs` itself, policy is `PolicyResolution.Resolve` + `Evaluate` (`Core/DispatchPolicy.cs`), registrations are `ExecHandlersFile.Resolve` (`Core/ExecHandlersFile.cs`). Pinned by `dotnet/captainHookTests/MailStatusTests.cs` (30 — line goldens, per-cursor counts, handler/event/project denials, multi-seam collapse, the refused registration, four silences, unreadable stdin, and a drive proving it creates and changes nothing) |
 | envelope parse table (26) | `dotnet/captainHookTests/MailEnvelopeTests.cs` |
@@ -361,3 +436,4 @@ drown the trail it exists to help you read.
 | `mail send` verb end to end (9) | `dotnet/captainHookTests/MailSendTests.cs` |
 | reentrancy guard proven by stub `claude`; two-role swarm smoke (5) | `dotnet/captainHookTests/MailDogfoodTests.cs` |
 | field report — first members live | `doc/dogfood/2026-08-14-first-bus-members.md` |
+| field report — the bus becomes visible (the Mail view + `mail status` on real traffic; the 6b verdict) | `doc/dogfood/2026-08-17-the-bus-becomes-visible.md` |

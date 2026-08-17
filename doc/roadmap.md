@@ -11,7 +11,7 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
-- [ ] **21. The Mail view — watch the bus live, read-only** — item 20 built
+- [x] **21. The Mail view — watch the bus live, read-only** — item 20 built
   the bus; nothing shows it. Per **ADR-0016 d14** (amended 2026-08-15): a
   sixth GUI view whose body is a zoomable SVG canvas drawing the *mechanism*
   — the ledger as the spine (mail never moves; cursors move past it), each
@@ -44,9 +44,52 @@ run live*. The framework underneath is what exists today.
   it: **build**, as (a) a delivery-record preload (fold `mail.deliver`
   history so cards read ✓ for pickups before page-open — the thing that read
   *"is past it · no delivery record in this picture"* all day) then (b) the
-  scrub bar. Remaining here: 6b (the scrub bar) and 7 (field report + docs + this
-  tick); **6a landed 2026-08-17** — see the slice note below.
+  scrub bar. **As it turned out: 6a landed 2026-08-17 and answered the
+  complaint; 6b was DECLINED the same day on the field report's evidence** (the
+  trail is queryable JSONL — reading it is how that report was written — and
+  ADR-0016's addendum records the reasoning, the unavailable mechanism, and the
+  revisit trigger).
   What the exchange asked for beyond this item is **ADR-0017** (item 22).
+  Slices landed: `mail-view-docs` (2026-08-17; phase 5, slice 7, the close —
+  the field report first, because it is the evidence the optional slice was
+  supposed to be decided from. `doc/dogfood/2026-08-17-the-bus-becomes-visible.md`
+  records two days of the real bus: the first exchange that did WORK rather than
+  demo (request → reply → addressed, three envelopes, no human relay, three real
+  SSE bugs fixed in `d6083f9`); 6a proved live (23 delivery records spanning ~37
+  hours and naming 75 pickups, folded into a page that had streamed nothing,
+  `deliveriesComplete: true`); the human channel deployed and **unplaced** — the
+  count renders in the TUI and NOT in the VS Code extension, the maintainer's own
+  primary window, which is ADR-0017's "harness with no passive display" hit first
+  by the harness in daily use; three readings of one bus all correct (canvas 6
+  pending, a fresh terminal 9, this window blank) because pending belongs to a
+  CURSOR and not to a role; two things only the canvas showed — observation
+  really is not delivery (a terminal read its count for minutes and created no
+  cursor; the track appeared on its first prompt, taking all 9 at once) and dead
+  cursors hold mail forever (4 of 7), which drove ADR-0018 the same evening; the
+  digest's measured per-prompt tax (median 75.0ms, n=92, max 420.6) that the
+  status line does not levy; and the intrusion the bus made visible — a
+  `mail.deliver` for session `s1` naming 7 envelopes, which was `/shipshape`'s
+  stdout-purity probe running the dev shim BARE against the live tree, firing the
+  maintainer's own digest and leaving a phantom cursor on a real lane (fixed in
+  `495bf5c`; a verification step that dispatches through the operator's hooks is
+  a WRITE to their state however read-only its intent). **6b declined on that
+  evidence** and recorded as a rejected alternative rather than a silent skip:
+  the row as written could not be built anyway (a client cannot ask for an older
+  `Last-Event-ID` — the id is opaque, ADR-0009 d2, the same wall 6a hit), the
+  debugging case is answered by reading the trail directly, and what a scrub bar
+  would still add is PATTERN rather than fact — revisit when ADR-0017's watcher
+  runs unattended turns. Docs: `doc/flow/mailbox-bus.md` gains § *The observation
+  surface* (the read path as a diagram, the three ways "observation is not
+  delivery" is pinned, N8's interpolator rule, the stamp that joins snapshot to
+  stream, and what is deliberately NOT built) and ground-truth rows for the
+  endpoint and the canvas; ADR-0016's Ground truth gains the four d14 rows its
+  reducer row had promised would "land with their slices" — endpoint, canvas,
+  live choreography, preload — which had accrued as debt. Every file and symbol
+  in the new rows checked mechanically, and three test counts copied from older
+  prose were WRONG and are now the measured ones (`MailApiTests` 31 not 30,
+  `mailCanvas.test.ts` 40 not 37, `mailStream.test.ts` 11 not 9). **Item 21
+  complete: 7 slices planned, 6 built, 1 declined with its reasoning on the
+  record.**)
   Slices landed: `mail-replay-preload` (2026-08-17; phase 4, slice 6a — the
   half of `mail-replay` the dogfood pass asked for first. `delivered` comes from
   a `mail.deliver` line and nowhere else (d14 pin iii) and a live stream starts

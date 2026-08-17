@@ -11,6 +11,12 @@ exchange; the watcher, runner shape and ask/reply are
 on the addendum's optional slice 6 `mail-replay`: **build**, in two parts —
 a delivery-record preload first (fold `mail.deliver` history so cards read
 ✓ for pickups that predate the page), the scrub bar second.)*
+*(**Fully landed 2026-08-17**: d14's seven slices are six built and one
+declined — 6a shipped and answered the complaint it was aimed at, and **6b (the
+scrub bar) was DECLINED the same day** on the field report's evidence, recorded
+as a rejected alternative in the addendum below rather than a silent skip.
+Roadmap item 21 is checked; the live evidence is
+[doc/dogfood/2026-08-17-the-bus-becomes-visible.md](../dogfood/2026-08-17-the-bus-becomes-visible.md).)*
 **Date:** 2026-08-12
 **Builds on:** [ADR-0003](0003-declarative-harness-registry.md) (the harness
 spec as capability data), [ADR-0007](0007-management-api.md) (TrailCursor /
@@ -837,7 +843,7 @@ Model names are session aliases; effort is the session effort setting.*
 | 4 | `mail-canvas` — the SVG bus: ledger spine, role lanes, session cursors, envelope glyphs; semantic-zoom tiers; pointer pan / wheel zoom on a `viewBox` in the store slice; sidebar entry `Mail`; both themes | opus[1m] | **high** | `/ui-loop`: seeded preview daemon with a scripted swarm (two roles, two sessions, held + expired envelopes), snap all three zoom tiers × 2 themes and READ them; a `mail.spec` e2e (zoom in on a lane ⇒ envelope cards; the ledger stays legible at far zoom); axe/contrast pass on the glyph palette. Big surface, fails visibly. |
 | 5 | `mail-live-choreography` — SSE subscription filtered to `mail.*`, one animation per event kind (drop-on-bus / cursor slide with seam tag / grey-out / reanchor jump), presence fade, resnapshot on `Gap`/`Reset`/reconnect | opus[1m] | medium | e2e through the preview daemon's fireHook: `mail send` then a digest at a seam ⇒ the envelope lights and the cursor passes it, asserted on DOM state not timing; `Gap` injected via the sse-backpressure test seam ⇒ resnapshot observed. Snap mid-animation frames read. |
 | 6a | `mail-replay` part a — the delivery-record PRELOAD: the daemon folds `mail.deliver` out of its trail into the snapshot, so a pickup that predates the page reads ✓ instead of *before cursor · no record* **(landed 2026-08-17)** | opus[1m] | low | Placement is the reducer's one rule, shared with the live path; the fold is pinned against an engine-written line and against a payload-stderr forgery; e2e reloads onto a delivery nobody watched. |
-| 6 | `mail-replay` *(optional)* — scrub bar: reducer fed from `/api/v1/events?Last-Event-ID=<older>` at variable rate; live resumes at the head | opus[1m] | low | Reducer determinism already pinned by 3; one e2e (scrub back ⇒ pending set matches the golden at that offset). Skippable if the live view alone satisfies the field report. |
+| 6b | `mail-replay` part b — scrub bar **(DECLINED 2026-08-17, see below)** | — | — | — |
 | 7 | `mail-view-docs` — flow doc § *The observation surface* (diagram of the bus canvas over the mechanism, ground-truth rows), this ADR's Ground truth rows for d14, ADR-0015 d1 note honored, roadmap tick | opus[1m] | low | `/shipshape`: every symbol named exists; a field report entry from watching the maintainer's real session in `doc/dogfood/`. |
 
 **As-built on 6a (2026-08-17):** the sketch above feeds the reducer from
@@ -853,6 +859,26 @@ implementation of it in C# is N8 again — plus `deliveriesComplete`, the narrow
 claim that the whole file was read and nothing trimmed. Pin iii is untouched:
 delivered still comes from a ledger line and nowhere else. What changed is how
 far back the picture can see one, and it now says how far that is.
+
+**Slice 6b declined (2026-08-17), on the field report's evidence.** Two
+reasons, and the first is that the row above describes a build that cannot be
+done the way it is written: a client CANNOT ask the SSE endpoint for an older
+`Last-Event-ID`, because the resume id is an opaque token a client echoes and
+never interprets (ADR-0009 d2) — the same wall slice 6a hit. The two shapes
+actually available are a client-side buffer (scrub only back to page-open, which
+for a freshly opened tab is nothing) and a server-side fold of the trail's
+`mail.*` lines (the `MailDeliveryFold` pattern again, and the real feature).
+Second, and decisive: the trail is queryable JSONL, so the debugging case —
+*when was this read, by whom, what was pending then* — is answered by reading it
+directly, which is exactly how [the 2026-08-17 field
+report](../dogfood/2026-08-17-the-bus-becomes-visible.md) was written (23
+delivery records, a 37-hour span, and a phantom reader no picture would have
+named). An agent over the trail is a better debugger than a slider: exact,
+scriptable, and able to answer questions a picture cannot express. What the
+scrub bar would still add is PATTERN rather than fact — showing the choreography
+to someone who will not read a log. **Revisit** when ADR-0017's watcher runs
+unattended turns and "what happened overnight" becomes a routine question, or
+when the bus needs demonstrating to people rather than debugging by its owner.
 
 **Phases:** (1) slices 1 + 2, one sitting, independent commits → (2) slice 3
 alone, verify hard before any pixel is drawn — the picture inherits the
@@ -878,7 +904,11 @@ sketch above, the departure is named in the decision's own annotation.
 | d10 — provenance + `mail.deliver` | `MailDigest.Render`/`ItemBlock` + golden tests; `MailDigest.LogDelivery` from the one advanced-the-cursor branch, after the answer is written. **As-built**: the sketch's nested `recipient: {role, session}` ships as a first-class `sessionId` column (nesting would hide mail delivery from every existing session filter), `role` in data |
 | d11 — hash chain + flock append | `MailStore.Append`/`Read`/`VerifyChain`/`HeadHash`/`HashOf`; `Genesis` = 64 zeros, `prev` = SHA-256 of the previous line's bytes excluding its LF, `MaxLineBytes` 128KiB. **Settled in the format sign-off**: rotation starts a NEW chain (no cross-file `prev`); torn tails terminated, never repaired. `MailStoreTests.cs` (43), `MailCursorEdgeTests.cs` (15) |
 | d12 — policy content hash | `PolicyContent.Of` stamped onto `policy.reload` and a new `policy.write` (`Core/DispatchPolicy.cs`, `Api/ApiPolicyWriter`) — over the LOADER's view, so an API write and its reload hash identically |
-| d14 — reducer + N8's mitigation *(slice 3 of the addendum; the endpoint, canvas and choreography rows land with their slices)* | `web/src/mail.ts` (`seedMail`, `reduceMail`, `projectCursor`, `lineStatus`, `deliveriesFor`, `presenceTier`) — pure, seeded from `MailDto`, `(state, trailLine) → state`; the golden corpus `web/src/mail.golden.json` is GENERATED by `dotnet/captainHookTests/MailReducerGoldenTests.cs` from the real store/cursors/digest (before-snapshot, trail, after-snapshot per scenario; regenerate with `CAPTAINHOOK_SCHEMA_UPDATE=1`, on `ApiSchemaTests`' drift-detector precedent) and replayed by `web/src/mail.test.ts` — same inputs ⇒ same pending set as `MailCursors.Pending`, per cursor, per offset. Adversarial: `web/src/mail.skeptic.test.ts` |
+| d14 — reducer + N8's mitigation *(slice 3 of the addendum)* | `web/src/mail.ts` (`seedMail`, `reduceMail`, `projectCursor`, `lineStatus`, `deliveriesFor`, `presenceTier`) — pure, seeded from `MailDto`, `(state, trailLine) → state`; the golden corpus `web/src/mail.golden.json` is GENERATED by `dotnet/captainHookTests/MailReducerGoldenTests.cs` from the real store/cursors/digest (before-snapshot, trail, after-snapshot per scenario; regenerate with `CAPTAINHOOK_SCHEMA_UPDATE=1`, on `ApiSchemaTests`' drift-detector precedent) and replayed by `web/src/mail.test.ts` — same inputs ⇒ same pending set as `MailCursors.Pending`, per cursor, per offset. Adversarial: `web/src/mail.skeptic.test.ts` |
+| d14 — the read endpoint *(slice 1)*: one read-only snapshot of the bus, and the write half unreachable BY CONSTRUCTION | `MailDto`/`MailChainDto`/`MailLineDto`/`MailCursorDto`/`MailPendingDto`/`MailPresenceDto`/`MailDeliveryDto` in `dotnet/captainHook/Api/ApiDtos.cs`; `ApiReadModel.Mail` + the `/api/v1/mail` route in `Api/ApiHost.cs`; `MailReadPort` (`dotnet/captainHook/Mail/MailReadPort.cs`) — five METHOD-GROUP delegates bound to Read/VerifyChain/HeadHash/List/Pending, never an interface a cast could re-open; presence from `SessionPresence` ∪ cursor files. Pinned by `MailApiTests.cs` (31): the reflection walk over the read model's declared graph, the `Api/` source pin (no file there NAMES `MailStore`/`MailCursors` or Append/Advance), and the route-table theory driving PUT/POST/DELETE/PATCH ⇒ 404 with the store's bytes unchanged and no cursor file created |
+| d14 — the canvas *(slice 4)*: the bus drawn as its MECHANISM — ledger spine, role lanes, session cursors, semantic zoom | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`, `MailStreamBadge`) over the pure geometry in `web/src/mailCanvas.ts` (`buildScene`, `MailView`, tier thresholds); pan/zoom is ONE AXIS (`{x, z}` over the ledger; every vertical measure is a CSS pixel) and the x axis is SLOT-uniform while mapping offsets exactly at line boundaries. Pinned by `web/src/mailCanvas.test.ts` (40) against all 16 engine-generated goldens, and `web/e2e/mail.spec.ts` end to end against a real daemon |
+| d14 — live choreography *(slice 5)* + snapshot⇄stream alignment: fetch, seed, subscribe AT the snapshot's stamp, re-seed when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit; `MailDto.TrailEventId` (a STRING — the id is opaque, ADR-0009 d2 — read BEFORE the store so the residual window can only duplicate, never lose). Four motions are CSS keyed on reducer state (`MailGlyph.arrival`, `MailTrack.motion`), so a re-anchor JUMPS rather than sliding backwards. Pinned by `web/src/mailStream.test.ts` (11), `MailApiTests` resume-exactness, and `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, truncated trail ⇒ resync) |
+| d14 — the delivery PRELOAD *(slice 6a)*: `delivered` still comes from a `mail.deliver` line and nowhere else, but the picture no longer has to have been watching when it landed | `MailDeliveryFold` (`dotnet/captainHook/Api/MailDeliveryFold.cs`) folds the trail's own lines into `MailDto.Deliveries`; `DeliveriesComplete` is the narrow claim that the whole file was read and nothing trimmed. Placement is the reducer's ONE rule (`resolveDelivery`, shared with `onDeliver`) in `web/src/mail.ts`; `preloadDeliveries` raises no anomaly for a record it cannot place, and moves no cursor. Pinned by `MailDeliveryPreloadTests.cs` (11), 5 units in `web/src/mail.test.ts`, and the e2e that reloads onto a delivery nobody watched |
 | d13 — lifetimes + perms | store dir 0700 / lines 0600 / cursors 0600 (`MailStore`, `MailCursors`), role+session percent-encoded in cursor filenames; `gen` reserves rotation (N4 open). Retention prose in the flow doc; the cursor-deletion race is a STATED cost, not a defect to guard |
 | first members | `examples/payloads/starter-mail-observer.sh` (write-only class), `starter-mail-watcher.sh` (on-demand LLM class, reentrancy guard proven by a stub `claude`); `MailDogfoodTests.cs` (5); field report `doc/dogfood/2026-08-14-first-bus-members.md` |
 | mechanics | `doc/flow/mailbox-bus.md` |
