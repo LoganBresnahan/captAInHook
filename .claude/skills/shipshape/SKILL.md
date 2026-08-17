@@ -103,14 +103,35 @@ Conventions for any new events:
 **stdout purity** (the sacred contract — hook mode's stdout is the protocol
 channel):
 
+⚠ **Run it in a sandbox, never bare.** A dev run reads the same
+`~/.captainHook/` the live deployment uses (CLAUDE.md), so an unisolated probe
+dispatches through the operator's OWN registered handlers against their own
+state — on 2026-08-17 this one fired the real `mail digest`, delivered seven
+live envelopes to the fake `session_id`, and left a phantom
+`cursor.maintainer.s1.json` on the real bus that the Mail view then drew as a
+track. The five vars below are the same isolation `web/e2e/daemon.ts` gives the
+suite; nothing is lost by it, since an exec handler's stdout is the wire the
+engine captures and never the channel under test here.
+
 ```bash
 dotnet build dotnet/captainHook --nologo -v quiet
-printf '{"hook_event_name":"UserPromptSubmit","session_id":"s1"}' | \
-  dotnet dotnet/captainHook/bin/Debug/net10.0/captainHook.dll hook user-prompt-submit
+SB=$(mktemp -d)
+CAPTAINHOOK_LOG="$SB/trail.jsonl" \
+CAPTAINHOOK_MAIL_DIR="$SB/mail" \
+CAPTAINHOOK_HANDLERS_FILE="$SB/handlers.json" \
+CAPTAINHOOK_DISPATCH_FILE="$SB/dispatch.json" \
+CAPTAINHOOK_HARNESS_DIR="$SB/no-harness" \
+  sh -c 'printf "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"s1\"}" |
+    dotnet dotnet/captainHook/bin/Debug/net10.0/captainHook.dll hook user-prompt-submit'
+rm -rf "$SB"
 ```
 
 stdout must be **exactly one JSON object**; every other byte belongs on
 stderr or in the JSONL file.
+
+If a probe ever does escape into `~/.captainHook/`, say so in the report and
+clean up what it wrote — a stray cursor is a phantom reader on a real lane, and
+a stray trail line is a fact about a session that never existed.
 
 ## 4. Report
 
