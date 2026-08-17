@@ -1465,6 +1465,43 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `mail-status` (2026-08-17; phase 1, slice 1 — the human
+  channel, and the one slice of this ADR that pays off alone.
+  `captainHook mail status` prints `📬 2 · 1 urgent` per role for a harness's
+  passive display (Claude Code's `statusLine`). It needs no consent surface
+  because it interrupts nothing — every other channel here can spend tokens or
+  take a turn, and a count is read when a human chooses to look. **The role is
+  never declared twice**: which roles a window may read is already answered by
+  the `mail digest` registrations that survive `dispatch.json` for this
+  cwd/session — the same evaluation the dispatcher runs before it fans out — so
+  a window whose digest is denied gets a silent bar rather than a count for
+  mail it will never be handed, and a second file naming a window's role could
+  only drift out of sync with the first. Recognition is the REAL parser
+  (`MailDigest.TryParseArgs` decides whether a registration is a digest, on
+  `MailCursors.List`'s rule that what counts is what the live path would
+  accept), so a registration the verb would refuse contributes no role. Two
+  as-built notes on d2: the line NAMES its role only when the window reads more
+  than one (a bare count cannot say which of two roles it means, and every
+  human window is the one-role case), and a role registered at two seams is one
+  cursor and therefore one line — the naming must not switch on how the seams
+  were registered. Silence is a state, on stdout and in the exit code: no
+  readable role, nothing pending, an absent or malformed `handlers.json` all
+  print nothing at exit 0, because a display command that failed loudly would
+  put an error where a human expects a number; the only refusal is an
+  unexpected argument, which is a wiring typo a human can fix and which
+  reporting as "no mail" would hide forever. Expired mail is uncounted (spent —
+  pointing a human at mail no digest will ever hand over is the one way this
+  line can lie), held mail is counted (undelivered is exactly the state it
+  surfaces). It reads and only reads — `Pending` returns a re-anchor rather
+  than stamping one, the store creates its directory only on Append, and
+  nothing logs (a trail line per status-bar render would drown the trail it
+  helps you read) — driven by a test that runs it repeatedly and asserts the
+  store's bytes and the cursor set unchanged, plus an absent bus that stays
+  absent. The cost is stated rather than discovered: every render re-reads the
+  whole store, which is unbounded until rotation (ADR-0016 N4). 30 tests
+  (`MailStatusTests`), suite 971 → 1001 green twice; smoked live read-only
+  against the maintainer's own bus, and in a sandbox for the two-role and
+  policy-denied renderings.)
 
 - [x] **20. The mailbox bus — cross-harness agent communication** — the hub
   reframe: N external agent loops (Claude Code + any hook-bearing harness),

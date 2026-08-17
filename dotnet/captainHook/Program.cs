@@ -68,9 +68,15 @@ switch (inv.Mode)
         // path: an exec-wire handler command whose stdout IS its answer to
         // the engine (registered in handlers.json; flags after the subverb
         // are its registration args, invisible to Invocation on purpose).
-        return inv.EventName == "digest"
-            ? CaptainHook.Mail.MailDigest.Run(args[2..], Console.In, Console.Out, Console.Error)
-            : CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error);
+        // `status` (ADR-0017 d2) is the third shape: a human DISPLAY verb whose
+        // stdout is a status bar's line, read-only and ruleless — it interrupts
+        // nothing, so it needs no consent surface of its own.
+        return inv.EventName switch
+        {
+            "digest" => CaptainHook.Mail.MailDigest.Run(args[2..], Console.In, Console.Out, Console.Error),
+            "status" => CaptainHook.Mail.MailStatus.Run(args[2..], Console.In, Console.Out, Console.Error),
+            _ => CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error),
+        };
 
     case Mode.Doctor:
     {

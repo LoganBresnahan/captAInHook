@@ -263,7 +263,7 @@ anything else lands.** It is the one slice that pays off by itself.
 
 | # | slice | lane | model | effort | verify |
 |---|---|---|---|---|---|
-| 1 | `mail-status` — `captainHook mail status` (stdin session/cwd → `DispatchPolicy.Evaluate` over the registered `mail digest` handlers ⇒ roles ⇒ `MailCursors.Pending` counts ⇒ one `📬 n · m urgent` line per role); statusLine wiring documented | watcher | opus | medium | goldens on the line + the policy-derived role set; absent handlers.json / no digest / denied / zero-pending. Read-only, wrong count is cosmetic — no adversarial pass. `/shipshape`. |
+| 1 ✅ | `mail-status` **(landed 2026-08-17)** — `captainHook mail status` (stdin session/cwd → `DispatchPolicy.Evaluate` over the registered `mail digest` handlers ⇒ roles ⇒ `MailCursors.Pending` counts ⇒ one `📬 n · m urgent` line per role); statusLine wiring documented | watcher | opus | medium | goldens on the line + the policy-derived role set; absent handlers.json / no digest / denied / zero-pending. Read-only, wrong count is cosmetic — no adversarial pass. `/shipshape`. |
 | 1 | `thread-fields` — `inReplyTo` READ (parse, `mail.append` provenance, read model's id→closed-by index), the hop counter and refusal at N; regenerate the reducer golden | thread | opus | medium | **Decide stored-vs-derived `hops` FIRST** — stored enters the hashed line and `VerifyChain`; reversing later is a format migration. Envelope/send/chain tests; goldens gate. |
 | 1 | `watch-rules` — `~/.captainHook/watch.json` strict parser mirroring `DispatchPolicy` (every violation collected; invalid ⇒ warn + zero robot nudges; absent ⇒ zero) | watcher | opus or sonnet | low | Absent and malformed both ⇒ zero nudges — no fail-open asymmetry to guard; parser table tests. |
 | 1 | `mail-nudge-event` — the internal `HookEvent` member (origin daemon, harness `internal`, effects logged+ignored), its dispatch entry, embedded `internal` spec, trail rows | watcher | opus | medium | **verify:** the N3 origin audit — presence must NOT count a nudge dispatch, `internal` must never reach a stdout-serialize path, a policy denial is logged not answered. Must be complete before `watcher-actor` dispatches for real, or the presence-fed brain feeds itself. |
@@ -306,7 +306,11 @@ dirs, never the live `~/.captainHook/`; ship bar suite green twice;
 
 ## Ground truth
 
-*(empty until the first slice lands)*
+*(rows accrue as slices land)*
+
+| decision | lives in |
+|---|---|
+| d2 — the human channel, always on and ruleless | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; `MailStatusTests.cs` (30). **As-built**: the role is NAMED in the line only when the window may read more than one (`📬 maintainer 2 · 1 urgent`), since the ADR's bare `📬 2 · 1 urgent` cannot say which of two roles it means; a role with two seam registrations is still one cursor and one line. Silence is a state — no readable role, nothing pending, absent or malformed `handlers.json` all print nothing at exit 0. Recognition of a digest registration is `MailDigest.TryParseArgs` itself, never a second spelling. Wiring + the uncached whole-store read it costs: [doc/flow/mailbox-bus.md](../flow/mailbox-bus.md) § The human channel |
 
 ## Revisit triggers
 

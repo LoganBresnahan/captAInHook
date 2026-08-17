@@ -284,6 +284,54 @@ Role and session are percent-encoded in cursor filenames, so a hostile role name
 cannot escape the mail directory. The mail store grows unbounded until rotation
 mechanics land (ADR-0016 N4); `gen` reserves them.
 
+## The human channel: `mail status` (ADR-0017 d2)
+
+The bus can now be *watched* (the Mail canvas) and *delivered* (a digest at a
+seam), but both require the human to already be looking. `captainHook mail
+status` is the third surface — a count on whatever passive display the harness
+offers:
+
+```
+       stdin: {"session_id": …, "cwd": …}          ← the harness's status payload
+                     │
+   handlers.json ────┤  registrations whose args MailDigest.TryParseArgs accepts
+                     │        ⇒ role                (recognition, not a 2nd parser)
+   dispatch.json ────┤  Evaluate(event, cwd, session) per event it is registered on
+                     │        ⇒ the roles THIS window may read
+   cursor+store ─────┘  MailCursors.Pending(role, session)
+                     │
+                     ▼
+              📬 2 · 1 urgent        (one line per role; the role is NAMED only
+                                      when the window may read more than one)
+```
+
+Three properties, each deliberate. It is **ruleless** — every other channel in
+ADR-0017 can spend tokens or take a turn and so gets a consent surface, while a
+count on a status bar is read when a human chooses to look. The role is **never
+declared twice**: which roles a window reads is already answered by the digests
+that survive `dispatch.json` there, so a denied digest means a silent bar rather
+than a count for mail this window will never be handed. And **silence is a
+state**: no readable role, no pending mail, an absent or malformed
+`handlers.json` all print nothing and exit 0, because a display command that
+failed loudly would put an error where a human expects a number. Expired mail is
+not counted (it is spent); held mail is (it is undelivered).
+
+Wiring it into Claude Code — `~/.claude/settings.json`:
+
+```json
+"statusLine": { "type": "command", "command": "/home/you/.captainHook/bin/captainHook mail status" }
+```
+
+The harness passes its status payload on stdin and renders what comes back;
+`cwd` is read from `cwd` or `workspace.current_dir`, whichever the payload
+carries. Any harness with a passive display and a JSON-on-stdin command hook
+wires the same way.
+
+Cost, stated rather than discovered: a status bar renders on a human's cadence
+and every call re-reads the whole store, which is unbounded until rotation lands
+(N4). Nothing is cached and nothing is logged — a trail line per render would
+drown the trail it exists to help you read.
+
 ## Ground truth
 
 | what | where |
@@ -304,6 +352,7 @@ mechanics land (ADR-0016 N4); `gen` reserves them.
 | snapshot ⇄ stream alignment (d14 as-built): `MailDto.TrailEventId` is the trail's end STAMPED BEFORE the store is read, so a client subscribing at `Last-Event-ID: <it>` gets zero loss and zero duplicate. A STRING, because the id is opaque (ADR-0009 d2) and because `"0"` (replay everything) must never collapse into absent under a falsy test; null = no trail served ⇒ the picture is real and frozen | `MailDto` in `dotnet/captainHook/Api/ApiDtos.cs`; `ApiReadModel.Mail`/`TrailLength` (`_trailPath`, bound from `sseOptions.TrailPath` in `Core/DaemonHost.cs`); `MailState.trailEventId` in `web/src/mail.ts`; pinned by `MailApiTests` (resume-exactness end to end, null/"0" contracts, the source pin on read order) |
 | the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (9) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |
 | the delivery PRELOAD (d14, slice 6a) — `delivered` still comes from a `mail.deliver` line and nowhere else, but the picture no longer has to have been watching when it landed: the daemon folds those lines out of the trail into `MailDto.deliveries` (columns verbatim; NO ledger offsets, because placing an id is the reducer's arithmetic and a second implementation is N8), and `MailDto.deliveriesComplete` is the narrow claim that the whole file was read and nothing trimmed — false for a scan window, a hit cap, or no trail at all, which is what lets the detail card distinguish "nobody read it" from "further back than I can see" | `MailDeliveryFold`/`MailDeliveryLine`/`MailDeliveryFoldResult` in `dotnet/captainHook/Api/MailDeliveryFold.cs`; `MailDeliveryDto` + `ApiReadModel.Mail` in `Api/ApiDtos.cs`/`Api/ApiReadModel.cs`; `preloadDeliveries`/`resolveDelivery` (ONE placement rule, shared with `onDeliver`) in `web/src/mail.ts`. Pinned by `dotnet/captainHookTests/MailDeliveryPreloadTests.cs` (11 — a real engine-written line, the payload-stderr forgery, the bounds saying so, and a drive proving three snapshots change nothing on disk), 5 in `web/src/mail.test.ts` (preload ≡ live, dedup, unplaceable-is-quiet, no phantom cursors), and `web/e2e/mail.spec.ts` (a pickup nobody watched, delivered on a reloaded page from a snapshot line) |
+| the human channel (ADR-0017 d2) — `captainHook mail status`: roles from the `mail digest` registrations that survive `dispatch.json` for this cwd/session, counts from `MailCursors.Pending`, one `📬 n · m urgent` line per role, silent when there is nothing to say | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; role recognition is `MailDigest.TryParseArgs` itself, policy is `PolicyResolution.Resolve` + `Evaluate` (`Core/DispatchPolicy.cs`), registrations are `ExecHandlersFile.Resolve` (`Core/ExecHandlersFile.cs`). Pinned by `dotnet/captainHookTests/MailStatusTests.cs` (30 — line goldens, per-cursor counts, handler/event/project denials, multi-seam collapse, the refused registration, four silences, unreadable stdin, and a drive proving it creates and changes nothing) |
 | envelope parse table (26) | `dotnet/captainHookTests/MailEnvelopeTests.cs` |
 | store: chain, flock, torn tails, write gate (43) | `dotnet/captainHookTests/MailStoreTests.cs` |
 | cursor: frontier/held, TTL, re-anchor (32) | `dotnet/captainHookTests/MailCursorTests.cs` |
