@@ -135,6 +135,11 @@ test("scene: held mail carries its TTL arithmetic, under the envelope it belongs
   assert.ok(marks.length > 0, "an advance that delivered nothing holds everything");
   for (const m of marks) {
     assert.equal(m.status, "held");
+    // Every scenario here is BROADCAST, so every mark has a ttl. Asserted
+    // rather than silenced with `!`: a null reaching this loop would mean a
+    // unicast envelope drew a countdown, which is the thing ADR-0018 d5 says
+    // has no countdown to draw.
+    assert.ok(m.ttlDeliveries !== null, "a broadcast mark must carry its ttl");
     assert.ok(m.opportunities >= 1 && m.ttlDeliveries >= 1);
     // A mark sits under ITS envelope: the countdown is about that line, and a
     // mark drawn under the wrong glyph is a lie a screenshot cannot catch.
@@ -162,6 +167,7 @@ test("scene: spent mail greys out at the instant the reducer says it is spent", 
   const scene = buildScene(spent);
   const expired = scene.lanes.flatMap((l) => l.tracks.flatMap((t) => t.marks)).filter((m) => m.status === "expired");
   assert.equal(expired.length, 1);
+  assert.ok(expired[0].ttlDeliveries !== null, "only ttl'd mail can be spent at all");
   assert.ok(expired[0].opportunities >= expired[0].ttlDeliveries, "spent means the TTL was reached");
 });
 

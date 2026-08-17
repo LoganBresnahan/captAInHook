@@ -1558,6 +1558,44 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `unicast-refuses-ttl` (2026-08-17; phase 2 — taken
+  immediately after slice 1 rather than in parallel with its phase-mates,
+  because slice 1 opened a window worth closing: `MailStore.Serialize` writes
+  `ttlDeliveries` unconditionally, so between the two slices EVERY unicast
+  envelope would have landed on the append-only chain carrying a ttl — even
+  one whose sender never asked for a ttl — that this slice's parser then
+  refuses to read back. Malformed forever, warned-and-skipped by every future
+  reader. The window was empty in practice (nothing can send unicast in anger
+  until `instance-registration`), and it is now closed rather than migrated.
+  `ttlDeliveries` is REFUSED on a `role@instance` address, not ignored — an
+  accepted-and-ignored field is a lie in a record nobody can amend — and the
+  refusal supersedes the `>= 1` bound, since a `ttlDeliveries: 0` unicast
+  envelope has one thing wrong with it and the address is the reason.
+  `MailEnvelope.TtlDeliveries` becomes `int?` where null has exactly one
+  meaning (unicast) and is never a second spelling of the default; the stored
+  line and `mail.append` OMIT the field, which is this format's existing
+  spelling of absent (`session`, `inReplyTo`) and keeps the column's type
+  rather than making it a string `"none"` that every consumer special-cases;
+  `MailCursors.Pending` guards the expiry comparison, so a held unicast is
+  never spent — bounded by the reaper's judgement (d6), not by an arithmetic
+  that quietly drops unread mail. The read half followed the pipeline end to
+  end: DTOs → `api.schema.json` → `api.gen.ts` → reducer → canvas, with three
+  renderings that say what they know (`n held` on the mark, `none — unicast,
+  delivered once to <addr>` on the card, "unicast mail does not expire" on the
+  standing line) instead of a countdown with no denominator. **The slice added
+  no write-side validation, and the finding is why:** `MailStore.Append`
+  already re-parses the exact bytes it is about to make durable and refuses a
+  line the strict parser would reject, so the plan's named failure — Serialize
+  writing a ttl the parser refuses — cannot corrupt the chain; an envelope
+  whose ttl contradicts its address is constructible in process, impossible
+  from the wire, and refused AT THE APPEND. Pinned by
+  `Append_RefusesAUnicastEnvelopeCarryingATtl` and the round trip the verify
+  note asked for, `Render_UnicastLine_ReParsesCleanWithNoTtl`. The reducer
+  learns the same rule from the other side — a role address must carry a ttl,
+  a unicast address must NOT, anything else is a line the engine could not
+  have written and is refused rather than repaired (N8: the reducer
+  interpolates, it does not second-guess the store). 9 C# tests + 4 reducer
+  tests; suite 1048 → 1057 green twice, web 249 → 253, mail e2e 18 green.)
   Slices landed: `address-grammar` (2026-08-17; phase 1, slice 1, alone as
   planned — the forever pin. `to` stops accepting anything and parses as
   `role` or `role@instance`, `[a-z0-9][a-z0-9-]*` per half, one `@`, both

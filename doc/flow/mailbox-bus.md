@@ -128,6 +128,24 @@ Reads without advances age nothing. A wall clock would rot mail while a
 recipient idles overnight, which is house invariant 2 violated at the design
 level.
 
+**A unicast envelope has no TTL at all** (ADR-0018 d5), and that is a third
+state rather than a large number: `ttlDeliveries` is *refused by the parser* on
+a `role@instance` address, omitted from the stored line and from `mail.append`,
+and null through the DTO, the reducer and the canvas. With one addressee,
+*delivered* is a fact rather than a matter of opportunities — so the comparison
+above simply does not run, and a held unicast envelope is never spent. That is
+not an unbounded leak: a mailbox that never returns is the reaper's problem
+(d6), disposed of by judgement with a trail line, never by an arithmetic that
+quietly drops mail nobody has read.
+
+Refused rather than accepted-and-ignored, because an ignored field on an
+append-only chain is a lie that outlives everyone who could correct it. The
+write side needed no new guard: `MailStore.Append` already re-parses the exact
+bytes it is about to make durable and fails if the strict parser would reject
+them, so an envelope whose ttl contradicts its address (constructible in
+process, never from the wire) is refused at the append instead of becoming a
+line no future reader can accept.
+
 ### Re-anchoring is loud, and there are nine ways in
 
 A cursor that disagrees with the file re-anchors to offset 0 — store-and-forward
@@ -258,9 +276,11 @@ renders identically to a real one and receives none of its mail.
 
 As of this slice the grammar is *all* that is built: a `role@instance` envelope
 parses, is carried verbatim, and is addressed to nobody, because routing on the
-instance (`plan-unicast`), refusing TTL on unicast (`unicast-refuses-ttl`), and
-naming an instance at registration (`instance-registration`) are later slices of
-ADR-0018. It lands first and alone because its risk is permanence: the ledger is
+instance (`plan-unicast`) and naming an instance at registration
+(`instance-registration`) are later slices of ADR-0018 — though the TTL half
+(`unicast-refuses-ttl`, above) landed immediately after this one, closing the
+window in which a unicast envelope could reach the chain carrying a `ttl` the
+parser would later refuse to read back. It lands first and alone because its risk is permanence: the ledger is
 append-only, so what parses today is what it holds forever.
 
 ## Provenance, and the ledger's other direction
@@ -456,6 +476,7 @@ prose, not ground truth.
 | what | where |
 |---|---|
 | `MailEnvelope`, `MailSender`, `MailKind`, `MailPriority`, `TryParse`/`TryParseLine` | `dotnet/captainHook/Mail/MailEnvelope.cs` |
+| unicast has NO TTL (ADR-0018 d5, slice 2) — `ttlDeliveries` REFUSED on a `role@instance` address (not ignored), `MailEnvelope.TtlDeliveries` nullable, omitted from the stored line and from `mail.append`, null through DTO → reducer → canvas; expiry simply does not run, so a held unicast is never spent. No new write-side guard was needed: `Append` already re-parses what it renders | `MailEnvelope.TryParse` + `HasTtl`; `MailStore.Render`/`Append`; `MailCursors.Pending`'s expiry guard (`MailCursor.cs`); `MailEnvelopeDto`/`MailPendingDto` (`Api/ApiDtos.cs`); `isExpired` + `onAppend`'s ttl-applies rule (`web/src/mail.ts`); the three renderings in `web/src/MailPanel.tsx` (mark reads `n held`, the card reads `none — unicast`, the standing line says unicast mail does not expire). Pinned by the parse table's d5 block, `MailStoreFormatTests.Render_UnicastLine_ReParsesCleanWithNoTtl` + `Append_RefusesAUnicastEnvelopeCarryingATtl` (the adversarial case: a contradiction constructible in process, refused at the append), and `mail.skeptic.test.ts` § 9 |
 | the ADDRESS grammar (ADR-0018 d2, slice 1) — `to` parses as `role` or `role@instance`, `[a-z0-9][a-z0-9-]*` per half, one `@`, both halves non-empty; refused not guessed; lowercase pinned rather than folded; ASCII by hand (no homoglyph mailboxes); applied to `to` and nothing else. Routing on the instance is NOT built here | `MailAddress` (`TryParse`, `IsRole`, `Role`, `Instance`, `IsUnicast`, `GrammarHelp`) in `dotnet/captainHook/Mail/MailAddress.cs`, called from `MailEnvelope.TryParse`; `MailAddressTests` (17) + the address block in `MailEnvelopeTests` (30: the legacy-role corpus, unicast accept, 17 refusals, the blank-vs-ungrammatical split, and the message that teaches the grammar) |
 | `MailStore` (`Append`, `Read`, `VerifyChain`, `HeadHash`, `Render`, `HashOf`, `ResolveDir`, `TryLock`), `Genesis`, `MaxLineBytes` | `dotnet/captainHook/Mail/MailStore.cs` |
 | `MailAppend` (Appended/Failed), `MailLine`, `MailChainFault`, `MailChainFaultKind` | `dotnet/captainHook/Mail/MailStore.cs` |
@@ -475,8 +496,8 @@ prose, not ground truth.
 | the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (10) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |
 | the delivery PRELOAD (d14, slice 6a) — `delivered` still comes from a `mail.deliver` line and nowhere else, but the picture no longer has to have been watching when it landed: the daemon folds those lines out of the trail into `MailDto.deliveries` (columns verbatim; NO ledger offsets, because placing an id is the reducer's arithmetic and a second implementation is N8), and `MailDto.deliveriesComplete` is the narrow claim that the whole file was read and nothing trimmed — false for a scan window, a hit cap, or no trail at all, which is what lets the detail card distinguish "nobody read it" from "further back than I can see" | `MailDeliveryFold`/`MailDeliveryLine`/`MailDeliveryFoldResult` in `dotnet/captainHook/Api/MailDeliveryFold.cs`; `MailDeliveryDto` + `ApiReadModel.Mail` in `Api/ApiDtos.cs`/`Api/ApiReadModel.cs`; `preloadDeliveries`/`resolveDelivery` (ONE placement rule, shared with `onDeliver`) in `web/src/mail.ts`. Pinned by `dotnet/captainHookTests/MailDeliveryPreloadTests.cs` (11 — a real engine-written line, the payload-stderr forgery, the bounds saying so, and a drive proving three snapshots change nothing on disk), 5 in `web/src/mail.test.ts` (preload ≡ live, dedup, unplaceable-is-quiet, no phantom cursors), and `web/e2e/mail.spec.ts` (a pickup nobody watched, delivered on a reloaded page from a snapshot line) |
 | the human channel (ADR-0017 d2) — `captainHook mail status`: roles from the `mail digest` registrations that survive `dispatch.json` for this cwd/session, counts from `MailCursors.Pending`, one `📬 n · m urgent` line per role, silent when there is nothing to say | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; role recognition is `MailDigest.TryParseArgs` itself, policy is `PolicyResolution.Resolve` + `Evaluate` (`Core/DispatchPolicy.cs`), registrations are `ExecHandlersFile.Resolve` (`Core/ExecHandlersFile.cs`). Pinned by `dotnet/captainHookTests/MailStatusTests.cs` (30 — line goldens, per-cursor counts, handler/event/project denials, multi-seam collapse, the refused registration, four silences, unreadable stdin, and a drive proving it creates and changes nothing) |
-| envelope parse table (98, measured — the older `26` counted methods, not the theory cases they expand to) + `MailAddressTests` (17) | `dotnet/captainHookTests/MailEnvelopeTests.cs` |
-| store: chain, flock, torn tails, write gate (46) | `dotnet/captainHookTests/MailStoreTests.cs` |
+| envelope parse table (104, measured — the older `26` counted methods, not the theory cases they expand to) + `MailAddressTests` (17) | `dotnet/captainHookTests/MailEnvelopeTests.cs` |
+| store: chain, flock, torn tails, write gate, the unicast round trip (49) | `dotnet/captainHookTests/MailStoreTests.cs` |
 | cursor: frontier/held, TTL, re-anchor (32) | `dotnet/captainHookTests/MailCursorTests.cs` |
 | exactly-once races, chain-changed guard, drain soak (15) | `dotnet/captainHookTests/MailCursorEdgeTests.cs` |
 | planner matrix, golden renders, verb, ledger, daemon + Stop smokes (70) | `dotnet/captainHookTests/MailDigestTests.cs` |

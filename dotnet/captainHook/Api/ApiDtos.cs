@@ -177,7 +177,7 @@ public sealed record MailLineDto(
 /// payload-readable and therefore carries provenance only (d14).
 public sealed record MailEnvelopeDto(
     string Id, string Ts, MailSenderDto From, string To, string Kind, string Topic,
-    string Priority, string? InReplyTo, int TtlDeliveries, string Body, string? Prev);
+    string Priority, string? InReplyTo, int? TtlDeliveries, string Body, string? Prev);
 
 public sealed record MailSenderDto(string Agent, string Harness, string? Session);
 
@@ -202,8 +202,14 @@ public sealed record MailCursorDto(
 /// passed since — `deliveries − seenAt + 1`, the exact quantity the cursor
 /// compares against `TtlDeliveries`, so the countdown on screen is the
 /// engine's arithmetic and not a second implementation of it.
+///
+/// `TtlDeliveries` null means the envelope is UNICAST and has no TTL at all
+/// (ADR-0018 d5) — not "unknown", and not zero. A countdown is the wrong
+/// picture for it: there is one addressee, so it is held until that mailbox
+/// takes it, and `Opportunities` keeps counting for the operator without ever
+/// reaching a limit.
 public sealed record MailPendingDto(
-    long Offset, string Id, string Priority, int TtlDeliveries,
+    long Offset, string Id, string Priority, int? TtlDeliveries,
     long? SeenAt, long Opportunities);
 
 /// An inferred bus participant. `Roles` are the cursors this session holds;

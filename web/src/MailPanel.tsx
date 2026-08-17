@@ -548,7 +548,13 @@ function Track(
             <rect x={x} y={y - 5} width={w} height={10} rx={3} />
             {tier !== "far" && w > 30 && (
               <text x={x + w / 2} y={y + 3.5} textAnchor="middle" style={{ fontSize: 9 }}>
-                {m.status === "expired" ? "spent" : `${m.opportunities}/${m.ttlDeliveries}`}
+                {m.status === "expired" ? "spent"
+                  // A unicast envelope has no denominator to count toward
+                  // (ADR-0018 d5): it is held until its one addressee takes it.
+                  // `n held` states the fact the mark actually knows, where
+                  // `n/3` would state one it does not.
+                  : m.ttlDeliveries === null ? `${m.opportunities} held`
+                  : `${m.opportunities}/${m.ttlDeliveries}`}
               </text>
             )}
           </g>
@@ -646,7 +652,9 @@ function Detail(
               {e.from.session !== null ? <> · <code>{e.from.session}</code></> : <> · <span className="muted">write-only member</span></>}
             </dd></div>
             <div><dt>kind</dt><dd>{e.kind} · {e.priority}</dd></div>
-            <div><dt>ttl</dt><dd>{e.ttlDeliveries} delivery opportunit{e.ttlDeliveries === 1 ? "y" : "ies"}</dd></div>
+            <div><dt>ttl</dt><dd>{e.ttlDeliveries === null
+              ? <>none — unicast, delivered once to <code>{e.to}</code></>
+              : <>{e.ttlDeliveries} delivery opportunit{e.ttlDeliveries === 1 ? "y" : "ies"}</>}</dd></div>
             <div><dt>sent</dt><dd><code>{e.ts ?? "—"}</code></dd></div>
             <div><dt>chain</dt><dd>
               <code>{line.hash === null ? "—" : line.hash.slice(0, 12)}</code>
@@ -671,7 +679,9 @@ function Detail(
               <li key={cursorKey(c)} data-standing={cursorKey(c)}>
                 <code>{sessionLabel(c.session)}</code>{" "}
                 {held !== undefined && c.deliveries !== null
-                  ? <>holds it — passed over at {opportunities(c.deliveries, held.seenAt)} of {held.ttlDeliveries} opportunities</>
+                  ? held.ttlDeliveries === null
+                    ? <>holds it — passed over {opportunities(c.deliveries, held.seenAt)} times, and unicast mail does not expire</>
+                    : <>holds it — passed over at {opportunities(c.deliveries, held.seenAt)} of {held.ttlDeliveries} opportunities</>
                   : c.offset === null ? <>position unknown</>
                   : line.offset >= c.offset ? <>has not reached it yet</>
                   : records.length > 0

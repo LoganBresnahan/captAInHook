@@ -374,11 +374,19 @@ public class MailEnvelopeParseTests
     [InlineData("9@9")]
     public void UnicastAddress_Parses(string to)
     {
-        // Accepted and carried VERBATIM. Routing on it is `plan-unicast`'s
-        // (d4) — until that lands a role@instance envelope is addressed to
-        // nobody, which is the correct behaviour for a slice that only decides
-        // what an address is.
-        Assert.Equal(to, ParseValid(With($"\"to\": \"{to}\"")).To);
+        // Accepted and carried VERBATIM — and with NO ttl, which is why this
+        // spells its own envelope instead of reusing the ADR-0016 one: that
+        // envelope carries `ttlDeliveries: 3`, and ADR-0018 d5 refuses a ttl on
+        // a unicast address. Routing on the instance is still `plan-unicast`'s.
+        var e = ParseValid($$"""
+            { "v": 1, "id": "m-04", "ts": "t",
+              "from": { "agent": "a", "harness": "h" },
+              "to": "{{to}}", "kind": "status", "topic": "x", "body": "b" }
+            """);
+
+        Assert.Equal(to, e.To);
+        Assert.Null(e.TtlDeliveries);   // d5: no ttl, and no DEFAULTED ttl either
+        Assert.False(e.HasTtl);
     }
 
     [Theory]
@@ -427,6 +435,71 @@ public class MailEnvelopeParseTests
         var errors = ParseInvalid(With("\"to\": \"Ops\""));
         Assert.Contains(errors, e => e.Contains("[a-z0-9][a-z0-9-]*"));
         Assert.Contains(errors, e => e.Contains("got \"Ops\""));
+    }
+
+    // ---- unicast has no TTL (ADR-0018 d5) ----------------------------------
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("3")]
+    [InlineData("99")]
+    public void Ttl_OnUnicastAddress_IsRefused(string value)
+    {
+        // Refused, not ignored. An accepted-and-ignored field is a lie in a
+        // record nobody can amend: a reader six months from now would see a
+        // countdown on an envelope that never counted.
+        var errors = ParseInvalid($$"""
+            { "v": 1, "id": "m", "ts": "t", "from": { "agent": "a", "harness": "h" },
+              "to": "reviewer@ci", "kind": "status", "topic": "x",
+              "ttlDeliveries": {{value}}, "body": "b" }
+            """);
+
+        Assert.Contains(errors, e => e.Contains("'ttlDeliveries' is not allowed on the unicast address"));
+        // The message names the way out, because the sender's intent is legible:
+        // they wanted delivery opportunities, which the bare role still gives.
+        Assert.Contains(errors, e => e.Contains("send it to the bare role"));
+    }
+
+    [Fact]
+    public void Ttl_OnUnicastAddress_IsOneViolation_NotTwo()
+    {
+        // `ttlDeliveries: 0` on a unicast address breaks two rules on paper —
+        // it is < 1 AND it is on a unicast address. The envelope has ONE thing
+        // wrong with it, and the address is the reason; reporting both would
+        // send the sender to fix a bound that does not apply to them.
+        var errors = ParseInvalid("""
+            { "v": 1, "id": "m", "ts": "t", "from": { "agent": "a", "harness": "h" },
+              "to": "reviewer@ci", "kind": "status", "topic": "x",
+              "ttlDeliveries": 0, "body": "b" }
+            """);
+
+        Assert.Single(errors);
+        Assert.Contains("not allowed on the unicast address", errors[0]);
+    }
+
+    [Fact]
+    public void UngrammaticalAddress_DoesNotAlsoAccuseTheTtl()
+    {
+        // A `to` that fails the grammar is not unicast and not broadcast — it is
+        // nothing. The ttl rule must not be guessed from a name we refused to
+        // read, or one typo becomes two errors pointing in different directions.
+        var errors = ParseInvalid("""
+            { "v": 1, "id": "m", "ts": "t", "from": { "agent": "a", "harness": "h" },
+              "to": "Reviewer@CI", "kind": "status", "topic": "x",
+              "ttlDeliveries": 3, "body": "b" }
+            """);
+
+        Assert.Single(errors);
+        Assert.Contains("'to' must be", errors[0]);
+    }
+
+    [Fact]
+    public void BroadcastAddress_StillDefaultsAndStillBounds()
+    {
+        // The other half of d5: nothing about a ROLE-addressed envelope moved.
+        Assert.Equal(3, ParseValid(With("\"to\": \"reviewer\"")).TtlDeliveries);
+        Assert.Equal(7, ParseValid(With("\"ttlDeliveries\": 7")).TtlDeliveries);
+        Assert.Contains(ParseInvalid(With("\"ttlDeliveries\": 0")), e => e.Contains("integer >= 1"));
     }
 
     // ---- helpers: mutate the ADR envelope, one field at a time --------------

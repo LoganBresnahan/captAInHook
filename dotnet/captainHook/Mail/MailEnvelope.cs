@@ -61,7 +61,7 @@ public sealed record MailEnvelope(
     string Topic,
     MailPriority Priority,
     string? InReplyTo,
-    int TtlDeliveries,
+    int? TtlDeliveries,
     string Body,
     string? Prev)
 {
@@ -70,6 +70,18 @@ public sealed record MailEnvelope(
     /// would rot mail while the recipient idles overnight, which is house
     /// invariant 2 violated at the design level).
     public const int DefaultTtlDeliveries = 3;
+
+    /// `TtlDeliveries` is NULL for exactly one reason: the address is unicast
+    /// (ADR-0018 d5). With one addressee, *delivered* is a fact rather than a
+    /// matter of opportunities, so there is nothing for a countdown to count —
+    /// and pending-forever-if-the-instance-never-returns is the reaper's
+    /// problem (d6), not TTL's.
+    ///
+    /// It is REFUSED at parse rather than accepted-and-ignored, because an
+    /// ignored field on an append-only chain is a lie that outlives everyone
+    /// who could correct it. Null and "3" are therefore never two spellings of
+    /// one state: null means the concept does not apply here.
+    public bool HasTtl => TtlDeliveries is not null;
 
     private static readonly IReadOnlySet<string> KnownFields =
         new HashSet<string>
@@ -131,10 +143,14 @@ public sealed record MailEnvelope(
         // constraining it would refuse envelopes already on the ledger for a
         // property nothing reads.
         var to = Required(root, "to", errs);
-        if (to is not null && !MailAddress.TryParse(to, out _))
+        var unicast = false;
+        if (to is not null)
+        {
+            if (MailAddress.TryParse(to, out var address)) unicast = address.IsUnicast;
             // `to` is already known readable and non-blank here (Required), so it
             // can be quoted directly — no second walk of the document.
-            errs.Add($"'to' must be {MailAddress.GrammarHelp} (got \"{to}\")");
+            else errs.Add($"'to' must be {MailAddress.GrammarHelp} (got \"{to}\")");
+        }
 
         var topic = Required(root, "topic", errs);
 
@@ -152,17 +168,29 @@ public sealed record MailEnvelope(
         if (root.TryGetProperty("priority", out var p) && !TryEnum(p, out priority))
             errs.Add($"'priority' must be one of: {Names<MailPriority>()} (got {RawText(p)})");
 
-        // ttlDeliveries: optional, >= 1. Zero or negative is malformed rather
-        // than "already expired" — an envelope that can never be delivered is a
-        // typo, and silently accepting one loses the message with no diagnosis.
-        var ttl = DefaultTtlDeliveries;
+        // ttlDeliveries: optional, >= 1, and MEANINGLESS ON A UNICAST ADDRESS
+        // (ADR-0018 d5). Zero or negative is malformed rather than "already
+        // expired" — an envelope that can never be delivered is a typo, and
+        // silently accepting one loses the message with no diagnosis.
+        //
+        // On `role@instance` the field is REFUSED, not ignored: there is one
+        // addressee, so delivered is a fact and not a matter of opportunities,
+        // and a field the reader accepts and disregards is a lie on a chain
+        // nobody can amend. The refusal supersedes the >= 1 check — a sender
+        // who writes `ttlDeliveries: 0` to a unicast address has one thing
+        // wrong with the envelope, not two, and the address is the reason.
+        int? ttl = unicast ? null : DefaultTtlDeliveries;
         if (root.TryGetProperty("ttlDeliveries", out var t))
         {
-            if (t.ValueKind != JsonValueKind.Number || !t.TryGetInt32(out ttl) || ttl < 1)
-            {
+            if (unicast)
+                errs.Add(
+                    $"'ttlDeliveries' is not allowed on the unicast address \"{to}\" — " +
+                    "a role@instance envelope has one recipient, so it is delivered once and " +
+                    "never expires (send it to the bare role if you want delivery opportunities)");
+            else if (t.ValueKind != JsonValueKind.Number || !t.TryGetInt32(out var n) || n < 1)
                 errs.Add($"'ttlDeliveries' must be an integer >= 1 (got {RawText(t)})");
-                ttl = DefaultTtlDeliveries;
-            }
+            else
+                ttl = n;
         }
 
         // body: required and READABLE, but otherwise untouched — opaque prose.

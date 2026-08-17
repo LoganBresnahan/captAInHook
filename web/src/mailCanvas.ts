@@ -131,7 +131,8 @@ export type MailGlyph = {
   kind: string;
   topic: string;
   priority: string;
-  ttlDeliveries: number;
+  /** null = unicast: no TTL to count down (ADR-0018 d5). */
+  ttlDeliveries: number | null;
   from: string;
   bytes: number;
   status: MailGlyphStatus;
@@ -156,7 +157,9 @@ export type MailMark = {
   w: number;
   status: "held" | "expired";
   opportunities: number;
-  ttlDeliveries: number;
+  /** null = unicast. `opportunities` still counts (it is how long the mailbox
+   * has been quiet), but there is no denominator and no spending. */
+  ttlDeliveries: number | null;
   id: string;
 };
 

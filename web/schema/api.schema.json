@@ -501,7 +501,10 @@
                     ]
                   },
                   "ttlDeliveries": {
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "body": {
                     "type": "string"
@@ -607,7 +610,10 @@
                       "type": "string"
                     },
                     "ttlDeliveries": {
-                      "type": "integer"
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
                     },
                     "seenAt": {
                       "type": [

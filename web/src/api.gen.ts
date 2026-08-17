@@ -119,7 +119,7 @@ export interface MailLineDto {
     topic: string;
     priority: string;
     inReplyTo: string | null;
-    ttlDeliveries: number;
+    ttlDeliveries: number | null;
     body: string;
     prev: string | null;
   } | null;
@@ -149,7 +149,7 @@ export interface MailPendingDto {
   offset: number;
   id: string;
   priority: string;
-  ttlDeliveries: number;
+  ttlDeliveries: number | null;
   seenAt: number | null;
   opportunities: number;
 }

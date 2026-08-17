@@ -52,7 +52,7 @@ internal static class MailFixtures
         MailPriority priority = MailPriority.Ambient,
         string? session = "s-77",
         string? inReplyTo = null,
-        int ttl = 3) =>
+        int? ttl = 3) =>
         new(
             Id: id,
             Ts: "2026-08-12T19:00:00Z",
@@ -123,17 +123,76 @@ public class MailStoreFormatTests
             """.Trim(), line);
     }
 
-    /// `priority` and `ttlDeliveries` are OPTIONAL on the wire but ALWAYS
-    /// written. The stored line is the durable record: a defaulted value must be
-    /// frozen at write time, never re-derived by a future reader whose default
-    /// has moved. (If DefaultTtlDeliveries ever changes, old mail must keep
-    /// meaning what it meant.)
+    /// `priority` and `ttlDeliveries` are OPTIONAL on the wire but written
+    /// WHENEVER THEY APPLY. The stored line is the durable record: a defaulted
+    /// value must be frozen at write time, never re-derived by a future reader
+    /// whose default has moved. (If DefaultTtlDeliveries ever changes, old mail
+    /// must keep meaning what it meant.)
     [Fact]
     public void Render_AlwaysWritesDefaultedPriorityAndTtl()
     {
         var line = MailStore.Render(MailFixtures.Envelope(), MailStore.Genesis);
         Assert.Contains("\"priority\":\"ambient\"", line);
         Assert.Contains("\"ttlDeliveries\":3", line);
+    }
+
+    /// ADR-0018 d5, the WRITE side: a unicast envelope has no ttl, so the field
+    /// is OMITTED — the same spelling this format already uses for `session`
+    /// and `inReplyTo`. Null or 0 would both be inventions: one says "unknown"
+    /// where we know, the other says "already spent" where nothing counts.
+    [Fact]
+    public void Render_OmitsTtlOnAUnicastAddress()
+    {
+        var line = MailStore.Render(
+            MailFixtures.Envelope(to: "reviewer@ci", ttl: null), MailStore.Genesis);
+
+        Assert.DoesNotContain("ttlDeliveries", line);
+        Assert.Contains("\"to\":\"reviewer@ci\"", line);
+    }
+
+    /// THE ROUND TRIP, which is the whole point of the slice: what the store
+    /// writes, the strict parser reads back — for the one envelope shape whose
+    /// two halves could disagree. If Render wrote `ttlDeliveries` while the
+    /// parser refuses it on a unicast address, every future read of that line
+    /// would be a warn-and-skip: mail silently lost behind a successful append,
+    /// forever, on an append-only chain.
+    [Fact]
+    public void Render_UnicastLine_ReParsesCleanWithNoTtl()
+    {
+        var original = MailFixtures.Envelope(to: "reviewer@ci", ttl: null);
+        var line = MailStore.Render(original, MailStore.Genesis);
+
+        var reparsed = MailEnvelope.TryParseLine(line, out var errors);
+        Assert.True(reparsed is not null, $"the store wrote a line it cannot read: {string.Join("; ", errors)}");
+        Assert.Null(reparsed!.TtlDeliveries);
+        Assert.Equal(original with { Prev = MailStore.Genesis }, reparsed);
+    }
+
+    /// The ADVERSARIAL case the plan named: an envelope whose ttl CONTRADICTS
+    /// its address. It cannot come from the parser — that is what d5 refuses —
+    /// but `MailEnvelope` is a record anyone can construct, so the question is
+    /// what the STORE does when handed one.
+    ///
+    /// It refuses the append, and it does so through machinery that already
+    /// existed: `Append` re-parses the exact bytes it is about to make durable
+    /// and fails if the strict parser would reject them. That guard is why this
+    /// slice needed no new write-side validation — the contradiction cannot
+    /// reach the chain, and the store says so out loud instead of writing a
+    /// line no reader will ever accept.
+    [Fact]
+    public void Append_RefusesAUnicastEnvelopeCarryingATtl()
+    {
+        using var tmp = new MailStoreTempDir();
+        var store = tmp.Store();
+        var contradiction = MailFixtures.Envelope(to: "reviewer@ci", ttl: 3);
+
+        var result = store.Append(contradiction);
+
+        var failed = Assert.IsType<MailAppend.Failed>(result);
+        Assert.Contains("the strict parser would reject", failed.Error);
+        Assert.Contains("not allowed on the unicast address", failed.Error);
+        // Nothing durable happened: the chain is untouched, not half-written.
+        Assert.Empty(tmp.Bytes());
     }
 
     /// A body containing a newline must not become two lines — JSONL framing is

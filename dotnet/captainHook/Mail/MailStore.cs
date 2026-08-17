@@ -276,21 +276,26 @@ public sealed class MailStore(string dir)
             // for it.
             if (envelope.From.Session is { } session) from["session"] = session;
 
-            Log.Debug("mail", "mail.append", new LogFields
+            var data = new Dictionary<string, object>
             {
-                Data = new Dictionary<string, object>
-                {
-                    ["id"] = MailEnvelope.ClampField(envelope.Id),
-                    ["to"] = envelope.To,
-                    ["offset"] = offset,
-                    ["bytes"] = lineBytes,
-                    ["from"] = from,
-                    ["kind"] = Wire(envelope.Kind),
-                    ["topic"] = MailEnvelope.ClampField(envelope.Topic),
-                    ["priority"] = Wire(envelope.Priority),
-                    ["ttlDeliveries"] = envelope.TtlDeliveries,
-                },
-            });
+                ["id"] = MailEnvelope.ClampField(envelope.Id),
+                ["to"] = envelope.To,
+                ["offset"] = offset,
+                ["bytes"] = lineBytes,
+                ["from"] = from,
+                ["kind"] = Wire(envelope.Kind),
+                ["topic"] = MailEnvelope.ClampField(envelope.Topic),
+                ["priority"] = Wire(envelope.Priority),
+            };
+            // Omitted for a unicast envelope, exactly as on the stored line —
+            // one spelling of "no ttl" across the ledger and the trail, so the
+            // observation surface reads the same fact the store holds. The
+            // column keeps its type: `ttlDeliveries` is a number when present
+            // and absent otherwise, never a string "none" that every consumer
+            // would have to special-case.
+            if (envelope.TtlDeliveries is int ttl) data["ttlDeliveries"] = ttl;
+
+            Log.Debug("mail", "mail.append", new LogFields { Data = data });
 
             return new MailAppend.Appended(offset, lineBytes, prev, line);
         }
@@ -418,13 +423,21 @@ public sealed class MailStore(string dir)
             w.WriteString("to", e.To);
             w.WriteString("kind", Wire(e.Kind));
             w.WriteString("topic", e.Topic);
-            // priority and ttlDeliveries are optional on the wire but ALWAYS
-            // written: the stored line is the durable record, so a defaulted
-            // value is frozen at write time rather than re-derived by a future
-            // reader whose default has moved.
+            // priority and ttlDeliveries are optional on the wire but written
+            // WHENEVER THEY APPLY: the stored line is the durable record, so a
+            // defaulted value is frozen at write time rather than re-derived by
+            // a future reader whose default has moved.
             w.WriteString("priority", Wire(e.Priority));
             if (e.InReplyTo is not null) w.WriteString("inReplyTo", e.InReplyTo);
-            w.WriteNumber("ttlDeliveries", e.TtlDeliveries);
+            // A unicast envelope has NO ttl (ADR-0018 d5) and the field is
+            // omitted rather than written as 0 or null — omission is this
+            // format's spelling of "absent" (`session`, `inReplyTo` above), and
+            // it must round-trip: the parser REFUSES `ttlDeliveries` on a
+            // `role@instance` address, so writing one here would put a line on
+            // the append-only chain that this same code can never read back.
+            // That is the whole failure mode this slice exists to prevent, and
+            // `MailStoreUnicastTests` re-parses what it renders to pin it.
+            if (e.TtlDeliveries is int ttl) w.WriteNumber("ttlDeliveries", ttl);
             w.WriteString("body", e.Body);
             // `prev` LAST: every field the SENDER wrote, then the one field the
             // STORE wrote. The line reads in the order it was decided.

@@ -68,7 +68,10 @@ export type MailEnvelopeView = {
   topic: string;
   priority: string;
   inReplyTo: string | null;
-  ttlDeliveries: number;
+  /** null = UNICAST, which has no TTL at all (ADR-0018 d5) — not unknown, not
+   * zero. Nothing counts down for it; it is held until its one addressee
+   * takes it. */
+  ttlDeliveries: number | null;
   body: string | null;
   prev: string | null;
 };
@@ -93,7 +96,8 @@ export type MailHeldItem = {
   offset: number;
   id: string;
   priority: string;
-  ttlDeliveries: number;
+  /** null = unicast, no TTL (ADR-0018 d5): held, never spent. */
+  ttlDeliveries: number | null;
   /** The deliveries value of the opportunity that first passed it over. */
   seenAt: number;
 };
@@ -104,7 +108,8 @@ export type MailFreshItem = {
   offset: number;
   id: string;
   priority: string;
-  ttlDeliveries: number;
+  /** null = unicast, no TTL (ADR-0018 d5). */
+  ttlDeliveries: number | null;
 };
 
 export type MailAdvanceMark = {
@@ -285,6 +290,12 @@ export function opportunities(deliveries: number, seenAt: number): number {
   return deliveries - seenAt + 1;
 }
 export function isExpired(item: MailHeldItem, deliveries: number): boolean {
+  // No ttl, no expiry — the mirror of MailCursors.Pending's guard. A unicast
+  // envelope is held until its addressee takes it (ADR-0018 d5); disposing of
+  // a mailbox that never returns is the reaper's judgement (d6), never this
+  // arithmetic. Drifting from the engine here paints mail as spent that the
+  // digest will still deliver, which is N8 exactly.
+  if (item.ttlDeliveries === null) return false;
   return opportunities(deliveries, item.seenAt) >= item.ttlDeliveries;
 }
 
@@ -539,15 +550,26 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
   const from = isRecord(d.from) ? d.from : null;
   const agent = from ? str(from.agent) : null, harness = from ? str(from.harness) : null;
   const fromSession = from && from.session !== undefined ? str(from.session) : null;
+  // A unicast address carries NO ttl and a role address MUST carry one
+  // (ADR-0018 d5) — the same rule the engine's parser enforces, so a trail line
+  // that breaks it is a line the store could not have written and is refused
+  // rather than half-read. `includes("@")` is a projection of the address, not
+  // a second copy of its grammar: an ungrammatical `to` cannot reach the trail
+  // (MailEnvelope.TryParse refuses it), so all this has to answer is which of
+  // the two shapes an already-valid address has.
+  const ttlApplies = to !== null && !to.includes("@");
+  const ttlOk = ttlApplies
+    ? ttl !== null && ttl >= 1
+    : d.ttlDeliveries === undefined;
   if (id === null || to === null || offset === null || bytes === null || kind === null || topic === null
-      || priority === null || ttl === null || ttl < 1 || agent === null || harness === null
+      || priority === null || !ttlOk || agent === null || harness === null
       || (from !== null && from.session !== undefined && fromSession === null)) {
     return refuse(s, "mail.append", "id/to/offset/bytes/from/kind/topic/priority/ttlDeliveries", atMs, null, null, offset);
   }
   const line: MailLedgerLine = {
     offset, bytes, terminated: true, hash: null,
     envelope: { id, ts: null, from: { agent, harness, session: fromSession }, to, kind, topic, priority,
-      inReplyTo: null, ttlDeliveries: ttl, body: null, prev: null },
+      inReplyTo: null, ttlDeliveries: ttlApplies ? ttl : null, body: null, prev: null },
     errors: [], source: "trail",
   };
 
@@ -765,7 +787,7 @@ function applyAdvance(s: MailState, c: MailCursorState, ev: AdvanceEvent): { sta
   const expired = c.held.filter((h) => isExpired(h, oldDeliveries));
   const consumedFresh = c.fresh.filter((f) => f.offset < ev.offset);
   const remainingFresh = c.fresh.filter((f) => f.offset >= ev.offset);
-  const pending: { offset: number; id: string; priority: string; ttlDeliveries: number; seenAt: number | null }[] = [
+  const pending: { offset: number; id: string; priority: string; ttlDeliveries: number | null; seenAt: number | null }[] = [
     ...heldPending.map((h) => ({ ...h, seenAt: h.seenAt as number | null })),
     ...consumedFresh.map((f) => ({ ...f, seenAt: null })),
   ].sort(byOffset);
@@ -1068,7 +1090,9 @@ export type MailPendingItem = {
   offset: number;
   id: string;
   priority: string;
-  ttlDeliveries: number;
+  /** null = unicast: no TTL, so the canvas draws a hold rather than a
+   * countdown (ADR-0018 d5). */
+  ttlDeliveries: number | null;
   seenAt: number | null;
   /** deliveries − seenAt + 1 for held mail; 0 for fresh — MailPendingDto's arithmetic. */
   opportunities: number;

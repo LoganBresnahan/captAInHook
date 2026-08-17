@@ -505,7 +505,15 @@ public sealed class MailCursors(MailStore store)
             var item = new PendingMail(h.Offset, env, h.SeenAt);
             // Passed over at opportunities seenAt..deliveries — that is
             // (deliveries − seenAt + 1) times. At ttl times, it is spent.
-            if (cursor.Deliveries - h.SeenAt + 1 >= env.TtlDeliveries) expired.Add(item);
+            //
+            // A UNICAST envelope has no ttl (ADR-0018 d5) and therefore no
+            // "spent": it is held until its one addressee takes it. That is not
+            // a leak with no bound — a mailbox that never returns is the
+            // reaper's problem (d6), which disposes of it by JUDGEMENT and
+            // leaves a trail line, rather than by an arithmetic that quietly
+            // drops mail nobody has read.
+            if (env.TtlDeliveries is int ttl && cursor.Deliveries - h.SeenAt + 1 >= ttl)
+                expired.Add(item);
             else pending.Add(item);
         }
 
@@ -686,7 +694,12 @@ public sealed class MailCursors(MailStore store)
                     {
                         ["id"] = MailEnvelope.ClampField(e.Envelope.Id), ["to"] = view.Role,
                         ["offset"] = e.Offset,
-                        ["ttlDeliveries"] = e.Envelope.TtlDeliveries, ["seenAt"] = e.SeenAt!,
+                        // Non-null by construction: only the ttl comparison above
+                        // puts an envelope in Expired, and it cannot fire without
+                        // a ttl. Spelled `.Value` rather than defaulted, because
+                        // a `?? 0` here would invent a number for a row whose
+                        // whole job is to say which ttl was spent.
+                        ["ttlDeliveries"] = e.Envelope.TtlDeliveries!.Value, ["seenAt"] = e.SeenAt!,
                     },
                 });
 
