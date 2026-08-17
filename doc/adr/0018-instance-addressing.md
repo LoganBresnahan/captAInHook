@@ -254,7 +254,12 @@ watcher lands → the two e2e pins → docs.
 
 ## Ground truth
 
-*(empty until the first slice lands)*
+*(rows accrue in each landing commit; `docs-instance-addressing` is the sweep,
+not the first entry.)*
+
+| decision | as built |
+|---|---|
+| d1/d2 — two address kinds, one namespace; `role` or `role@instance`, refused not guessed | `MailAddress` (`TryParse`, `IsRole`, `Role`, `Instance`, `IsUnicast`, `GrammarHelp`) in `dotnet/captainHook/Mail/MailAddress.cs`, called from `MailEnvelope.TryParse` on `to` — the single choke point every write path crosses (`mail send` parses before it appends; the store serializes a parsed record), so an ungrammatical address cannot reach the chain. **As-built**: the check is scoped to `to` alone — `from.agent` is a free-form provenance label nobody routes on, and constraining it would refuse envelopes already on the ledger for a property nothing reads. Lowercase is PINNED, not folded (unlike `kind`/`priority`, which are closed sets a parser can correct a casing slip against): folding here while `MailCursors.CursorPath`'s percent-encoder keeps `Ops` and `ops` as two cursor files is N8 wearing an address for a hat. The alphanumeric test is ASCII spelled out by hand rather than `char.IsLetterOrDigit`, which is Unicode-aware and would admit `mаintainer` with a Cyrillic а — a mailbox rendering identically to a real one and receiving none of its mail, which is exactly the silent misrouting d2 exists to refuse. A second `@` is refused rather than split-on-first or split-on-last, because `a@b@c` has two plausible readings and picking either is guessing. A trailing `-` is legal: the grammar is the ADR's verbatim and was not "improved" in passing, this being the half of the decision that is permanent. Tests: `MailAddressTests` (17) + the address block in `MailEnvelopeTests` (30), including the named legacy corpus (every role on the maintainer's live ledger and in the fixtures) — the one way this slice could have silently orphaned mail already on the chain. Flow doc: [doc/flow/mailbox-bus.md](../flow/mailbox-bus.md) § The address grammar |
 
 ## Revisit triggers
 

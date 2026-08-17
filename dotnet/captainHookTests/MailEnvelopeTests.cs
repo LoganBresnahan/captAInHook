@@ -346,6 +346,89 @@ public class MailEnvelopeParseTests
         Assert.NotEmpty(errors);
     }
 
+    // ---- the address grammar (ADR-0018 d2) ---------------------------------
+
+    [Theory]
+    [InlineData("main")]
+    [InlineData("maintainer")]
+    [InlineData("reviewer")]
+    [InlineData("scribe")]
+    [InlineData("auditor")]
+    [InlineData("other")]
+    [InlineData("intent-watcher")]
+    [InlineData("s1")]
+    public void LegacyRoles_StillParse(string role)
+    {
+        // The compatibility pin, listing the roles actually on the maintainer's
+        // ledger and in this suite's fixtures. Introducing a grammar for a field
+        // that accepted ANYTHING through all of item 20 is the one way this
+        // slice could silently orphan mail already on the chain, so the corpus
+        // is named rather than asserted about in the abstract.
+        Assert.Equal(role, ParseValid(With($"\"to\": \"{role}\"")).To);
+    }
+
+    [Theory]
+    [InlineData("maintainer@laptop-a")]
+    [InlineData("reviewer@ci")]
+    [InlineData("a@b")]
+    [InlineData("9@9")]
+    public void UnicastAddress_Parses(string to)
+    {
+        // Accepted and carried VERBATIM. Routing on it is `plan-unicast`'s
+        // (d4) — until that lands a role@instance envelope is addressed to
+        // nobody, which is the correct behaviour for a slice that only decides
+        // what an address is.
+        Assert.Equal(to, ParseValid(With($"\"to\": \"{to}\"")).To);
+    }
+
+    [Theory]
+    [InlineData("Main")]              // uppercase: pinned lowercase, not folded
+    [InlineData("MAINTAINER")]
+    [InlineData("-lead")]             // must OPEN with alphanumeric
+    [InlineData("_lead")]
+    [InlineData("team.a")]            // '.' is not in the grammar
+    [InlineData("team a")]
+    [InlineData("team/a")]
+    [InlineData("team_a")]
+    [InlineData("mаintainer")]        // Cyrillic 'а' — renders as the real role
+    [InlineData("@instance")]         // empty role half
+    [InlineData("role@")]             // empty instance half
+    [InlineData("@")]
+    [InlineData("a@b@c")]             // two readings, both plausible => refuse
+    [InlineData("a@B")]               // the grammar binds BOTH halves
+    [InlineData("A@b")]
+    [InlineData("a@b.c")]
+    public void UngrammaticalAddress_IsRefused(string to)
+    {
+        // Refused, never guessed (d2): a misrouted envelope is silent, and a
+        // silent failure is what this whole subsystem is built against. The
+        // homoglyph case is the reason the grammar is ASCII by hand rather than
+        // char.IsLetterOrDigit — a Unicode-aware check admits a mailbox that
+        // renders identically to a real one and receives none of its mail.
+        Assert.Contains(ParseInvalid(With($"\"to\": \"{to}\"")), e => e.Contains("'to' must be"));
+    }
+
+    [Fact]
+    public void BlankAddress_IsRefusedAsBlank_NotAsUngrammatical()
+    {
+        // Required runs first, so an empty `to` keeps its old message. One
+        // violation, one error — the grammar must not double-report a field
+        // that never named anything to begin with.
+        var errors = ParseInvalid(With("\"to\": \"\""));
+        Assert.Single(errors);
+        Assert.Contains(errors, e => e.Contains("non-empty string"));
+    }
+
+    [Fact]
+    public void AddressError_TeachesTheGrammar_AndQuotesWhatItGot()
+    {
+        // These land in the trail and on `mail send`'s stderr at the one moment
+        // a human can still fix the typo, so the message carries the rule.
+        var errors = ParseInvalid(With("\"to\": \"Ops\""));
+        Assert.Contains(errors, e => e.Contains("[a-z0-9][a-z0-9-]*"));
+        Assert.Contains(errors, e => e.Contains("got \"Ops\""));
+    }
+
     // ---- helpers: mutate the ADR envelope, one field at a time --------------
 
     /// The ADR envelope with `field` (a full `"name": value` pair) replacing any
@@ -373,5 +456,80 @@ public class MailEnvelopeParseTests
     {
         using var doc = JsonDocument.Parse(json);
         return JsonSerializer.Serialize(doc.RootElement);
+    }
+}
+
+/// ADR-0018 decisions 1-2 (roadmap item 23, slice 1) — the address VALUE, as
+/// distinct from the envelope field that carries it. The parser tests above pin
+/// what reaches the ledger; these pin what the later slices will route on:
+/// `plan-unicast` reads `Instance`, `unicast-refuses-ttl` reads `IsUnicast`,
+/// and `instance-registration` reuses `IsRole` for `--as`.
+public class MailAddressTests
+{
+    private static MailAddress Parse(string s)
+    {
+        Assert.True(MailAddress.TryParse(s, out var a), $"expected '{s}' to parse");
+        return a;
+    }
+
+    [Fact]
+    public void BareRole_IsBroadcast()
+    {
+        // A role-only address is not a special case bolted onto unicast — it is
+        // exactly what the bus did before this slice (ADR-0016 broadcast), and
+        // `Instance is null` is the whole of that difference.
+        var a = Parse("maintainer");
+        Assert.Equal("maintainer", a.Role);
+        Assert.Null(a.Instance);
+        Assert.False(a.IsUnicast);
+    }
+
+    [Fact]
+    public void RoleAtInstance_SplitsOnTheOneSeparator()
+    {
+        var a = Parse("maintainer@laptop-a");
+        Assert.Equal("maintainer", a.Role);
+        Assert.Equal("laptop-a", a.Instance);
+        Assert.True(a.IsUnicast);
+    }
+
+    [Theory]
+    [InlineData("maintainer")]
+    [InlineData("maintainer@laptop-a")]
+    public void ToString_RoundTripsTheAcceptedSpelling(string s)
+    {
+        // The ledger holds the address as the sender wrote it. A rendering that
+        // differed by so much as a separator would be a SECOND spelling of one
+        // mailbox — ADR-0016 N8's hazard, at the address layer.
+        Assert.Equal(s, Parse(s).ToString());
+        Assert.Equal(s, MailAddress.TryParse(s, out var a) ? a.ToString() : null);
+    }
+
+    [Theory]
+    [InlineData("a")]
+    [InlineData("0")]
+    [InlineData("a-b-c")]
+    [InlineData("a-")]        // a trailing hyphen is legal: the ADR's grammar verbatim
+    [InlineData("laptop2")]
+    public void IsRole_Accepts(string s) => Assert.True(MailAddress.IsRole(s));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("-a")]
+    [InlineData("A")]
+    [InlineData("a b")]
+    [InlineData("a.b")]
+    [InlineData("a@b")]       // the separator is never part of a HALF
+    [InlineData("é")]
+    public void IsRole_Refuses(string s) => Assert.False(MailAddress.IsRole(s));
+
+    [Fact]
+    public void FailedParse_YieldsDefault_NeverAPartialAddress()
+    {
+        // A half-populated address would be a mailbox nobody named. `false` and
+        // a default are the only two things a caller may see.
+        Assert.False(MailAddress.TryParse("a@b@c", out var a));
+        Assert.Equal(default, a);
+        Assert.Null(a.Instance);
     }
 }

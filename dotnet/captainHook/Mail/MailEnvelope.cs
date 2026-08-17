@@ -119,7 +119,23 @@ public sealed record MailEnvelope(
         var ts = Required(root, "ts", errs);
 
         var from = ParseFrom(root, errs);
+
+        // `to` is the ONE field carrying the ADR-0018 d2 address grammar — a
+        // role, or a role@instance. Checked here and nowhere else: this parser
+        // is the single choke point every write path passes through (`mail
+        // send` parses before it appends; the store serializes a parsed record),
+        // so an ungrammatical address cannot reach the chain.
+        //
+        // Scoped to `to` deliberately. `from.agent` is a free-form provenance
+        // label, not a routing key — nothing addresses mail to it — and
+        // constraining it would refuse envelopes already on the ledger for a
+        // property nothing reads.
         var to = Required(root, "to", errs);
+        if (to is not null && !MailAddress.TryParse(to, out _))
+            // `to` is already known readable and non-blank here (Required), so it
+            // can be quoted directly — no second walk of the document.
+            errs.Add($"'to' must be {MailAddress.GrammarHelp} (got \"{to}\")");
+
         var topic = Required(root, "topic", errs);
 
         var kind = MailKind.Status;

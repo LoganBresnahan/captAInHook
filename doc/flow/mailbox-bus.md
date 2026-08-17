@@ -231,6 +231,38 @@ with**, so members address *peers* rather than a shared "everybody" role —
 nothing in the digest filters by sender, so a shared role would hand every
 member its own traffic back.
 
+### The address grammar (ADR-0018 d2)
+
+`to` used to accept any non-blank string. It now parses as **`role`** or
+**`role@instance`**, each half matching `[a-z0-9][a-z0-9-]*`, at most one `@`,
+both halves non-empty — anything else is a parse violation and the envelope is
+refused. `MailAddress` (`Mail/MailAddress.cs`) is the whole decision; the
+envelope parser calls it on `to` and on nothing else, since `to` is the only
+routing key and `from.agent` is a free-form provenance label nobody addresses.
+
+Introducing the separator *is* introducing the grammar: `@` can only mean
+"instance follows" if it can mean nothing else. Refused-not-guessed is the same
+direction the rest of this parser points — a misrouted envelope is silent, and
+silence is what the bus is built against, whereas a refusal is loud while a
+human can still fix the typo.
+
+Two choices are worth knowing because they diverge from neighbours in this
+file. Lowercase is **pinned, not folded**, unlike `kind`/`priority`: those are
+closed sets a parser can correct a casing slip against, whereas an address
+names an open universe of mailboxes — and folding here while
+`MailCursors.CursorPath`'s percent-encoder keeps `Ops` and `ops` as two cursor
+files would be one concept with two implementations (ADR-0016 N8). The
+alphanumeric test is **ASCII by hand**, not `char.IsLetterOrDigit`, because a
+Unicode-aware check admits `mаintainer` with a Cyrillic а — a mailbox that
+renders identically to a real one and receives none of its mail.
+
+As of this slice the grammar is *all* that is built: a `role@instance` envelope
+parses, is carried verbatim, and is addressed to nobody, because routing on the
+instance (`plan-unicast`), refusing TTL on unicast (`unicast-refuses-ttl`), and
+naming an instance at registration (`instance-registration`) are later slices of
+ADR-0018. It lands first and alone because its risk is permanence: the ledger is
+append-only, so what parses today is what it holds forever.
+
 ## Provenance, and the ledger's other direction
 
 The digest tells the recipient who is speaking (per-item: sender agent, harness,
@@ -407,9 +439,24 @@ drown the trail it exists to help you read.
 
 ## Ground truth
 
+Test counts below are **cases as the runner reports them**, per FILE — not
+methods, not `test(` declarations. Reproduce them:
+
+```sh
+dotnet test dotnet/captainHookTests/captainHookTests.csproj --no-build --list-tests   # per class; sum the classes in a file
+cd web && node --test src/<name>.test.ts                                             # the ℹ tests line
+```
+
+Spelling that out because these numbers have drifted three times now, always in
+the same way: a method count copied where a case count was meant (the envelope
+table read `26` for a file the runner expands to 98), or a number carried
+forward from an earlier commit. A count nobody can reproduce in one command is
+prose, not ground truth.
+
 | what | where |
 |---|---|
 | `MailEnvelope`, `MailSender`, `MailKind`, `MailPriority`, `TryParse`/`TryParseLine` | `dotnet/captainHook/Mail/MailEnvelope.cs` |
+| the ADDRESS grammar (ADR-0018 d2, slice 1) — `to` parses as `role` or `role@instance`, `[a-z0-9][a-z0-9-]*` per half, one `@`, both halves non-empty; refused not guessed; lowercase pinned rather than folded; ASCII by hand (no homoglyph mailboxes); applied to `to` and nothing else. Routing on the instance is NOT built here | `MailAddress` (`TryParse`, `IsRole`, `Role`, `Instance`, `IsUnicast`, `GrammarHelp`) in `dotnet/captainHook/Mail/MailAddress.cs`, called from `MailEnvelope.TryParse`; `MailAddressTests` (17) + the address block in `MailEnvelopeTests` (30: the legacy-role corpus, unicast accept, 17 refusals, the blank-vs-ungrammatical split, and the message that teaches the grammar) |
 | `MailStore` (`Append`, `Read`, `VerifyChain`, `HeadHash`, `Render`, `HashOf`, `ResolveDir`, `TryLock`), `Genesis`, `MaxLineBytes` | `dotnet/captainHook/Mail/MailStore.cs` |
 | `MailAppend` (Appended/Failed), `MailLine`, `MailChainFault`, `MailChainFaultKind` | `dotnet/captainHook/Mail/MailStore.cs` |
 | `MailCursor`, `MailHeld`, `MailCursors` (`Pending`, `Advance`, `CursorPath`, `Enc`, `CurrentGen`) | `dotnet/captainHook/Mail/MailCursor.cs` |
@@ -422,17 +469,17 @@ drown the trail it exists to help you read.
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished` — every cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
 | the read ENDPOINT (d14, slice 1) — one read-only snapshot: chain status, the ledger from `since`, every cursor's pending view, inferred presence; `since` absent ⇒ 0, off-boundary ⇒ `sinceAligned: false` (never a spliced prefix), malformed ⇒ 400 | `ApiReadModel.Mail` + the `/api/v1/mail` route (`dotnet/captainHook/Api/ApiReadModel.cs`, `Api/ApiHost.cs`); DTOs in `Api/ApiDtos.cs`; the write half unreachable by construction via `MailReadPort` (`dotnet/captainHook/Mail/MailReadPort.cs`); presence from `SessionPresence` ∪ cursor files. `MailApiTests.cs` (31) — reflection walk, `Api/` source pin, non-GET route theory asserting nothing is written |
-| the CANVAS (d14, slice 4) — ledger spine, a lane per role, a track per session, marks with the cursor's own arithmetic; semantic zoom in px-per-slot (far < 40 ≤ mid < 132 ≤ near); pan/zoom on ONE axis, every vertical measure a CSS pixel | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`; `data-lane`, `data-glyph`, `data-track`, `data-mark`, `data-tier`, `data-arrival`, `data-motion`) over `web/src/mailCanvas.ts` (`buildScene`, `MailView`); every status is `lineStatus`/`projectCursor`, never the canvas's own. `web/src/mailCanvas.test.ts` (40) against all 16 goldens; `web/e2e/mail.spec.ts` |
+| the CANVAS (d14, slice 4) — ledger spine, a lane per role, a track per session, marks with the cursor's own arithmetic; semantic zoom in px-per-slot (far < 40 ≤ mid < 132 ≤ near); pan/zoom on ONE axis, every vertical measure a CSS pixel | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`; `data-lane`, `data-glyph`, `data-track`, `data-mark`, `data-tier`, `data-arrival`, `data-motion`) over `web/src/mailCanvas.ts` (`buildScene`, `MailView`); every status is `lineStatus`/`projectCursor`, never the canvas's own. `web/src/mailCanvas.test.ts` (39) against all 16 goldens; `web/e2e/mail.spec.ts` |
 | the observation surface's reducer (d14, slice 3) | `web/src/mail.ts` — pure `(state, trailLine) → state` seeded from `MailDto`; golden corpus `web/src/mail.golden.json` GENERATED by `dotnet/captainHookTests/MailReducerGoldenTests.cs` (2), replayed + attacked by `web/src/mail.test.ts` / `mail.skeptic.test.ts` (`npm test`) |
 | snapshot ⇄ stream alignment (d14 as-built): `MailDto.TrailEventId` is the trail's end STAMPED BEFORE the store is read, so a client subscribing at `Last-Event-ID: <it>` gets zero loss and zero duplicate. A STRING, because the id is opaque (ADR-0009 d2) and because `"0"` (replay everything) must never collapse into absent under a falsy test; null = no trail served ⇒ the picture is real and frozen | `MailDto` in `dotnet/captainHook/Api/ApiDtos.cs`; `ApiReadModel.Mail`/`TrailLength` (`_trailPath`, bound from `sseOptions.TrailPath` in `Core/DaemonHost.cs`); `MailState.trailEventId` in `web/src/mail.ts`; pinned by `MailApiTests` (resume-exactness end to end, null/"0" contracts, the source pin on read order) |
-| the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (11) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |
+| the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (10) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |
 | the delivery PRELOAD (d14, slice 6a) — `delivered` still comes from a `mail.deliver` line and nowhere else, but the picture no longer has to have been watching when it landed: the daemon folds those lines out of the trail into `MailDto.deliveries` (columns verbatim; NO ledger offsets, because placing an id is the reducer's arithmetic and a second implementation is N8), and `MailDto.deliveriesComplete` is the narrow claim that the whole file was read and nothing trimmed — false for a scan window, a hit cap, or no trail at all, which is what lets the detail card distinguish "nobody read it" from "further back than I can see" | `MailDeliveryFold`/`MailDeliveryLine`/`MailDeliveryFoldResult` in `dotnet/captainHook/Api/MailDeliveryFold.cs`; `MailDeliveryDto` + `ApiReadModel.Mail` in `Api/ApiDtos.cs`/`Api/ApiReadModel.cs`; `preloadDeliveries`/`resolveDelivery` (ONE placement rule, shared with `onDeliver`) in `web/src/mail.ts`. Pinned by `dotnet/captainHookTests/MailDeliveryPreloadTests.cs` (11 — a real engine-written line, the payload-stderr forgery, the bounds saying so, and a drive proving three snapshots change nothing on disk), 5 in `web/src/mail.test.ts` (preload ≡ live, dedup, unplaceable-is-quiet, no phantom cursors), and `web/e2e/mail.spec.ts` (a pickup nobody watched, delivered on a reloaded page from a snapshot line) |
 | the human channel (ADR-0017 d2) — `captainHook mail status`: roles from the `mail digest` registrations that survive `dispatch.json` for this cwd/session, counts from `MailCursors.Pending`, one `📬 n · m urgent` line per role, silent when there is nothing to say | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; role recognition is `MailDigest.TryParseArgs` itself, policy is `PolicyResolution.Resolve` + `Evaluate` (`Core/DispatchPolicy.cs`), registrations are `ExecHandlersFile.Resolve` (`Core/ExecHandlersFile.cs`). Pinned by `dotnet/captainHookTests/MailStatusTests.cs` (30 — line goldens, per-cursor counts, handler/event/project denials, multi-seam collapse, the refused registration, four silences, unreadable stdin, and a drive proving it creates and changes nothing) |
-| envelope parse table (26) | `dotnet/captainHookTests/MailEnvelopeTests.cs` |
-| store: chain, flock, torn tails, write gate (43) | `dotnet/captainHookTests/MailStoreTests.cs` |
+| envelope parse table (98, measured — the older `26` counted methods, not the theory cases they expand to) + `MailAddressTests` (17) | `dotnet/captainHookTests/MailEnvelopeTests.cs` |
+| store: chain, flock, torn tails, write gate (46) | `dotnet/captainHookTests/MailStoreTests.cs` |
 | cursor: frontier/held, TTL, re-anchor (32) | `dotnet/captainHookTests/MailCursorTests.cs` |
 | exactly-once races, chain-changed guard, drain soak (15) | `dotnet/captainHookTests/MailCursorEdgeTests.cs` |
-| planner matrix, golden renders, verb, ledger, daemon + Stop smokes (54) | `dotnet/captainHookTests/MailDigestTests.cs` |
+| planner matrix, golden renders, verb, ledger, daemon + Stop smokes (70) | `dotnet/captainHookTests/MailDigestTests.cs` |
 | `mail send` verb end to end (9) | `dotnet/captainHookTests/MailSendTests.cs` |
 | reentrancy guard proven by stub `claude`; two-role swarm smoke (5) | `dotnet/captainHookTests/MailDogfoodTests.cs` |
 | field report — first members live | `doc/dogfood/2026-08-14-first-bus-members.md` |

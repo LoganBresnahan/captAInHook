@@ -1558,6 +1558,49 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `address-grammar` (2026-08-17; phase 1, slice 1, alone as
+  planned — the forever pin. `to` stops accepting anything and parses as
+  `role` or `role@instance`, `[a-z0-9][a-z0-9-]*` per half, one `@`, both
+  halves non-empty; `MailAddress` is the whole decision and
+  `MailEnvelope.TryParse` is where it binds — the single choke point every
+  write path crosses (`mail send` parses before it appends, the store
+  serializes a parsed record), so an ungrammatical address cannot reach the
+  append-only chain. Introducing the separator IS introducing the grammar:
+  `@` can only mean "instance follows" if it can mean nothing else. **Nothing
+  routes on the instance yet** — a `role@instance` envelope parses, is carried
+  verbatim, and is addressed to nobody, which is the right shape for a slice
+  whose risk is PERMANENCE rather than slip-through: what parses today is what
+  the ledger holds forever, and a grammar loosened after mail is on the chain
+  cannot be tightened again. Three as-built calls, each on the ADR's Ground
+  truth: scoped to `to` ALONE (`from.agent` is a provenance label nobody
+  routes on, and constraining it would refuse ledger lines for a property
+  nothing reads); lowercase **pinned rather than folded**, diverging from
+  `kind`/`priority` because those are closed sets a parser can correct a
+  casing slip against while an address names an open universe — and folding
+  here while `CursorPath`'s percent-encoder keeps `Ops` and `ops` as two
+  cursor files is ADR-0016 N8 wearing an address for a hat; and the
+  alphanumeric test spelled out in ASCII rather than `char.IsLetterOrDigit`,
+  which is Unicode-aware and would admit `mаintainer` with a Cyrillic а — a
+  mailbox that renders identically to a real one and receives none of its
+  mail, the exact silent misrouting d2 exists to refuse. A second `@` is
+  refused, not split-on-first or split-on-last: `a@b@c` has two plausible
+  readings and picking either is guessing. The compatibility corpus is NAMED
+  rather than asserted in the abstract — every role on the maintainer's live
+  ledger and in the suite's fixtures (`maintainer`, `reviewer`, `scribe`,
+  `main`, `auditor`, `other`, `intent-watcher`, `s1`) is lowercase-legal and
+  pinned as a theory, since orphaning mail already on the chain is the one way
+  this slice could have failed quietly. 47 tests (`MailAddressTests` 17, the
+  address block in `MailEnvelopeTests` 30), suite 1001 → 1048 green twice.
+  Docs: flow doc § *The address grammar*, plus a count audit on the way past.
+  Every mail test count in the flow doc AND in ADR-0016's Ground truth was
+  re-measured from the runners; five were wrong — envelope table 26 → 115
+  (the `26` counted methods, not the cases xunit expands them to),
+  `MailStoreTests` 43 → 46, `MailDigestTests` 54 → 70, `mailCanvas.test.ts`
+  40 → 39, `mailStream.test.ts` 11 → 10 — the last two stale in the sweep that
+  had just claimed to correct three others. The flow doc's Ground truth now
+  opens with the two commands that reproduce every number in it, because a
+  count nobody can re-derive in one command is prose wearing a table's
+  clothes.)
 
 - [x] **20. The mailbox bus — cross-harness agent communication** — the hub
   reframe: N external agent loops (Claude Code + any hook-bearing harness),
