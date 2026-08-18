@@ -173,6 +173,27 @@ public static class MailDigest
     /// house parser shape, applied to flags). A bad registration must fail
     /// LOUDLY at dispatch — exit 1 → handler failure → visible in the trail
     /// and counted by supervision — never quietly read the wrong mailbox.
+    /// The MAILBOX a REGISTRATION reads — its role, and the instance when `--as`
+    /// names one — or null if the entry is not a digest at all.
+    ///
+    /// The gate is this verb's own argument parser, so a registration this
+    /// returns a mailbox for is one `Run` would accept, ADR-0018's grammar check
+    /// on `--role`/`--as` included. That is `MailCursors.List`'s rule (ADR-0016
+    /// d13) applied to registrations: what counts is what the REAL path would
+    /// accept, never a lookalike spelling maintained beside it.
+    ///
+    /// Lives here, on the verb, because two callers now ask the question —
+    /// `mail status` (which roles may THIS window read) and `RoleKinds` (which
+    /// roles does any window read at all) — and a second copy would be a second
+    /// answer the day the argument shape moves.
+    public static MailAddress? MailboxOf(ExecEntry entry)
+    {
+        if (entry.Args.Count < 2 || entry.Args[0] != "mail" || entry.Args[1] != "digest") return null;
+        return TryParseArgs([.. entry.Args.Skip(2)], out _) is { } opts
+            ? new MailAddress(opts.Role, opts.Instance)
+            : null;
+    }
+
     public static MailDigestOptions? TryParseArgs(
         IReadOnlyList<string> args, out IReadOnlyList<string> errors)
     {

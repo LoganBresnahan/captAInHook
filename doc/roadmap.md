@@ -1508,6 +1508,56 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `role-kind-inference` (2026-08-18; phase 2 — what KIND of thing
+  holds a role, and whether anybody is home. Two questions kept apart on purpose,
+  because d4's brain takes them as separate inputs and answering one with the
+  other is how a watcher starts feeding itself: kind is STRUCTURAL (who could
+  serve this role, from what is registered; it changes when an operator edits
+  handlers.json and not otherwise) and presence is MOMENTARY.
+  **The slice's one real decision was an amendment to d3.** As written it reads
+  as though a turn payload is registered per role. It cannot be:
+  `Dispatcher.DispatchAsync` looks up runners by `e.Type`, so EVERY handler on
+  `mail-nudge` runs on every nudge whatever role it names — two per-role
+  registrations would both spawn on each nudge and one would exit immediately
+  having read a role off the envelope that is not its own, a process spawn per
+  role per nudge for nothing. So a per-role registration could only annotate,
+  never scope, and would exist solely to be read back by this inference — which
+  is exactly the second declaration d3 refuses. The CAPABILITY is therefore
+  installation-wide (`TurnPayloadInstalled`) and the per-role CONSENT stays in
+  `watch.json` where d7 put it; kind and rules remain independent brain inputs,
+  and an operator has two honest ways to say "no robot here" — install no turn
+  payload, or write no rule for the role. Three options were weighed and dropped
+  first: `--role` in the nudge entry's args (the digest's spelling, and my own
+  initial recommendation), `MAIL_ROLE` in its env (the shipped starter payloads'
+  spelling), and a first-class `role` field on the entry schema; all three are
+  the same fact declared only to be read back, and the third would have changed
+  ADR-0010's contract for it.
+  **`Unserved` is added to d3's three kinds** — nobody reads it and nothing can
+  be woken for it — because it is the state the 2026-08-17 dogfood pass found
+  four of on the live bus, and "we decided not to nudge" and "nothing here can
+  help" are different facts a watcher must not conflate.
+  **The digest lookup is not forked, as the plan required:** `MailStatus`'s
+  private `MailboxOf` moved onto `MailDigest` — the verb whose registrations
+  these are — and both callers use the one copy, recognition through the real
+  argument parser (ADR-0016 d13). **Presence returns an AGE rather than a
+  boolean:** "live" needs a threshold, and every number about elapsed time in
+  this subsystem belongs with the brain that owns `quietFor` and the monotonic
+  deadlines (house invariant 2); `AnyLiveSession` exists so a caller that HAS a
+  threshold has one place to compare, and no two callers can disagree about it. A
+  cursor with no dispatch behind it is not presence, and a named `--as` mailbox
+  never looks live — correct rather than a limitation, since a cursor's key is
+  its instance (ADR-0018 d3) and a durable mailbox is a mailbox, not a window.
+  **One known limit, and it is not a choice:** unlike `mail status` this applies
+  no `dispatch.json` filter, because there is no asking window and "would ANY
+  dispatch anywhere be allowed?" is unanswerable without enumerating every cwd a
+  hook might arrive from; a role whose digest is denied everywhere still reads
+  human-held, which yields FEWER robot nudges — the conservative direction for a
+  channel that spends the owner's tokens. Everything in the file is pure (values
+  in, values out, no I/O, no clock), which is what the plan's "pure classification
+  + fixtures" asked for and what the brain's goldens will need. 18 tests
+  (`RoleKindsTests`); suite 1236 → 1254 green twice, web 253 unchanged. Docs: d3
+  amended in place with the reasoning, its ground-truth row, flow doc § *The robot
+  channel* gains the kind/presence half and its diagram inputs.)
   Slices landed: `watch-rules` + `mail-nudge-event` (2026-08-18; phase 1, slices
   2 and 3 of 4 — the two watcher-lane leaves, taken together because they are the
   robot channel's two halves: what may wake a member, and how a member is woken.

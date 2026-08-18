@@ -666,6 +666,9 @@ through every gate the shipped system already has.
      malformed ──────┼──▶  Effective() = []   ⇒ zero robot nudges, ever
      valid ──────────┘                          (malformed also warns)
         │  rules[] : role · when{priority, quietFor, noLiveSession} · budget{…}
+        │
+        │   handlers.json ──▶ RoleKinds     human-held / robot-servable / mixed / unserved
+        │   cursors × presence ──▶ RolePresence    freshest dispatch age, or null
         ▼
    the watcher's brain  (pure — `watcher-brain`, not built yet)
         │  MailNudge{role, envelopeIds, reason, digest, replyHow, workspace}
@@ -678,6 +681,32 @@ through every gate the shipped system already has.
         ├─ capability gate                     "effects": [] ⇒ downgrade + warn
         └─ nudge.dispatch                      …and nothing is serialized
 ```
+
+**A role's KIND says whether the robot channel exists for it at all.** It is
+inferred, never declared: a role with `mail digest` registrations is *human-held*
+(a window reads it), an installation with a turn payload registered on
+`mail-nudge` makes every role *robot-servable*, both together are *mixed* (human
+first, robot as fallback — which is what `noLiveSession` decides in a rule), and
+a role with neither is *unserved*: mail piling up for nobody, the state the
+2026-08-17 dogfood pass found four of on the live bus.
+
+The robot half is **installation-wide** rather than per-role, and that is forced
+by the dispatcher rather than chosen: fan-out is by EVENT, so every handler on
+`mail-nudge` runs on every nudge whatever role it names. Two per-role
+registrations would both spawn on each nudge and one would exit immediately
+having read a role off the envelope that is not its own. A per-role registration
+could only annotate, never scope — it would exist purely to be read back by the
+inference, which is the second declaration this is built to avoid. So the
+capability is "is a turn payload installed" and the per-role gate is the watch
+rule. Kind and rules stay independent inputs to the brain, and there are two
+honest ways to say *no robot here*: install no payload, or write no rule.
+
+Presence is the other half, and it is deliberately an **age, not a boolean**:
+"live" needs a threshold, and every number about elapsed time here belongs with
+the brain that owns `quietFor` and the monotonic deadlines. A cursor with no
+dispatch behind it is not presence — it says "this mailbox was delivered to
+once", never "somebody is here", which is precisely the dead-mailbox shape the
+reaper exists for.
 
 **`watch.json` is `dispatch.json`'s idiom with the default reversed.** Strict
 walk, every violation collected in one pass, all-or-nothing accept, never a
@@ -769,6 +798,7 @@ prose, not ground truth.
 | `Stop`/`SubagentStop` declaring `decide` + the top-level block shape | `dotnet/captainHook/harnesses/claude-code.json`; `DecidesAtTopLevel`/`TopLevelDecision` in `dotnet/captainHook/Core/Harness.cs` — see [hook-dispatch.md](hook-dispatch.md) and platform.md § The Stop block shape |
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |
 | the ROBOT channel's rules (ADR-0017 d7, slice `watch-rules`) — `watch.json`: `dispatch.json`'s strict idiom with the default reversed, so absent AND malformed both mean zero nudges (no `default` field, no fail-open direction); `when` must name a threshold, `budget` is required with both counters ≥ 1, durations carry a unit from a closed set and yield milliseconds, priorities fold case (a closed set) while roles do not (an open universe), and a `role@instance` rule is refused for now — the reversible direction | `WatchRules`/`WatchRule`/`WatchWhen`/`WatchBudget`/`WatchPriority` + `WatchResolution` (`Resolve`, `Effective`) in `dotnet/captainHook/Core/WatchRules.cs`; path from `CAPTAINHOOK_WATCH_FILE` else `~/.captainHook/watch.json`. Pinned by `dotnet/captainHookTests/WatchRulesTests.cs` (68), including the absent-≡-malformed theory that is the whole consent posture |
+| ROLE KIND and presence (ADR-0017 d3 as amended, slice `role-kind-inference`) — who COULD serve a role (structural, from registrations) and whether anybody is home (momentary), kept apart because the brain takes them as separate inputs. Four kinds including `Unserved`; the robot half is installation-wide because fan-out is by event; presence returns an AGE so the threshold stays with the brain | `RoleKind`/`RoleKinds`/`RolePresence` in `dotnet/captainHook/Core/RoleKinds.cs` (pure — no I/O, no clock); the digest lookup is `MailDigest.MailboxOf` (`Mail/MailDigest.cs`), LIFTED from `MailStatus` when the second caller appeared so the two cannot fork. Pinned by `dotnet/captainHookTests/RoleKindsTests.cs` (18) |
 | the ROBOT NUDGE as an ordinary event (ADR-0017 d5, slice `mail-nudge-event`) — `MailNudge` through the same dispatcher the shim uses: `handlers.json` registers `"events": ["mail-nudge"]`, `dispatch.json` is the consent, `workspace` is the cwd so `project` rules scope it; no stdout, no effects, no presence, and a denial that is logged rather than answered | `MailNudge`/`MailNudgeEvent`/`MailNudgeOutcome` in `dotnet/captainHook/Core/MailNudgeEvent.cs`; the embedded spec `dotnet/captainHook/harnesses/internal.json`; `NoWireAdapter` + `HarnessSpec.AnswersHooks` (`Core/Harness.cs`) and the refusal at both wire sites (`Core/HookRun.cs`, `Core/DaemonHost.cs`); `HookRun.DecidePolicy`/`PolicyRuling` (`Core/HookRun.cs`). Trail: `nudge.dispatch`, `nudge.denied` (src `nudge`, no `sessionId`) — `mail.nudge` proper is `nudge-state-and-trail`'s. Pinned by `dotnet/captainHookTests/MailNudgeEventTests.cs` (11) |
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished`, `mail.reap` (ADR-0018 d6: `role` + `instance` + `pendingIds` + `by`, and the one cursor-family event with NO `sessionId` — a reap has no window) — every other cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |

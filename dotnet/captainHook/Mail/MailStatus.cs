@@ -160,7 +160,7 @@ public static class MailStatus
         var boxes = new SortedDictionary<string, MailAddress>(StringComparer.Ordinal);
         foreach (var entry in loaded.Entries)
         {
-            if (MailboxOf(entry) is not { } box) continue;
+            if (MailDigest.MailboxOf(entry) is not { } box) continue;
             // Registered on several events, delivered at whichever comes first:
             // surviving policy for ANY of them means this window will be handed
             // this role's mail, so the count belongs on its status bar.
@@ -172,19 +172,6 @@ public static class MailStatus
             if (reachable) boxes[box.ToString()] = box;
         }
         return [.. boxes.Values];
-    }
-
-    /// The MAILBOX a registration reads — its role, and the instance when
-    /// `--as` names one — or null if it is not a digest at all. The gate is the
-    /// real verb's own argument parser, so a registration this returns a
-    /// mailbox for is one `MailDigest.Run` would accept, ADR-0018's grammar
-    /// check on `--role`/`--as` included.
-    private static MailAddress? MailboxOf(ExecEntry entry)
-    {
-        if (entry.Args.Count < 2 || entry.Args[0] != "mail" || entry.Args[1] != "digest") return null;
-        return MailDigest.TryParseArgs([.. entry.Args.Skip(2)], out _) is { } opts
-            ? new MailAddress(opts.Role, opts.Instance)
-            : null;
     }
 
     private static string? Str(JsonElement o, string name)
