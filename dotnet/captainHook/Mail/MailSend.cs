@@ -39,8 +39,8 @@ public static class MailSend
         if (subverb != "send")
         {
             stderr.WriteLine(subverb is null
-                ? "captainHook mail: a subverb is required — usage: captainHook mail <send|digest|status|reap>  (send: one JSON envelope on stdin)"
-                : $"captainHook mail: unknown subverb '{subverb}' — usage: captainHook mail <send|digest|status|reap>  (send: one JSON envelope on stdin)");
+                ? "captainHook mail: a subverb is required — usage: captainHook mail <send|digest|status|reap|watch>  (send: one JSON envelope on stdin)"
+                : $"captainHook mail: unknown subverb '{subverb}' — usage: captainHook mail <send|digest|status|reap|watch>  (send: one JSON envelope on stdin)");
             return 1;
         }
 

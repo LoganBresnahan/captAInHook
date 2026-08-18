@@ -116,7 +116,7 @@ public static class MailStatus
     /// sessionless reader's own cursor (ADR-0016 d4), a real cursor with a real
     /// count, so the number stays the answer to a question that was actually
     /// asked rather than a guess about which window is asking.
-    private static (string? Session, string? Cwd) ReadCaller(TextReader stdin)
+    internal static (string? Session, string? Cwd) ReadCaller(TextReader stdin)
     {
         string text;
         try { text = stdin.ReadToEnd(); }

@@ -74,11 +74,15 @@ switch (inv.Mode)
         // (ADR-0018 d6) is a WRITE verb over standing rather than mail: it
         // removes one mailbox's cursor and says so on the trail, and it reads
         // no stdin because a reap is performed on an address, not by a window.
+        // `watch --once` (ADR-0017 d4) runs the watcher's brain once and PRINTS
+        // its verdict — verification of the rules, never a schedule; the
+        // in-daemon actor is what runs the brain for real.
         return inv.EventName switch
         {
             "digest" => CaptainHook.Mail.MailDigest.Run(args[2..], Console.In, Console.Out, Console.Error),
             "status" => CaptainHook.Mail.MailStatus.Run(args[2..], Console.In, Console.Out, Console.Error),
             "reap" => CaptainHook.Mail.MailReap.Run(args[2..], Console.Out, Console.Error),
+            "watch" => CaptainHook.Mail.MailWatch.Run(args[2..], Console.In, Console.Out, Console.Error),
             _ => CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error),
         };
 

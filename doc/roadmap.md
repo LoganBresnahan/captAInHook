@@ -1508,6 +1508,81 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `watcher-brain` (2026-08-18; phase 3 — the decision, as a pure
+  function, and the plan's one **fable / high** row on the watcher lane.
+  `WatcherBrain.Evaluate(WatchInput) → WatchVerdict`: mailboxes, presence, role
+  kinds, rules, the brain's own state and ONE monotonic number in; the nudges to
+  raise now, the state to keep, ONE deadline and a per-role standing out. Nothing
+  in it reads a clock or a file, which is what let the plan's verify column be
+  driven with plain numbers rather than sleeps.
+  **The protocol with the actor is fixed here, in three rules,** so phase 4/5
+  cannot redefine the state's shape: (i) ONE `NextCheckMs` per verdict — the
+  minimum over the nearest quiet threshold, the nearest presence expiry, the
+  nearest budget-window release and the projected re-arm of the nudges it
+  emits; the actor arms exactly that and replaces what it held, so a second
+  envelope re-arms and a double-arm is structurally impossible; (ii) disarm is
+  not an operation — an envelope that leaves every mailbox leaves the state and
+  the next evaluation arms nothing for it; (iii) `NudgeState.Record` is the
+  CALLER's, after it knows the dispatch ran — the verdict charges no budget and
+  resets no quiet clock for its own nudges, because a nudge `dispatch.json`
+  denies must not spend a budget the operator refused (`MailNudgeOutcome.Ran`
+  is the fact, and only the caller has it); an uncharged record still restarts
+  quiet so a denial recurs once per period, on the trail, never in a loop.
+  **Two readings decided in the conservative direction.** *Unread* is strict:
+  pending in EVERY mailbox of the role that accepts it — one reader taking
+  delivery is the role having heard it, and a dead cursor's held-forever mail
+  (the reaper's shape) is not a reason to spend tokens; a unicast is judged by
+  its one mailbox; a role with no cursor at all is read sessionless by the
+  gatherer and everything ever sent to it is unread. *Quiet* counts from the
+  brain's first sighting (`QuietSinceMs`), never from the envelope's `ts` (a
+  sender's wall clock), and restarts on `Record` so a second poke waits the full
+  period. *Live* is a freshest dispatch within 10 min — the canvas's
+  `PRESENCE_IDLE_MS`, so the picture and the decision agree — through the one
+  comparison `RolePresence` owns; a `--as` mailbox never looks live. Per
+  envelope the FIRST rule whose priority admits it governs (an urgent-fast and
+  an ambient-slow rule coexist); `perRoleHour` is the strictest among the
+  admitting rules; an envelope no rule admits is unread but ungoverned.
+  **The restart question, answered without a wall clock:** the state leaves the
+  process as DURATIONS (`ToAges(now)`) and returns as stamps re-derived from the
+  moment read (`FromAges`) — two subtractions on one clock each — and the
+  consequence is stated: time the daemon was not running is not counted; six of
+  ten minutes quiet at idle-exit is six on the next start and due four minutes
+  later, a deadline that had already fallen is due at once (N2), budget windows
+  stretch across the gap. The one open shape-question the plan flagged
+  (`Workspace` on the nudge) stays null: `watch.json` has no field for it and
+  the parser refuses unknown ones, so naming a robot's workspace is a decision
+  for `turn-claude-payload`, not a default invented here.
+  **`captainHook mail watch --once`** is the verification half: dry, refused
+  without `--once` so it can never read as the schedule the ADR rejected, and it
+  NAMES what the CLI cannot see instead of guessing — presence is the daemon's
+  own, so it claims only the calling session on stdin (hook-shaped or exec-wire)
+  at age 0; the brain's memory does not exist yet, so every unread envelope is
+  first seen now and `--as-if-quiet` shows what the rules would do once time has
+  passed. Writes no cursor, moves none, prints the per-role standing + the
+  nudges it WOULD raise (reason, digest) + the deadline, and logs one
+  `watch.verdict` line — the record a dogfood week can be written from.
+  `MailWatch.ReadMailboxes` is the one gatherer for the CLI and the actor —
+  one mailbox per cursor file, the sessionless read for a cursorless role, and
+  one for every `role@instance` the ledger addresses that has no cursor yet.
+  **The skeptic pass (fable, high) found two real things, both fixed:** the
+  digest a nudge carries is the real renderer's and capped at whole items, and
+  as first written the nudge NAMED and charged every due envelope while the
+  digest carried only the first few — `perEnvelope` silently spent on mail no
+  turn ever saw; now a nudge names only what it carries, the tail stays due and
+  the verdict arms `now` to carry it next. And a unicast to a mailbox with no
+  cursor (a `--as` box not yet fired, an answer to a reaped window) was watched
+  by nobody. Four limits it named are kept and written into the file header
+  rather than papered over: presence reaches a role only through its cursors;
+  a reaped last cursor makes retained history read unread; quiet accrues only
+  while the daemon runs (a `quietFor` past the idle window is reachable only
+  while other activity keeps the daemon up — N2 sharpened, the resident watcher
+  is the remedy); one `perRoleHour` window per role, strictest rule wins.
+  Tests: `WatcherBrainTests` (57), `WatcherBrainGoldenTests` (2, over the
+  checked-in `watcher-brain.golden.json` — real store + real digest-moved
+  cursors, on the reducer golden's precedent), `MailWatchTests` (15); C# suite
+  green twice. Docs: ADR-0017 d4 as-built note +
+  Ground truth row; `doc/flow/mailbox-bus.md` § the robot channel gains the
+  brain's diagram row, its three-rule protocol and the restart story.)
   Slices landed: `role-kind-inference` (2026-08-18; phase 2 — what KIND of thing
   holds a role, and whether anybody is home. Two questions kept apart on purpose,
   because d4's brain takes them as separate inputs and answering one with the

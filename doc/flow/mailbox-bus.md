@@ -669,8 +669,17 @@ through every gate the shipped system already has.
         │
         │   handlers.json ──▶ RoleKinds     human-held / robot-servable / mixed / unserved
         │   cursors × presence ──▶ RolePresence    freshest dispatch age, or null
+        │   cursors ──▶ MailWatch.ReadMailboxes   one WatchedMailbox per cursor file, else the sessionless read
+        │   nudges.jsonl (phase 4) ──▶ NudgeState   first-seen / quiet-since / nudged / the role's hour
         ▼
-   the watcher's brain  (pure — `watcher-brain`, not built yet)
+   WatcherBrain.Evaluate(WatchInput{mailboxes, presence, kinds, rules, state, NowMs})   ← PURE
+        │
+        │   per rule role:  unread? ─▶ channel exists? ─▶ admitted & past quietFor? ─▶ noLiveSession? ─▶ budgets?
+        │                   (in EVERY     (human-held ⇒     (first admitting rule      (age ≤ 10m ⇒      (perEnvelope, then
+        │                    accepting     never)             governs)                   held)             perRoleHour sliding)
+        │                    mailbox)
+        ▼
+   WatchVerdict{ nudges[], state, NextCheckMs (ONE deadline — arm exactly this), roles[] }
         │  MailNudge{role, envelopeIds, reason, digest, replyHow, workspace}
         ▼
    MailNudgeEvent.DispatchAsync
@@ -756,11 +765,93 @@ than by a rule somebody has to remember:
 `workspace` becomes the dispatch's `cwd`, which is what lets `dispatch.json`'s
 existing `project` criterion scope robot turns per repository.
 
-Not here yet: the watcher that decides (`watcher-brain`), its state and the
-`mail.nudge` row (`nudge-state-and-trail`), the turn payloads
-(`turn-claude-payload`), and the in-daemon actor that feeds the whole thing
-(`watcher-actor`). This section grows into § *The watcher* at
-`docs-and-ground-truth`.
+**The brain decides, and only decides (ADR-0017 d4, slice `watcher-brain`).**
+`WatcherBrain.Evaluate` is a pure function: the store, the cursors, the
+registrations, presence and the rules are read by its caller and handed over as
+values with one monotonic number, `NowMs`; it hands back the nudges to raise
+now, the state to keep, one deadline, and a line per rule-bearing role. Three
+rules fix its protocol with the actor that will host it, so no later phase can
+redefine the state's shape:
+
+- **One deadline.** `NextCheckMs` is the earliest instant a re-evaluation could
+  change the answer — the nearest quiet threshold, the nearest presence expiry,
+  the nearest budget-window release, the projected re-arm of the nudges it just
+  emitted — or null. The actor arms exactly that and replaces what it held: a
+  second envelope while armed re-arms (the brain re-runs on its `mail.append`
+  and the new minimum wins) and can never double-arm, because there is only ever
+  one number to hold.
+- **Disarm is not an operation.** A cursor advance that clears the condition
+  makes the envelope leave every mailbox, so it leaves the state and the next
+  evaluation arms nothing for it. If it reappears (a reaped cursor re-anchoring)
+  its clock starts over.
+- **`Record` is the caller's.** The verdict tracks every unread envelope but
+  charges no budget and resets no quiet clock for the nudges it emits, because
+  a nudge `dispatch.json` denies must not spend a budget the operator's rules
+  refused to let it use, and only the dispatch outcome knows. An uncharged
+  record still restarts the quiet clock, so a denial recurs once per period —
+  visible on the trail, never a tight loop.
+
+Two readings were decided in the conservative direction. **Unread** is strict:
+an envelope is unread for a role when it is pending in *every* mailbox of the
+role that accepts it — one reader taking delivery is the role having heard it,
+and a dead cursor's held-forever mail (the reaper's shape) is not a reason to
+spend tokens; a unicast is judged by its one mailbox; a role with no cursor at
+all is read sessionless and everything ever sent to it is unread, which is the
+truth for a role nobody has picked up. **Quiet** counts from the moment the
+brain first saw the envelope unread — never from the envelope's `ts`, a
+sender's wall clock — and restarts on `Record`, so a second poke waits the full
+period. **Live** is a freshest dispatch within 10 minutes, the canvas's own
+idle→stale boundary, through the one comparison `RolePresence` owns; a `--as`
+mailbox never looks live. Per envelope the first rule whose priority admits it
+governs threshold and budget, so an urgent-fast rule and an ambient-slow one
+coexist for one role; `perRoleHour` is the strictest among the admitting rules.
+
+**Across a restart, the state travels as durations.** A monotonic stamp means
+nothing in another process, so `NudgeState.ToAges(now)` writes ages and
+`FromAges(ages, now)` re-derives stamps — two subtractions on one clock each,
+no `DateTime` anywhere. The consequence is stated rather than hidden: time the
+daemon was not running is not counted. Six of ten minutes quiet at idle-exit is
+six minutes quiet on the next start and due four minutes later; a deadline that
+had already fallen is due at once (the ADR's N2 promise); budget windows stretch
+across the gap. Fewer nudges, again.
+
+**`captainHook mail watch --once` runs the same brain from the CLI and prints.**
+It is verification, refused without `--once` so it can never read as the
+schedule the ADR rejected, and it names what it cannot see instead of guessing:
+presence is the daemon's own view, so the CLI claims only the calling session
+on its stdin (hook-shaped JSON or an exec-wire envelope) at age 0 — behind a
+hook that is the window that fired it, on a bare terminal it is nobody; the
+brain's memory (`nudges.jsonl`) does not exist yet, so every unread envelope is
+first seen now and `--as-if-quiet` is how an operator sees what the rules would
+do once time has passed. It writes no cursor and moves none, prints the per-role
+standing, the nudges it WOULD raise with reason and digest, and the one
+deadline, and leaves one `watch.verdict` line on the trail — so a window that
+wires it behind a hook for a dogfood week leaves a record of what the brain
+would have done. `MailWatch.ReadMailboxes` is the one gatherer for the CLI and
+the actor alike: one mailbox per cursor file, keyed by the file's instance; the
+sessionless read for a role with no cursor; and one for every `role@instance`
+the ledger addresses that has no cursor yet — a `--as` mailbox not yet fired, an
+answer to a window whose cursor was reaped — because a unicast no cursor accepts
+would otherwise be watched by nobody. Its broadcast history reads pending from
+the anchor, and the intersection rule keeps that honest.
+
+Two more things the skeptic pass forced into words. The digest a nudge carries
+is the real renderer's and therefore **capped at whole items**, so a nudge names
+and charges only the envelopes it carries: the tail stays due, un-nudged, and
+the verdict arms `now` so the next evaluation carries it — as first written the
+cap silently spent `perEnvelope` on mail no turn ever saw. And four limits are
+kept rather than papered over, in `WatcherBrain.cs`'s header: presence reaches
+a role only through its cursors (a window that has never been handed mail is
+invisible to `noLiveSession`); a role whose last cursor is reaped is read
+sessionless and its retained history reads unread; quiet accrues only while the
+daemon runs, so a `quietFor` longer than the idle window is reachable only while
+other activity keeps the daemon up (N2 sharpened); `perRoleHour` is one window
+per role, shared by every rule that names it, strictest bound wins.
+
+Not here yet: the state file and the `mail.nudge` row (`nudge-state-and-trail`),
+the turn payloads (`turn-claude-payload`), and the in-daemon actor that feeds
+the brain and arms its deadline (`watcher-actor`). This section grows into
+§ *The watcher* at `docs-and-ground-truth`.
 
 ## Ground truth
 
@@ -799,6 +890,7 @@ prose, not ground truth.
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |
 | the ROBOT channel's rules (ADR-0017 d7, slice `watch-rules`) — `watch.json`: `dispatch.json`'s strict idiom with the default reversed, so absent AND malformed both mean zero nudges (no `default` field, no fail-open direction); `when` must name a threshold, `budget` is required with both counters ≥ 1, durations carry a unit from a closed set and yield milliseconds, priorities fold case (a closed set) while roles do not (an open universe), and a `role@instance` rule is refused for now — the reversible direction | `WatchRules`/`WatchRule`/`WatchWhen`/`WatchBudget`/`WatchPriority` + `WatchResolution` (`Resolve`, `Effective`) in `dotnet/captainHook/Core/WatchRules.cs`; path from `CAPTAINHOOK_WATCH_FILE` else `~/.captainHook/watch.json`. Pinned by `dotnet/captainHookTests/WatchRulesTests.cs` (68), including the absent-≡-malformed theory that is the whole consent posture |
 | ROLE KIND and presence (ADR-0017 d3 as amended, slice `role-kind-inference`) — who COULD serve a role (structural, from registrations) and whether anybody is home (momentary), kept apart because the brain takes them as separate inputs. Four kinds including `Unserved`; the robot half is installation-wide because fan-out is by event; presence returns an AGE so the threshold stays with the brain | `RoleKind`/`RoleKinds`/`RolePresence` in `dotnet/captainHook/Core/RoleKinds.cs` (pure — no I/O, no clock); the digest lookup is `MailDigest.MailboxOf` (`Mail/MailDigest.cs`), LIFTED from `MailStatus` when the second caller appeared so the two cannot fork. Pinned by `dotnet/captainHookTests/RoleKindsTests.cs` (18) |
+| the WATCHER'S BRAIN (ADR-0017 d4, slice `watcher-brain`) — pure `(mailboxes, presence, kinds, rules, state, NowMs) → {nudges, state, ONE NextCheckMs, per-role standing}`; unread = pending in every accepting mailbox; quiet from first sighting, restarted by `Record`; live = freshest dispatch ≤ 10 min; first admitting rule governs; strictest `perRoleHour`; state crosses a restart as ages, the gap uncounted; `Record` is the caller's so a denied nudge spends nothing | `WatcherBrain` (`Evaluate`, `LiveWithinMs`, `RoleWindowMs`, `ReplyHow`, `Dur`), `WatchInput`, `WatchVerdict`, `WatchRoleVerdict`, `WatchStanding`, `WatchedMailbox`, `NudgeState` (`Record`, `ToAges`, `FromAges`), `WatchedEnvelope`, `RoleNudge`, `NudgeStateAges` in `dotnet/captainHook/Core/WatcherBrain.cs`; the digest text is `MailDigest.Render` over a sessionless view. The CLI: `MailWatch` (`Run`, `ReadMailboxes`, `Usage`, `AsIfQuietMs`) in `dotnet/captainHook/Mail/MailWatch.cs`, routed as `mail watch` from `Program.cs`. Trail: `watch.verdict` (src `watch`, the calling session if any). Pinned by `dotnet/captainHookTests/WatcherBrainTests.cs` (57), `WatcherBrainGoldenTests.cs` (2, over `dotnet/captainHookTests/watcher-brain.golden.json` — real store + real digest-moved cursors; `CAPTAINHOOK_SCHEMA_UPDATE=1` regenerates) and `MailWatchTests.cs` (15) |
 | the ROBOT NUDGE as an ordinary event (ADR-0017 d5, slice `mail-nudge-event`) — `MailNudge` through the same dispatcher the shim uses: `handlers.json` registers `"events": ["mail-nudge"]`, `dispatch.json` is the consent, `workspace` is the cwd so `project` rules scope it; no stdout, no effects, no presence, and a denial that is logged rather than answered | `MailNudge`/`MailNudgeEvent`/`MailNudgeOutcome` in `dotnet/captainHook/Core/MailNudgeEvent.cs`; the embedded spec `dotnet/captainHook/harnesses/internal.json`; `NoWireAdapter` + `HarnessSpec.AnswersHooks` (`Core/Harness.cs`) and the refusal at both wire sites (`Core/HookRun.cs`, `Core/DaemonHost.cs`); `HookRun.DecidePolicy`/`PolicyRuling` (`Core/HookRun.cs`). Trail: `nudge.dispatch`, `nudge.denied` (src `nudge`, no `sessionId`) — `mail.nudge` proper is `nudge-state-and-trail`'s. Pinned by `dotnet/captainHookTests/MailNudgeEventTests.cs` (11) |
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished`, `mail.reap` (ADR-0018 d6: `role` + `instance` + `pendingIds` + `by`, and the one cursor-family event with NO `sessionId` — a reap has no window) — every other cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
