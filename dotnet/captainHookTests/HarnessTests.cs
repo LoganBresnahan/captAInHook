@@ -123,8 +123,11 @@ public class HarnessRegistryTests
         var registry = new HarnessRegistry(dir.Path);
 
         Assert.Equal("synthetic", registry.Get("synthetic").Name);
-        // Adding never removes: both harnesses are known (ordinal-sorted).
-        Assert.Equal(["claude-code", "synthetic"], registry.Known);
+        // Adding never removes: every harness is known (ordinal-sorted). Both
+        // EMBEDDED specs are here — `claude-code` and `internal`, the latter
+        // being ADR-0017 d5's no-wire-format declaration for `MailNudge` — so
+        // this assertion is also the guard that notices a new embedded spec.
+        Assert.Equal(["claude-code", "internal", "synthetic"], registry.Known);
     }
 
     [Fact]

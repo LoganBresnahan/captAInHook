@@ -281,6 +281,17 @@ public static class HookRun
             await stderr.WriteLineAsync($"captAInHook: {ex.Message}");
             return 1;
         }
+        // An INTERNAL harness cannot answer a hook (ADR-0017 d5): it has no
+        // wire format, so serializing here would put the empty string on the
+        // sacred channel. Refused exactly like an unknown name — clear stderr,
+        // zero stdout bytes — which is also what keeps "internal never reaches
+        // a stdout-serialize path" true for a caller who simply typed it.
+        if (!spec.AnswersHooks)
+        {
+            await stderr.WriteLineAsync(
+                $"captAInHook: harness '{spec.Name}' is internal — it has no hook wire format and cannot answer a hook");
+            return 1;
+        }
         probe?.Resolved();
 
         string raw = await stdin.ReadToEndAsync();
@@ -407,13 +418,33 @@ public static class HookRun
     /// cannot drift either. The plain proceed-with-no-exclusions path is silent.
     public static PolicyGate PolicyGateFor(PolicyResolution resolution, HarnessSpec spec, HookEvent evt, string? dispatchId)
     {
+        var ruling = DecidePolicy(resolution, evt, dispatchId);
+        return ruling.Work
+            ? PolicyGate.Proceed(ruling.Excluded)
+            : PolicyGate.ShortCircuit(DeniedStdout(spec, evt, dispatchId), ruling.TraceLine!);
+    }
+
+    /// The policy DECISION and its trail lines, with no wire format anywhere
+    /// near it — split out of `PolicyGateFor` for ADR-0017 d5's internal event.
+    ///
+    /// An internal dispatch (`MailNudge`) has no stdout and nobody waiting for
+    /// an answer, so a denial there is **logged, not answered** (N3). It could
+    /// not call `PolicyGateFor` at all, because that helper's short-circuit is
+    /// a serialized Noop — the one thing an internal event must never produce.
+    /// Copying the three trail lines into the nudge path instead would put the
+    /// consent surface's own record in two places, which is exactly what the
+    /// shared gate was extracted to prevent. So the decision and its lines live
+    /// HERE, one emitter, and only the callers that own a stdout go on to build
+    /// one.
+    public static PolicyRuling DecidePolicy(PolicyResolution resolution, HookEvent evt, string? dispatchId)
+    {
         var outcome = resolution.Evaluate(evt.Type, evt.Cwd, evt.SessionId);
         if (outcome.Work)
         {
             if (outcome.ExcludedHandlers.Count > 0)
                 Log.Info("policy", "policy.exclude", PolicyFields(evt, dispatchId,
                     data: new Dictionary<string, object> { ["excluded"] = string.Join(",", outcome.ExcludedHandlers) }));
-            return PolicyGate.Proceed(outcome.ExcludedHandlers);
+            return PolicyRuling.Proceed(outcome.ExcludedHandlers);
         }
 
         string trace;
@@ -428,12 +459,23 @@ public static class HookRun
             trace = $"[captAInHook] {evt.Type}  policy: dispatch denied (event-level)";
             Log.Info("policy", "policy.skip", PolicyFields(evt, dispatchId));
         }
-        return PolicyGate.ShortCircuit(DeniedStdout(spec, evt, dispatchId), trace);
+        return PolicyRuling.Deny(trace);
     }
 
     private static LogFields PolicyFields(HookEvent evt, string? dispatchId,
                                           string? msg = null, IDictionary<string, object>? data = null) =>
         new() { DispatchId = dispatchId, SessionId = evt.SessionId, HookEvent = evt.Type, Msg = msg, Data = data };
+}
+
+/// What the policy said, before anybody asks what to WRITE about it. Work=false
+/// carries the trace line the decision already logged; a caller with a stdout
+/// turns that into a byte-identical Noop (`PolicyGateFor`), and a caller
+/// without one — the internal nudge path — simply stops.
+public sealed record PolicyRuling(bool Work, IReadOnlySet<string> Excluded, string? TraceLine)
+{
+    private static readonly IReadOnlySet<string> None = new HashSet<string>();
+    public static PolicyRuling Proceed(IReadOnlySet<string> excluded) => new(true, excluded, null);
+    public static PolicyRuling Deny(string trace) => new(false, None, trace);
 }
 
 /// The result of the policy gate at a wire site. A short-circuit carries the

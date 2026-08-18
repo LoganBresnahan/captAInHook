@@ -1,0 +1,12 @@
+{
+  "name": "internal",
+  "request": {
+    "eventNameField": "hook_event_name",
+    "sessionIdField": "session_id",
+    "cwdField": "workspace"
+  },
+  "response": { "adapter": "none" },
+  "events": {
+    "MailNudge": { "effects": [] }
+  }
+}

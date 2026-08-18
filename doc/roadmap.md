@@ -1508,6 +1508,74 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `watch-rules` + `mail-nudge-event` (2026-08-18; phase 1, slices
+  2 and 3 of 4 — the two watcher-lane leaves, taken together because they are the
+  robot channel's two halves: what may wake a member, and how a member is woken.
+  `thread-fields` deliberately NOT taken (its stored-vs-derived `hops` decision
+  enters the hashed line and is a format migration to reverse; it waits for a
+  sitting of its own).
+  **`watch-rules`** is `~/.captainHook/watch.json` and its strict parser —
+  `dispatch.json`'s idiom copied deliberately (strict walk, every violation in one
+  pass, all-or-nothing accept, never a throw on bad DATA, an injectable path,
+  now `CAPTAINHOOK_WATCH_FILE`) with ONE thing reversed, which is the whole reason
+  it is a separate document: the direction of the default. `dispatch.json` absent
+  means allow everything, because hooks are enhancement and a zero-config user
+  should get the tool working; `watch.json` absent means ZERO robot nudges ever,
+  and malformed means the same thing plus a warn. `Effective()` is where that is
+  said once, so no reader has to hold a fail-open asymmetry in their head — and it
+  is why the document has no `default` field at all: a baseline of "nudge" would be
+  a document whose absence and whose presence differ in the direction that costs
+  money. Three refusals the parse had to decide, each the same shape (a rule that
+  quietly does more than its author meant is worse than one that will not load):
+  `when` must name at least one of priority/quietFor, since `noLiveSession` defaults
+  true and states no threshold on its own — a `when` holding only it describes a rule
+  that wakes a model the instant mail lands, and somebody who wants that writes
+  `"quietFor": "0s"` (legal) and can be held to having meant it; `budget` is required
+  with both counters ≥ 1, because every candidate default is a number of model calls
+  this code would spend on the owner's bill without being told (N1); and a duration
+  carries a unit from a CLOSED set (ms/s/min/h) yielding MILLISECONDS — one side of a
+  monotonic subtraction, house invariant 2 — with no fractions, no negatives, no
+  overflow, and no bare numbers, `600` being ambiguous by a factor of a thousand and
+  the wrong guess being ten minutes versus one second. A priority folds case (a closed
+  set the parser can correct against) while a role does not (an open universe of
+  mailboxes, ADR-0018 d2's divergence), and `role` goes through `MailAddress.IsRole`
+  rather than a second spelling of the grammar. A `role@instance` rule is REFUSED for
+  now — a judgement, not a grammar check: a rule decides whether a ROLE may be woken,
+  while the mailbox a nudge names is an instance the watcher found, and refusing an
+  unbuilt spelling is the reversible direction. Order is preserved and duplicates
+  kept; which rule wins is `watcher-brain`'s. 68 tests (`WatchRulesTests`).
+  **`mail-nudge-event`** builds almost nothing, and that IS d5: `handlers.json`
+  registers turn payloads on `"events": ["mail-nudge"]`, `dispatch.json` is the
+  consent, and bosun, budgets, the kill discipline, the exec-wire envelope and the
+  `dispatch.start → exec.spawn → exec.exit` trail all apply unchanged. What the slice
+  owed was N3's audit — the four ways an internal event is not a hook, every one of
+  which fails SILENTLY if it is wrong. (i) NO STDOUT: the closed adapter set gains
+  `none`, so `internal.json` states the absence of a wire format in DATA rather than
+  borrowing a real adapter and leaving a serializer one refactor from the sacred
+  channel; and because `--harness internal` is two words anybody can type,
+  `HarnessSpec.AnswersHooks` — keyed on the ADAPTER so a second internal harness
+  inherits it — makes both hook wire sites refuse it exactly as they refuse an unknown
+  name, clear stderr and zero stdout bytes. (ii) NO EFFECTS: `"effects": []` in the
+  spec, so the SHIPPED capability gate does the log-and-ignore; no new rule was
+  written. (iii) NO PRESENCE: a nudge carries no session, so the daemon's presence
+  stamp has nothing to record even in principle and this path never calls it — a
+  dispatch that counted as presence would let the watcher's own action answer the
+  watcher's "is anybody live?" question, a loop with no bottom. (iv) A DENIAL IS
+  LOGGED, NOT ANSWERED, which forced the one real refactor: `PolicyGateFor`'s
+  short-circuit IS a serialized Noop, the one thing an internal event must never
+  produce, so the gate split into `HookRun.DecidePolicy` (the ruling + the ONE emitter
+  of `policy.skip`/`policy.malformed`/`policy.exclude`) and the stdout half — copying
+  those three lines into the nudge path would have put the consent surface's own
+  record in two places, which is what the shared gate exists to prevent. `workspace`
+  rides in as the dispatch's `cwd`, so `dispatch.json`'s existing `project` criterion
+  scopes robot turns per repository. Consequence accepted rather than hidden: the
+  GUI's Harnesses panel now lists `internal` (one event, no verbs) — honest, and
+  useful to somebody writing a turn payload. 11 tests (`MailNudgeEventTests`); the
+  existing `NewNameSpec_AddsHarness_AlongsideEmbeddedDefaults` caught the new embedded
+  spec, which is what it is for. Suite 1157 → 1236 green twice, web 253 unchanged.
+  Docs: flow doc § *The robot channel* + two ground-truth rows, dispatch-policy's
+  diagram and § the third caller with no stdout, ADR-0017's d5/d7 ground-truth rows,
+  `CAPTAINHOOK_WATCH_FILE` in CLAUDE.md's env list.)
   Slices landed: `mail-status` (2026-08-17; phase 1, slice 1 — the human
   channel, and the one slice of this ADR that pays off alone.
   `captainHook mail status` prints `📬 2 · 1 urgent` per role for a harness's

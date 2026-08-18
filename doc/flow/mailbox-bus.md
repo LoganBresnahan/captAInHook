@@ -653,6 +653,86 @@ forward-compatibility `unknown-event` note, since the picture cannot place a
 reap before it models instances at all (`canvas-instances`). The `reaper` role's
 payloads and its authority are `reaper-payloads`', still open in ADR-0018 d6.
 
+## The robot channel: rules, and the nudge as an ordinary event (ADR-0017 d5/d7)
+
+The human channel above needs no rules because it interrupts nothing. The robot
+channel is the opposite: it can spend the owner's tokens and take a turn on
+their behalf, so it gets a consent document of its own and an event that goes
+through every gate the shipped system already has.
+
+```
+   ~/.captainHook/watch.json          ← the SECOND consent document (d7)
+     absent ─────────┐
+     malformed ──────┼──▶  Effective() = []   ⇒ zero robot nudges, ever
+     valid ──────────┘                          (malformed also warns)
+        │  rules[] : role · when{priority, quietFor, noLiveSession} · budget{…}
+        ▼
+   the watcher's brain  (pure — `watcher-brain`, not built yet)
+        │  MailNudge{role, envelopeIds, reason, digest, replyHow, workspace}
+        ▼
+   MailNudgeEvent.DispatchAsync
+        ├─ Harness.ParseEvent(internal spec)   workspace → cwd, NO session
+        ├─ HookRun.DecidePolicy                dispatch.json IS the consent
+        │      denied ──▶ nudge.denied         logged, never answered
+        ├─ Dispatcher.DispatchAsync            the SAME fan-out the shim uses
+        ├─ capability gate                     "effects": [] ⇒ downgrade + warn
+        └─ nudge.dispatch                      …and nothing is serialized
+```
+
+**`watch.json` is `dispatch.json`'s idiom with the default reversed.** Strict
+walk, every violation collected in one pass, all-or-nothing accept, never a
+throw on bad data, an injectable path — all copied deliberately, so an operator
+who has learned one document has learned both. What differs is the direction:
+`dispatch.json` absent means allow everything, because hooks are enhancement and
+a zero-config user should get the tool working. `watch.json` absent means **zero
+robot nudges, ever**, and malformed means exactly the same thing plus a warn.
+That is why there is no `default` field here — a baseline of "nudge" would be a
+document whose absence and whose presence differ in the direction that costs
+money, and the only safe baseline is already the absent case.
+
+Three refusals the parser makes for the same underlying reason — a rule that
+quietly does more than its author meant is worse than one that will not load.
+`when` must name a threshold (`noLiveSession` defaults true and says nothing on
+its own; `"quietFor": "0s"` is the legal, deliberate way to say *the moment it
+lands*). `budget` is required with both counters, because every candidate
+default is a number of model calls this code would spend without being told. And
+a duration carries a unit from a closed set — `600` is ambiguous between seconds
+and milliseconds by a factor of a thousand, and guessing wrong is the difference
+between a nudge in ten minutes and a nudge in one second.
+
+**The nudge builds almost nothing, and that is the decision.** `handlers.json`
+registers turn payloads on `"events": ["mail-nudge"]`; `dispatch.json` is the
+consent; bosun, budgets, the kill discipline, the exec-wire envelope and the
+`dispatch.start → exec.spawn → exec.exit` trail apply unchanged. Four things
+make an internal event not a hook, and each is handled where it belongs rather
+than by a rule somebody has to remember:
+
+- **No stdout.** The closed adapter set gains `none`, so the `internal` spec
+  states the absence of a wire format *in data* instead of borrowing a real
+  adapter and leaving a serializer one refactor from the sacred channel.
+  `HarnessSpec.AnswersHooks` — keyed on the adapter, not the name — makes both
+  hook wire sites refuse `--harness internal` exactly as they refuse an unknown
+  name: a clear line on stderr, zero bytes on stdout.
+- **No effects.** `internal.json` declares `MailNudge` with `"effects": []`, so
+  the capability gate that has always downgraded undeclared effects does the
+  log-and-ignore, in the language the project already speaks.
+- **No presence.** A nudge carries no session. Presence is one of the facts the
+  watcher's next decision reads, so a dispatch that counted as presence would
+  let the watcher's own action answer the watcher's own question.
+- **A denial is logged, not answered.** There is no Noop to write, so the policy
+  gate splits: `HookRun.DecidePolicy` rules and emits the policy trail lines,
+  and only callers with a stdout build one (see
+  [dispatch-policy.md](dispatch-policy.md)).
+
+`workspace` becomes the dispatch's `cwd`, which is what lets `dispatch.json`'s
+existing `project` criterion scope robot turns per repository.
+
+Not here yet: the watcher that decides (`watcher-brain`), its state and the
+`mail.nudge` row (`nudge-state-and-trail`), the turn payloads
+(`turn-claude-payload`), and the in-daemon actor that feeds the whole thing
+(`watcher-actor`). This section grows into § *The watcher* at
+`docs-and-ground-truth`.
+
 ## Ground truth
 
 Test counts below are **cases as the runner reports them**, per FILE — not
@@ -684,10 +764,12 @@ prose, not ground truth.
 | `MailPendingView`, `PendingMail`, `MailCursorWrite` (Written/Failed) | `dotnet/captainHook/Mail/MailCursor.cs` |
 | `MailDigest` (`TryParseArgs`, `TryParseRequest`, `Plan`, `Render`, `Run`, `LogDelivery`), `MailSeam`, `MailVehicle`, `MailPlan`, `MailRender`, `MailDigestOptions` | `dotnet/captainHook/Mail/MailDigest.cs` |
 | `MailSend.Run` (the universal write path; stamps `ts`) | `dotnet/captainHook/Mail/MailSend.cs` |
-| REAPING a mailbox (ADR-0018 d6, slice `reap-verb`) — `captainHook mail reap <address> [--by <address>]`: removes ONE mailbox's cursor under the same per-cursor flock `Advance` takes, never unlinking the lock file, and writes `mail.reap`. Standing only: the store is read, never written, and the mailbox's history stays on the chain. Does not judge deadness (the watcher detects, the reaper disposes); idempotent (already gone ⇒ exit 0); exit 1 only for a bad argument or a busy lock. The row spells the mailbox `role` + `instance` (write-when-named), not a joined `address` — one spelling per trail (N8) — and is written AFTER the delete | `MailReap` (`Run`, `TryParseArgs`, `LogReap`) in `dotnet/captainHook/Mail/MailReap.cs`, routed from `Program.cs`'s `mail` switch; the lock is `MailStore.TryLock` (`Mail/MailStore.cs`), the stranded list is `MailCursors.Pending(address, hookSession: null)` (`Mail/MailCursor.cs`). Pinned by `dotnet/captainHookTests/MailReapTests.cs` (18 — the byte-identical ledger, first-contact redelivery, idempotence creating nothing, the surviving lock file, the refusal under a held lock with no false record, the two row shapes, expired-is-not-stranded, and the argument refusals) and the `mail.reap` golden in `WireJsonlTests`. The reducer does NOT fold it yet — `canvas-instances` |
+| REAPING a mailbox (ADR-0018 d6, slice `reap-verb`) — `captainHook mail reap <address> [--by <address>]`: removes ONE mailbox's cursor under the same per-cursor flock `Advance` takes, never unlinking the lock file, and writes `mail.reap`. Standing only: the store is read, never written, and the mailbox's history stays on the chain. Does not judge deadness (the watcher detects, the reaper disposes); idempotent (already gone ⇒ exit 0); exit 1 only for a bad argument or a busy lock. The row spells the mailbox `role` + `instance` (write-when-named), not a joined `address` — one spelling per trail (N8) — and is written AFTER the delete | `MailReap` (`Run`, `TryParseArgs`, `LogReap`) in `dotnet/captainHook/Mail/MailReap.cs`, routed from `Program.cs`'s `mail` switch; the lock is `MailStore.TryLock` (`Mail/MailStore.cs`), the stranded list is `MailCursors.Pending(address, hookSession: null)` (`Mail/MailCursor.cs`). Pinned by `dotnet/captainHookTests/MailReapTests.cs` (19 — the byte-identical ledger, first-contact redelivery, idempotence creating nothing, the surviving lock file, the refusal under a held lock with no false record, the commit point a broken stdout cannot undo, the two row shapes, expired-is-not-stranded, and the argument refusals) and the `mail.reap` golden in `WireJsonlTests`. The reducer does NOT fold it yet — `canvas-instances` |
 | verb routing (`Mode.MailSend`, `mail <subverb>` on the argv contract) | `dotnet/captainHook/Program.cs`; `captainHookWire/` argv contract; refused by the shim |
 | `Stop`/`SubagentStop` declaring `decide` + the top-level block shape | `dotnet/captainHook/harnesses/claude-code.json`; `DecidesAtTopLevel`/`TopLevelDecision` in `dotnet/captainHook/Core/Harness.cs` — see [hook-dispatch.md](hook-dispatch.md) and platform.md § The Stop block shape |
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |
+| the ROBOT channel's rules (ADR-0017 d7, slice `watch-rules`) — `watch.json`: `dispatch.json`'s strict idiom with the default reversed, so absent AND malformed both mean zero nudges (no `default` field, no fail-open direction); `when` must name a threshold, `budget` is required with both counters ≥ 1, durations carry a unit from a closed set and yield milliseconds, priorities fold case (a closed set) while roles do not (an open universe), and a `role@instance` rule is refused for now — the reversible direction | `WatchRules`/`WatchRule`/`WatchWhen`/`WatchBudget`/`WatchPriority` + `WatchResolution` (`Resolve`, `Effective`) in `dotnet/captainHook/Core/WatchRules.cs`; path from `CAPTAINHOOK_WATCH_FILE` else `~/.captainHook/watch.json`. Pinned by `dotnet/captainHookTests/WatchRulesTests.cs` (68), including the absent-≡-malformed theory that is the whole consent posture |
+| the ROBOT NUDGE as an ordinary event (ADR-0017 d5, slice `mail-nudge-event`) — `MailNudge` through the same dispatcher the shim uses: `handlers.json` registers `"events": ["mail-nudge"]`, `dispatch.json` is the consent, `workspace` is the cwd so `project` rules scope it; no stdout, no effects, no presence, and a denial that is logged rather than answered | `MailNudge`/`MailNudgeEvent`/`MailNudgeOutcome` in `dotnet/captainHook/Core/MailNudgeEvent.cs`; the embedded spec `dotnet/captainHook/harnesses/internal.json`; `NoWireAdapter` + `HarnessSpec.AnswersHooks` (`Core/Harness.cs`) and the refusal at both wire sites (`Core/HookRun.cs`, `Core/DaemonHost.cs`); `HookRun.DecidePolicy`/`PolicyRuling` (`Core/HookRun.cs`). Trail: `nudge.dispatch`, `nudge.denied` (src `nudge`, no `sessionId`) — `mail.nudge` proper is `nudge-state-and-trail`'s. Pinned by `dotnet/captainHookTests/MailNudgeEventTests.cs` (11) |
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished`, `mail.reap` (ADR-0018 d6: `role` + `instance` + `pendingIds` + `by`, and the one cursor-family event with NO `sessionId` — a reap has no window) — every other cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
 | the read ENDPOINT (d14, slice 1) — one read-only snapshot: chain status, the ledger from `since`, every cursor's pending view, inferred presence; `since` absent ⇒ 0, off-boundary ⇒ `sinceAligned: false` (never a spliced prefix), malformed ⇒ 400 | `ApiReadModel.Mail` + the `/api/v1/mail` route (`dotnet/captainHook/Api/ApiReadModel.cs`, `Api/ApiHost.cs`); DTOs in `Api/ApiDtos.cs`; the write half unreachable by construction via `MailReadPort` (`dotnet/captainHook/Mail/MailReadPort.cs`); presence from `SessionPresence` ∪ cursor files. `MailApiTests.cs` (31) — reflection walk, `Api/` source pin, non-GET route theory asserting nothing is written |

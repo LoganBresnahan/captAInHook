@@ -508,6 +508,12 @@ public static class DaemonHost
             // Unknown --harness, decided daemon-side: exit 1, zero stdout bytes.
             return new HookResponse(1, [], $"captAInHook: {ex.Message}");
         }
+        // Same refusal as the collapsed site: an internal harness (ADR-0017 d5)
+        // has no wire format, and answering a hook with the empty string is not
+        // a thing this daemon does.
+        if (!spec.AnswersHooks)
+            return new HookResponse(1, [],
+                $"captAInHook: harness '{spec.Name}' is internal — it has no hook wire format and cannot answer a hook");
 
         var raw = Encoding.UTF8.GetString(req.StdinBytes);
         JsonElement payload;

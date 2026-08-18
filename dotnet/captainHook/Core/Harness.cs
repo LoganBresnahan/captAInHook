@@ -39,6 +39,19 @@ public sealed record HarnessSpec(
                                         // (handlers.budgetBeyondHarness), never
                                         // enforce or auto-edit harness config
 {
+    /// The adapter name that means "this harness has no wire format" — the
+    /// `internal` spec's, and the marker `AnswersHooks` reads.
+    public const string NoWireAdapterName = "none";
+
+    /// Can a hook dispatch be ANSWERED on this harness? False for an internal
+    /// one (ADR-0017 d5): it has no stdout contract, so a hook arriving on it
+    /// — `--harness internal`, which nothing but a typo or a probe would write
+    /// — is refused at the wire sites rather than answered with the empty
+    /// string. Keyed on the ADAPTER rather than on the name, because the
+    /// property that makes a harness unanswerable is having no wire format,
+    /// and a second internal harness must inherit the refusal for free.
+    public bool AnswersHooks => ResponseAdapter != NoWireAdapterName;
+
     /// The effect kinds a spec may declare. Background is deliberately absent:
     /// background effects never survive Merge, so they never reach the gate.
     public static readonly IReadOnlySet<string> KnownEffectKinds =
@@ -319,6 +332,7 @@ public static class ResponseAdapters
     {
         ["claude-hook-json"] = new ClaudeHookJsonAdapter(),
         ["generic-json"] = new GenericJsonAdapter(),
+        ["none"] = new NoWireAdapter(),
     };
 
     public static IReadOnlyCollection<string> Known => ByName.Keys;
@@ -328,6 +342,33 @@ public static class ResponseAdapters
             ? a
             : throw new InvalidOperationException(
                 $"unknown response adapter '{name}' — known adapters: {string.Join(", ", Known)}");
+}
+
+/// The absence of a wire format, as a member of the closed set (ADR-0017 d5).
+/// An INTERNAL event — one the daemon raises for itself, `MailNudge` being the
+/// first — has no shim, no stdout, and no caller waiting for an answer: every
+/// effect a handler returns is logged and ignored, and the reply travels back
+/// on the mailbox bus instead.
+///
+/// A spec still has to name an adapter, so rather than lending an internal
+/// harness a real one (and leaving a serializer one refactor away from the
+/// sacred channel), the closed set gains the honest answer. Reaching this at
+/// all is a BUG — the internal dispatch path returns before serialization —
+/// so it emits nothing and says so loudly, which is strictly better than a
+/// throw on a daemon path and infinitely better than bytes on a stdout that
+/// belongs to no hook.
+internal sealed class NoWireAdapter : IResponseAdapter
+{
+    public string Serialize(HookEvent e, Effect eff)
+    {
+        Log.Warn("harness", "harness.noWireSerialize", new LogFields
+        {
+            HookEvent = e.Type,
+            Msg = "an internal event reached a stdout serializer — nothing was written; this is a wiring bug",
+            Data = new Dictionary<string, object> { ["effect"] = Harness.KindOf(eff) },
+        });
+        return "";
+    }
 }
 
 /// Claude Code's hook stdout contract — moved VERBATIM from Program.cs's old

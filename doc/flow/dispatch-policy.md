@@ -20,7 +20,8 @@ manage and the GUI (item 6) will edit: file → API → GUI.
         │
         ▼
  PolicyGateFor(resolution, spec, evt, dispatchId)   ← the ONE shared gate (no drift)
-   resolution.Evaluate(event, cwd, session) → PolicyOutcome{ Work, ExcludedHandlers }
+   └─ DecidePolicy(resolution, evt, dispatchId) → PolicyRuling   ← the decision + ITS trail lines
+ resolution.Evaluate(event, cwd, session) → PolicyOutcome{ Work, ExcludedHandlers }
    ├─ Work == false → SHORT-CIRCUIT: HookRun.DeniedStdout (byte-identical Noop)
    │                   · Malformed file  → deny every hook          ── policy.malformed
    │                   · event-level deny rule → deny this dispatch ── policy.skip
@@ -41,6 +42,17 @@ is touched:
 
 Both call the one `HookRun.PolicyGateFor`, so the two paths cannot drift — the
 decision, the denied stdout bytes, and the trail lines are computed once.
+
+**A third caller has no stdout** (ADR-0017 d5, slice `mail-nudge-event`): the
+internal `MailNudge` dispatch is not a hook, so a denial there is *logged, not
+answered* — there is no byte-identical Noop to write because nothing is
+waiting on a pipe. It cannot call `PolicyGateFor` at all, since that helper's
+short-circuit **is** a serialized Noop. So the gate splits: `DecidePolicy`
+returns a `PolicyRuling` and emits the three trail lines
+(`policy.skip` / `policy.malformed` / `policy.exclude`), and only callers that
+own a stdout go on to build one. Copying those lines into the nudge path
+instead would put the consent surface's own record in two places, which is
+exactly what the shared gate was extracted to prevent.
 
 ## The failure direction is the whole point
 
@@ -163,6 +175,8 @@ as deny-everything. The hash's first 32 chars are the `GET /policy` ETag's body
 | `PolicyResolution` (Absent/Malformed/Loaded, `Resolve`, `Evaluate`), `ReloadingPolicy` | `dotnet/captainHook/Core/DispatchPolicy.cs` |
 | `PolicyContent` (document identity: `Of`, hash + bytes over the loader's view) | `dotnet/captainHook/Core/DispatchPolicy.cs`; stamped by `PolicyResolution.Resolve(path, out content)` |
 | `PolicyGate`, `HookRun.PolicyGateFor` (the shared gate), `HookRun.DeniedStdout` | `dotnet/captainHook/Core/HookRun.cs` |
+| `PolicyRuling`, `HookRun.DecidePolicy` — the decision and the ONE emitter of the policy trail lines, split out of the gate for the stdout-less internal caller (ADR-0017 d5) | `dotnet/captainHook/Core/HookRun.cs`; the caller is `MailNudgeEvent.DispatchAsync` (`Core/MailNudgeEvent.cs`), pinned by `MailNudgeEventTests` |
+| the SECOND consent document — `watch.json`, the robot channel's rules (ADR-0017 d7): the same strict idiom, the opposite default (absent AND malformed ⇒ zero nudges, so there is no fail-open direction and therefore no `default` field) | `WatchRules` / `WatchResolution` in `dotnet/captainHook/Core/WatchRules.cs`; `CAPTAINHOOK_WATCH_FILE` else `~/.captainHook/watch.json`; `WatchRulesTests.cs` (68) |
 | collapsed dispatch site (resolve once) | `HookRun.CollapsedAsync` (`policyPath`) |
 | daemon dispatch site (per-dispatch `ReloadingPolicy.Current`) | `DaemonHost.DispatchOneAsync`, threaded from `RunAsync` |
 | handler-level exclusion filter | `Dispatcher.DispatchAsync` (`excludedHandlers`) |
