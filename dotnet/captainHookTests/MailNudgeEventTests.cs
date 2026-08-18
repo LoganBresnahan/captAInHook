@@ -106,6 +106,42 @@ public class MailNudgeEventTests
             seen.Payload.GetProperty("envelopeIds").EnumerateArray().Select(x => x.GetString()!).ToArray());
     }
 
+    /// A dead-mailbox nudge (ADR-0018 d6) rides the same event: the role it goes
+    /// TO and the address it is ABOUT are different facts, so both are on the
+    /// payload and both are on the trail. A turn payload therefore needs no
+    /// branch — `address` present means "tend this box", absent means "your mail".
+    [Fact]
+    public async Task ADeadMailboxNudge_CarriesTheAddress_OnThePayloadAndTheTrail()
+    {
+        using var log = new CapturedLog();
+        HookEvent? seen = null;
+        var nudge = Nudge(role: "reaper") with { Address = "reviewer@s-1" };
+
+        Assert.Equal("reviewer@s-1", nudge.Subject);
+        await MailNudgeEvent.DispatchAsync(
+            nudge, With(Inspecting("turn", e => seen = e)), Internal(), new PolicyResolution.Absent());
+
+        Assert.Equal("reaper", seen!.Payload.GetProperty("role").GetString());
+        Assert.Equal("reviewer@s-1", seen.Payload.GetProperty("address").GetString());
+
+        var row = Assert.Single(log.Events, e => e.Evt == "nudge.dispatch");
+        Assert.Equal("reviewer@s-1", Assert.IsType<string>(row.Fields.Data!["address"]));
+    }
+
+    /// An ordinary role nudge writes no `address` at all — absent rather than
+    /// empty, so a payload can test for it.
+    [Fact]
+    public async Task AnOrdinaryNudge_HasNoAddressField()
+    {
+        using var log = new CapturedLog();
+        HookEvent? seen = null;
+        await MailNudgeEvent.DispatchAsync(
+            Nudge(), With(Inspecting("turn", e => seen = e)), Internal(), new PolicyResolution.Absent());
+
+        Assert.False(seen!.Payload.TryGetProperty("address", out _));
+        Assert.DoesNotContain("address", Assert.Single(log.Events, e => e.Evt == "nudge.dispatch").Fields.Data!.Keys);
+    }
+
     // ---- N3: no session, no presence ---------------------------------------
 
     /// A nudge carries NO session, by construction. This is the loop-with-no-

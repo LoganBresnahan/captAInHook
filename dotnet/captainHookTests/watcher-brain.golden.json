@@ -15,7 +15,9 @@
             "reason": "1 unread past quiet (12m+) · no live session · budget envelope 1/1 · role 1/4 this hour",
             "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id m-01 · topic: build · new\n   opaque prose",
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
-            "workspace": null
+            "workspace": null,
+            "address": null,
+            "subject": "reviewer"
           }
         ],
         "nextCheckMs": 1320000,
@@ -31,6 +33,7 @@
             "detail": "1 unread past quiet (12m+) · no live session · budget envelope 1/1 · role 1/4 this hour"
           }
         ],
+        "dead": [],
         "state": {
           "envelopes": [
             {
@@ -66,7 +69,9 @@
             "reason": "1 unread past quiet (12m+) · no live session · budget envelope 1/1 · role 1/4 this hour",
             "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id m-02 · topic: build · new\n   opaque prose",
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
-            "workspace": null
+            "workspace": null,
+            "address": null,
+            "subject": "reviewer"
           }
         ],
         "nextCheckMs": 1320000,
@@ -82,6 +87,7 @@
             "detail": "1 unread past quiet (12m+) · no live session · budget envelope 1/1 · role 1/4 this hour"
           }
         ],
+        "dead": [],
         "state": {
           "envelopes": [
             {
@@ -115,6 +121,7 @@
             "detail": "human-held — the count is the nudge; never a robot"
           }
         ],
+        "dead": [],
         "state": {
           "envelopes": [
             {
@@ -148,6 +155,7 @@
             "detail": "1 due, but a session is live (2m ago) and the rule says noLiveSession"
           }
         ],
+        "dead": [],
         "state": {
           "envelopes": [
             {
@@ -176,7 +184,9 @@
             "reason": "1 unread past quiet (30m+) · no live session · budget envelope 1/1 · role 1/4 this hour",
             "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id u-01 · topic: build · new\n   opaque prose",
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
-            "workspace": null
+            "workspace": null,
+            "address": null,
+            "subject": "reviewer"
           }
         ],
         "nextCheckMs": 2400000,
@@ -192,6 +202,7 @@
             "detail": "1 unread past quiet (30m+) · no live session · budget envelope 1/1 · role 1/4 this hour"
           }
         ],
+        "dead": [],
         "state": {
           "envelopes": [
             {
@@ -225,6 +236,7 @@
             "detail": "1 due, but perRoleHour 4 is spent — window frees in 25m"
           }
         ],
+        "dead": [],
         "state": {
           "envelopes": [
             {
@@ -264,6 +276,138 @@
       }
     },
     {
+      "name": "dead-mailbox-nudges-the-reaper",
+      "doc": "A window read the role once and then died holding two urgent envelopes. The ROLE rule sees nothing (a live sibling window has read them, so they are not unread for the role); the dead-mailbox rule sees the corpse and nudges the reaper about the box.",
+      "nowMs": 3600000,
+      "verdict": {
+        "nudges": [
+          {
+            "role": "reaper",
+            "envelopeIds": [
+              "m-01",
+              "m-02"
+            ],
+            "reason": "dead-mailbox reviewer@s-dead · 2 stranded past quiet (1h+) · no dispatch ever seen · budget envelope 1/1 · role 1/4 this hour",
+            "digest": "[captAInHook mail] 2 message(s) for 'reviewer@s-dead':\n\n1. from intent-watcher (claude-code) · status/urgent · id m-01 · topic: build · new\n   opaque prose\n\n2. from intent-watcher (claude-code) · status/urgent · id m-02 · topic: build · new\n   opaque prose",
+            "replyHow": "This mailbox is dead: the window that held it is gone and the mail above is stranded there. For each message decide FORWARD (pipe a NEW envelope to `captainHook mail send` addressed to a live role or role@instance, carrying \"forwardedFrom\": {\"id\": <the original id>, \"address\": <this mailbox>}), DROP (leave it — the ledger keeps it either way), or HOLD (do nothing at all and say so). Then remove the standing with `captainHook mail reap <role@instance>` unless you held it.",
+            "workspace": null,
+            "address": "reviewer@s-dead",
+            "subject": "reviewer@s-dead"
+          }
+        ],
+        "nextCheckMs": 4200000,
+        "roles": [
+          {
+            "role": "reviewer",
+            "kind": "RobotServable",
+            "standing": "NoMail",
+            "unread": 0,
+            "due": 0,
+            "freshestDispatchAgeMs": null,
+            "nextCheckMs": null,
+            "detail": "nothing unread"
+          },
+          {
+            "role": "reaper",
+            "kind": "RobotServable",
+            "standing": "NoMail",
+            "unread": 0,
+            "due": 0,
+            "freshestDispatchAgeMs": null,
+            "nextCheckMs": null,
+            "detail": "nothing unread"
+          }
+        ],
+        "dead": [
+          {
+            "address": "reviewer@s-dead",
+            "role": "reviewer",
+            "standing": "Nudge",
+            "stranded": 2,
+            "freshestDispatchAgeMs": null,
+            "nextCheckMs": 4200000,
+            "detail": "dead-mailbox reviewer@s-dead · 2 stranded past quiet (1h+) · no dispatch ever seen · budget envelope 1/1 · role 1/4 this hour"
+          }
+        ],
+        "state": {
+          "envelopes": [
+            {
+              "role": "reviewer@s-dead",
+              "id": "m-01",
+              "firstSeenMs": 0,
+              "quietSinceMs": 0,
+              "nudged": 0
+            },
+            {
+              "role": "reviewer@s-dead",
+              "id": "m-02",
+              "firstSeenMs": 0,
+              "quietSinceMs": 0,
+              "nudged": 0
+            }
+          ],
+          "nudges": []
+        }
+      }
+    },
+    {
+      "name": "dead-mailbox-registered-box-is-standing",
+      "doc": "A `--as robot` mailbox holding an unread unicast: registered standing an operator asked for, so it is never a corpse — even though a named cursor can never look live. The ROLE rule still has it, which is the whole point: this box is served, not stranded.",
+      "nowMs": 3600000,
+      "verdict": {
+        "nudges": [
+          {
+            "role": "reviewer",
+            "envelopeIds": [
+              "u-01"
+            ],
+            "reason": "1 unread past quiet (1h+) · no live session · budget envelope 1/1 · role 1/4 this hour",
+            "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id u-01 · topic: build · new\n   opaque prose",
+            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
+            "workspace": null,
+            "address": null,
+            "subject": "reviewer"
+          }
+        ],
+        "nextCheckMs": 4200000,
+        "roles": [
+          {
+            "role": "reviewer",
+            "kind": "RobotServable",
+            "standing": "Nudge",
+            "unread": 1,
+            "due": 1,
+            "freshestDispatchAgeMs": null,
+            "nextCheckMs": 4200000,
+            "detail": "1 unread past quiet (1h+) · no live session · budget envelope 1/1 · role 1/4 this hour"
+          },
+          {
+            "role": "reaper",
+            "kind": "RobotServable",
+            "standing": "NoMail",
+            "unread": 0,
+            "due": 0,
+            "freshestDispatchAgeMs": null,
+            "nextCheckMs": null,
+            "detail": "nothing unread"
+          }
+        ],
+        "dead": [],
+        "state": {
+          "envelopes": [
+            {
+              "role": "reviewer",
+              "id": "u-01",
+              "firstSeenMs": 0,
+              "quietSinceMs": 0,
+              "nudged": 0
+            }
+          ],
+          "nudges": []
+        }
+      }
+    },
+    {
       "name": "two-roles-two-rules",
       "doc": "Rules for two roles with different thresholds; the verdict holds one deadline, the minimum, and reports each role.",
       "nowMs": 300000,
@@ -278,7 +422,9 @@
             "reason": "2 unread past quiet (5m+) · no live session · budget envelope 1/2 · role 1/4 this hour",
             "digest": "[captAInHook mail] 2 message(s) for 'ops':\n\n1. from intent-watcher (claude-code) · status/urgent · id m-02 · topic: build · new\n   opaque prose\n\n2. from intent-watcher (claude-code) · status/ambient · id m-03 · topic: build · new\n   opaque prose",
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
-            "workspace": null
+            "workspace": null,
+            "address": null,
+            "subject": "ops"
           }
         ],
         "nextCheckMs": 480000,
@@ -304,6 +450,7 @@
             "detail": "2 unread past quiet (5m+) · no live session · budget envelope 1/2 · role 1/4 this hour"
           }
         ],
+        "dead": [],
         "state": {
           "envelopes": [
             {

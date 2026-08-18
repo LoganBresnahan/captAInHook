@@ -94,7 +94,7 @@ public static class MailWatch
             : $"presence: only what the CLI can claim — the calling session {session} is live now; no other window is visible from here");
 
         var cursors = new MailCursors(new MailStore(MailStore.ResolveDir(mailDir)));
-        var roles = rules.Select(r => r.Role).Distinct(StringComparer.Ordinal).ToList();
+        var roles = RolesToWatch(cursors, rules);
         var mailboxes = ReadMailboxes(cursors, roles);
 
         // `--as-if-quiet`: pretend every envelope has been unread since long
@@ -116,10 +116,15 @@ public static class MailWatch
             var live = r.FreshestDispatchAgeMs is { } age ? $"freshest dispatch {WatcherBrain.Dur(age)} ago" : "no dispatch seen";
             stdout.WriteLine($"{r.Role}: {Wire(r.Kind)} · {r.Unread} unread · {live} · {Wire(r.Standing)} — {r.Detail}");
         }
+        foreach (var d in verdict.Dead)
+        {
+            var seen = d.FreshestDispatchAgeMs is { } age ? $"freshest dispatch {WatcherBrain.Dur(age)} ago" : "no dispatch seen";
+            stdout.WriteLine($"{d.Address}: dead-mailbox candidate · {d.Stranded} stranded · {seen} · {Wire(d.Standing)} — {d.Detail}");
+        }
         foreach (var n in verdict.Nudges)
         {
             stdout.WriteLine();
-            stdout.WriteLine($"WOULD NUDGE {n.Role}: {string.Join(", ", n.EnvelopeIds)}");
+            stdout.WriteLine($"WOULD NUDGE {n.Role}{(n.Address is { } about ? $" about {about}" : "")}: {string.Join(", ", n.EnvelopeIds)}");
             stdout.WriteLine($"  reason: {n.Reason}");
             foreach (var line in n.Digest.Split('\n')) stdout.WriteLine("  | " + line);
         }
@@ -138,6 +143,11 @@ public static class MailWatch
                 ["nudges"] = verdict.Nudges.Select(n => new Dictionary<string, object>
                 {
                     ["role"] = n.Role, ["envelopeIds"] = n.EnvelopeIds.ToList(), ["reason"] = n.Reason,
+                    ["address"] = n.Address ?? "",
+                }).ToList(),
+                ["dead"] = verdict.Dead.Select(d => new Dictionary<string, object>
+                {
+                    ["address"] = d.Address, ["standing"] = Wire(d.Standing), ["stranded"] = d.Stranded,
                 }).ToList(),
                 ["roles"] = verdict.Roles.Select(r => new Dictionary<string, object>
                 {
@@ -186,7 +196,7 @@ public static class MailWatch
             var mine = files.Where(f => f.Role == role).ToList();
             var keys = new HashSet<string?>(mine.Select(f => f.Session));
             if (mine.Count == 0)
-                boxes.Add(new WatchedMailbox(new MailAddress(role, null), cursors.Pending(role, null).Pending));
+                boxes.Add(new WatchedMailbox(new MailAddress(role, null), cursors.Pending(role, null).Pending, HasCursor: false));
             foreach (var (_, key) in mine)
             {
                 // The cursor key IS the instance (ADR-0018 d3): read the mailbox
@@ -199,10 +209,34 @@ public static class MailWatch
                 foreach (var instance in instances.Where(i => !keys.Contains(i)))
                 {
                     var address = new MailAddress(role, instance);
-                    boxes.Add(new WatchedMailbox(address, cursors.Pending(address, hookSession: null).Pending));
+                    boxes.Add(new WatchedMailbox(
+                        address, cursors.Pending(address, hookSession: null).Pending, HasCursor: false));
                 }
         }
         return boxes;
+    }
+
+    /// Which roles one evaluation reads. The rules' roles, always — they are the
+    /// only ones the role rule can decide anything about.
+    ///
+    /// Plus, when a `reaper` rule exists, EVERY role that has a cursor file: the
+    /// dead-mailbox rule (ADR-0018 d6) is about somebody else's mailbox, and the
+    /// role whose window died is typically human-held with no rule of its own —
+    /// gathering only rule roles would make the whole rule unreachable for
+    /// exactly the boxes the field report found. A cursor file is the bound:
+    /// standing is what a reap removes, so a role with none has no corpse.
+    public static IReadOnlyList<string> RolesToWatch(MailCursors cursors, IReadOnlyList<WatchRule> rules)
+    {
+        var roles = rules.Select(r => r.Role).Distinct(StringComparer.Ordinal).ToList();
+        if (!rules.Any(r => r.Role == WatcherBrain.ReaperRole)) return roles;
+
+        var seen = new HashSet<string>(roles, StringComparer.Ordinal);
+        // Ordinal, not the filesystem's order: two runs over one mail dir must
+        // hand the brain the same list.
+        foreach (var role in MailCursors.List(cursors.Store.Dir)
+                     .Select(f => f.Role).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+            if (seen.Add(role)) roles.Add(role);
+        return roles;
     }
 
     /// The `--as-if-quiet` memory: every unread envelope first seen, and quiet
@@ -216,8 +250,13 @@ public static class MailWatch
         var entries = new List<WatchedEnvelope>();
         foreach (var box in mailboxes)
             foreach (var mail in box.Pending)
-                if (seen.Add((box.Address.Role, mail.Envelope.Id)))
-                    entries.Add(new WatchedEnvelope(box.Address.Role, mail.Envelope.Id, longAgo, longAgo, 0));
+                // Both keys the brain tracks under: the ROLE (the role rule's)
+                // and the ADDRESS (the dead-mailbox rule's subject, ADR-0018 d6).
+                // Keying only the role would leave `--as-if-quiet` blind to the
+                // one rule an operator most wants to preview.
+                foreach (var subject in new[] { box.Address.Role, box.Address.ToString() }.Distinct(StringComparer.Ordinal))
+                    if (seen.Add((subject, mail.Envelope.Id)))
+                        entries.Add(new WatchedEnvelope(subject, mail.Envelope.Id, longAgo, longAgo, 0));
         return new NudgeState(entries, []);
     }
 

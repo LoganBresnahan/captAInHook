@@ -69,6 +69,15 @@ public sealed record RoleKinds(IReadOnlySet<string> HumanHeld, bool TurnPayloadI
 {
     private static readonly IReadOnlySet<string> NoRoles = new HashSet<string>(StringComparer.Ordinal);
 
+    /// Every NAMED mailbox an operator registered (`mail digest --as <name>`),
+    /// as `role@instance` strings. Not a kind and not presence — it is the third
+    /// structural fact `handlers.json` holds, and the dead-mailbox rule
+    /// (ADR-0018 d6) is what needs it: a registered durable mailbox is STANDING
+    /// an operator declared, so mail waiting in one is waiting, not stranded,
+    /// however long its window has been shut. Init-only rather than positional
+    /// so the two questions d3 keeps apart stay the record's shape.
+    public IReadOnlySet<string> RegisteredMailboxes { get; init; } = NoRoles;
+
     /// Nothing registered: every role is `Unserved`. This is also what a
     /// MALFORMED `handlers.json` yields, and deliberately so — a malformed file
     /// registers NOTHING (ADR-0010 d4), so there is no turn payload to run and
@@ -95,10 +104,15 @@ public sealed record RoleKinds(IReadOnlySet<string> HumanHeld, bool TurnPayloadI
         if (handlers is not ExecHandlersResolution.Loaded loaded) return None;
 
         var human = new HashSet<string>(StringComparer.Ordinal);
+        var named = new HashSet<string>(StringComparer.Ordinal);
         var robot = false;
         foreach (var entry in loaded.Entries)
         {
-            if (MailDigest.MailboxOf(entry) is { } box) human.Add(box.Role);
+            if (MailDigest.MailboxOf(entry) is { } box)
+            {
+                human.Add(box.Role);
+                if (box.Instance is not null) named.Add(box.ToString());
+            }
 
             // Canonicalized, because a registration writes the event kebab
             // (`"mail-nudge"`) and the host spells it Pascal — the same
@@ -107,7 +121,7 @@ public sealed record RoleKinds(IReadOnlySet<string> HumanHeld, bool TurnPayloadI
             // and would find it silently.
             if (entry.Events.Any(ev => Harness.Canon(ev) == MailNudgeEvent.EventType)) robot = true;
         }
-        return new RoleKinds(human, robot);
+        return new RoleKinds(human, robot) { RegisteredMailboxes = named };
     }
 
     /// The kind of one role. Asked per role rather than enumerated, because the
@@ -126,6 +140,12 @@ public sealed record RoleKinds(IReadOnlySet<string> HumanHeld, bool TurnPayloadI
     /// brain asks before it considers a rule — d3's consequence, spelled once so
     /// no caller re-derives it from the enum and gets `Mixed` wrong.
     public bool RobotChannelExists(string role) => Of(role) is RoleKind.RobotServable or RoleKind.Mixed;
+
+    /// Is this mailbox one an operator declared? Only a named one can be — an
+    /// unnamed cursor is keyed by a session id (ADR-0018 d3) and was created by
+    /// a delivery, not by a registration.
+    public bool IsRegisteredMailbox(MailAddress address) =>
+        address.Instance is not null && RegisteredMailboxes.Contains(address.ToString());
 }
 
 /// The momentary half: is anybody home for a role.

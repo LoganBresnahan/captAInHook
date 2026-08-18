@@ -48,8 +48,21 @@ public sealed record MailNudge(
     string Reason,
     string Digest,
     string ReplyHow,
-    string? Workspace = null)
+    string? Workspace = null,
+    string? Address = null)
 {
+    /// What the nudge is ABOUT, when that is not simply the role it is sent to.
+    /// Set only by the dead-mailbox rule (ADR-0018 d6): the nudge goes to the
+    /// `reaper` role, but its subject is somebody else's stranded mailbox, and
+    /// a reaper that was handed only "reaper" would not know which box to tend.
+    ///
+    /// **It is also the key the brain tracks the named envelopes under**
+    /// (`Subject`), which is what keeps two dead mailboxes of the SAME role from
+    /// sharing one quiet clock and one `perEnvelope` budget for a broadcast they
+    /// both hold. The role is still what a `perRoleHour` window counts, because
+    /// that budget is the reaper's bill.
+    public string Subject => Address ?? Role;
+
     /// The payload a turn payload reads off its exec-wire stdin. Snake_case
     /// `hook_event_name` because the `internal` spec reads the SAME request
     /// fields every harness spec does — the ingest path is not special-cased
@@ -66,6 +79,7 @@ public sealed record MailNudge(
             w.WriteString("digest", Digest);
             w.WriteString("replyHow", ReplyHow);
             if (Workspace is not null) w.WriteString("workspace", Workspace);
+            if (Address is not null) w.WriteString("address", Address);
             w.WriteStartArray("envelopeIds");
             foreach (var id in EnvelopeIds) w.WriteStringValue(id);
             w.WriteEndArray();
@@ -172,6 +186,7 @@ public static class MailNudgeEvent
             ["envelopeIds"] = nudge.EnvelopeIds.ToList(),
         };
         if (nudge.Workspace is not null) data["workspace"] = nudge.Workspace;
+        if (nudge.Address is not null) data["address"] = nudge.Address;
         foreach (var (k, v) in extra) data[k] = v;
 
         return new LogFields { DispatchId = dispatchId, HookEvent = EventType, Data = data };

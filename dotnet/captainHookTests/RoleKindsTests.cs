@@ -237,4 +237,31 @@ public class RoleKindsTests
         Assert.Equal(new MailAddress("main", "laptop-a"), MailDigest.MailboxOf(Digest("main", "laptop-a")));
         Assert.Null(MailDigest.MailboxOf(Entry("memory", [], "Stop")));
     }
+
+    // ---- registered mailboxes (ADR-0018 d6's precondition) ---------------------
+
+    /// The third structural fact `handlers.json` holds: which NAMED mailboxes an
+    /// operator declared. The dead-mailbox rule needs it because a named cursor
+    /// can never look live (its key is a name, not a session), so without this
+    /// every durable box with mail in it would read as a corpse the moment its
+    /// window shut. Recognized through the real argument parser, like the rest.
+    [Fact]
+    public void RegisteredMailboxes_AreTheNamedDigestRegistrations_Only()
+    {
+        var kinds = Kinds(Digest("reviewer"), Digest("reviewer", "robot"), Digest("ops", "box"), TurnPayload());
+
+        Assert.Equal(["ops@box", "reviewer@robot"], kinds.RegisteredMailboxes.Order(StringComparer.Ordinal));
+        Assert.True(kinds.IsRegisteredMailbox(new MailAddress("reviewer", "robot")));
+        Assert.False(kinds.IsRegisteredMailbox(new MailAddress("reviewer", "s-1")));   // a session cursor
+        Assert.False(kinds.IsRegisteredMailbox(new MailAddress("reviewer", null)));    // the role itself
+    }
+
+    /// Nothing registered — a malformed or absent file — declares no standing
+    /// either, which is the same "describe what is there" rule the kinds follow.
+    [Fact]
+    public void NoRegistrations_MeansNoDeclaredMailboxes()
+    {
+        Assert.Empty(RoleKinds.None.RegisteredMailboxes);
+        Assert.False(RoleKinds.None.IsRegisteredMailbox(new MailAddress("reviewer", "robot")));
+    }
 }

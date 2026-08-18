@@ -678,9 +678,13 @@ through every gate the shipped system already has.
         │                   (in EVERY     (human-held ⇒     (first admitting rule      (age ≤ 10m ⇒      (perEnvelope, then
         │                    accepting     never)             governs)                   held)             perRoleHour sliding)
         │                    mailbox)
+        │
+        │   per INSTANCE mailbox (0018 d6):  cursor file? ─▶ not registered? ─▶ holds mail? ─▶ its OWN session quiet? ─▶ reaper rule + budgets?
+        │                                    (nothing to     (a `--as` box is    (else no        (unconditional —       (the reaper's bill,
+        │                                     reap ⇒ skip)    standing)           corpse)         `dead` IS silence)     one window per role)
         ▼
-   WatchVerdict{ nudges[], state, NextCheckMs (ONE deadline — arm exactly this), roles[] }
-        │  MailNudge{role, envelopeIds, reason, digest, replyHow, workspace}
+   WatchVerdict{ nudges[], state, NextCheckMs (ONE deadline — arm exactly this), roles[], dead[] }
+        │  MailNudge{role, envelopeIds, reason, digest, replyHow, workspace, address?}
         ▼
    MailNudgeEvent.DispatchAsync
         ├─ Harness.ParseEvent(internal spec)   workspace → cwd, NO session
@@ -848,6 +852,69 @@ daemon runs, so a `quietFor` longer than the idle window is reachable only while
 other activity keeps the daemon up (N2 sharpened); `perRoleHour` is one window
 per role, shared by every rule that names it, strictest bound wins.
 
+### The second rule: a dead mailbox is the reaper's job (ADR-0018 d6)
+
+The rule above is about a *role* falling behind, and it looks away — on purpose
+— from exactly the case the 2026-08-17 field report found four of: a window that
+died holding mail. Its held-forever pending is not "unread for the role" (a live
+sibling may have read the same broadcast long ago), and a nudge to that role
+would help nobody, because its reader is gone. So the brain runs a **second pass
+with a different unit and a different recipient**: the unit is one MAILBOX, the
+recipient is the `reaper` role, and the nudge carries the box in
+`MailNudge.Address` — a reaper handed only "reaper" would not know which corpse
+to tend.
+
+A mailbox is a candidate when all four of d6's conditions hold:
+
+- **it is an instance mailbox with a cursor file.** `mail reap` removes a
+  cursor, so a box with none has no standing to remove: the gatherer's
+  sessionless read and its ledger-addressed stand-ins are never candidates,
+  however much is addressed to them.
+- **nothing REGISTERED it.** A `--as` mailbox is standing an operator asked for,
+  so mail waiting in it is waiting rather than stranded. This is load-bearing
+  rather than a nicety: a named cursor's key is a name, not a session, so it can
+  never look live — without this rule every durable box would become a corpse
+  the moment its window shut for the night. The fact comes from the real
+  registrations (`RoleKinds.RegisteredMailboxes`, through `MailDigest.MailboxOf`
+  like everything else that reads them), never from a second declaration.
+- **it holds pending mail.**
+- **no session of ITS OWN address is live.** That check is unconditional, not
+  `noLiveSession`'s: the mailbox's silence is what *dead* means, so a rule with
+  `noLiveSession: false` cannot buy a nudge for a box whose window is right
+  there. A live *sibling* window of the same role says nothing about it.
+
+Everything else is the ordinary machinery, deliberately — the same triage, the
+same thresholds, the same digest renderer, the same state, the same one
+deadline. Three things are worth saying out loud:
+
+- **Consent is the REAPER's rule**, because the reaper's tokens are what a nudge
+  spends. The dead box's own role usually has no rule at all (it is typically
+  human-held), and a rule for it would be consent from the wrong party. No
+  `reaper` rule ⇒ this pass does not exist, the same direction `watch.json`
+  takes everywhere. The reaper also has to *be* robot-servable: a human-held
+  reaper is reported and never nudged, since a dead-mailbox nudge puts no mail
+  in the reaper's own box for a window to find.
+- **Envelopes are tracked under the ADDRESS** (`MailNudge.Subject` — the address
+  when there is one, else the role). Two dead boxes holding one broadcast are
+  two corpses: separate quiet clocks, separate `perEnvelope` budgets, separate
+  nudges. `perRoleHour` stays one window on the reaper, because a bill is a
+  role's and not a mailbox's — and it counts nudges decided in the SAME
+  evaluation, which are not in the state yet, or one pass could hand the reaper
+  every dead box at once whatever the budget said.
+- **A live reaper window does not hold a dead-mailbox nudge.** There is nothing
+  in the reaper's own mailbox for it to see, so holding would mean nobody ever
+  tends the box.
+
+The brain's whole output here is one nudge naming the box: **detection is
+deterministic and the watcher's; disposition is judgement and belongs to a
+member** (forward / drop / hold, then `mail reap`), which is why d6 rejected
+automatic reaping and why `ReaperHow` — the `replyHow` a reaper is handed —
+spells the three dispositions instead of "answer on the bus". `mail watch
+--once` prints a `dead-mailbox candidate` line per box and `WOULD NUDGE reaper
+about <address>`; on the CLI a `reaper` rule is also what widens the sweep from
+the rules' roles to every role with a cursor file, since the box the reaper
+cares about belongs to somebody else.
+
 Not here yet: the state file and the `mail.nudge` row (`nudge-state-and-trail`),
 the turn payloads (`turn-claude-payload`), and the in-daemon actor that feeds
 the brain and arms its deadline (`watcher-actor`). This section grows into
@@ -889,8 +956,9 @@ prose, not ground truth.
 | `Stop`/`SubagentStop` declaring `decide` + the top-level block shape | `dotnet/captainHook/harnesses/claude-code.json`; `DecidesAtTopLevel`/`TopLevelDecision` in `dotnet/captainHook/Core/Harness.cs` — see [hook-dispatch.md](hook-dispatch.md) and platform.md § The Stop block shape |
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |
 | the ROBOT channel's rules (ADR-0017 d7, slice `watch-rules`) — `watch.json`: `dispatch.json`'s strict idiom with the default reversed, so absent AND malformed both mean zero nudges (no `default` field, no fail-open direction); `when` must name a threshold, `budget` is required with both counters ≥ 1, durations carry a unit from a closed set and yield milliseconds, priorities fold case (a closed set) while roles do not (an open universe), and a `role@instance` rule is refused for now — the reversible direction | `WatchRules`/`WatchRule`/`WatchWhen`/`WatchBudget`/`WatchPriority` + `WatchResolution` (`Resolve`, `Effective`) in `dotnet/captainHook/Core/WatchRules.cs`; path from `CAPTAINHOOK_WATCH_FILE` else `~/.captainHook/watch.json`. Pinned by `dotnet/captainHookTests/WatchRulesTests.cs` (68), including the absent-≡-malformed theory that is the whole consent posture |
-| ROLE KIND and presence (ADR-0017 d3 as amended, slice `role-kind-inference`) — who COULD serve a role (structural, from registrations) and whether anybody is home (momentary), kept apart because the brain takes them as separate inputs. Four kinds including `Unserved`; the robot half is installation-wide because fan-out is by event; presence returns an AGE so the threshold stays with the brain | `RoleKind`/`RoleKinds`/`RolePresence` in `dotnet/captainHook/Core/RoleKinds.cs` (pure — no I/O, no clock); the digest lookup is `MailDigest.MailboxOf` (`Mail/MailDigest.cs`), LIFTED from `MailStatus` when the second caller appeared so the two cannot fork. Pinned by `dotnet/captainHookTests/RoleKindsTests.cs` (18) |
-| the WATCHER'S BRAIN (ADR-0017 d4, slice `watcher-brain`) — pure `(mailboxes, presence, kinds, rules, state, NowMs) → {nudges, state, ONE NextCheckMs, per-role standing}`; unread = pending in every accepting mailbox; quiet from first sighting, restarted by `Record`; live = freshest dispatch ≤ 10 min; first admitting rule governs; strictest `perRoleHour`; state crosses a restart as ages, the gap uncounted; `Record` is the caller's so a denied nudge spends nothing | `WatcherBrain` (`Evaluate`, `LiveWithinMs`, `RoleWindowMs`, `ReplyHow`, `Dur`), `WatchInput`, `WatchVerdict`, `WatchRoleVerdict`, `WatchStanding`, `WatchedMailbox`, `NudgeState` (`Record`, `ToAges`, `FromAges`), `WatchedEnvelope`, `RoleNudge`, `NudgeStateAges` in `dotnet/captainHook/Core/WatcherBrain.cs`; the digest text is `MailDigest.Render` over a sessionless view. The CLI: `MailWatch` (`Run`, `ReadMailboxes`, `Usage`, `AsIfQuietMs`) in `dotnet/captainHook/Mail/MailWatch.cs`, routed as `mail watch` from `Program.cs`. Trail: `watch.verdict` (src `watch`, the calling session if any). Pinned by `dotnet/captainHookTests/WatcherBrainTests.cs` (57), `WatcherBrainGoldenTests.cs` (2, over `dotnet/captainHookTests/watcher-brain.golden.json` — real store + real digest-moved cursors; `CAPTAINHOOK_SCHEMA_UPDATE=1` regenerates) and `MailWatchTests.cs` (15) |
+| ROLE KIND and presence (ADR-0017 d3 as amended, slice `role-kind-inference`) — who COULD serve a role (structural, from registrations) and whether anybody is home (momentary), kept apart because the brain takes them as separate inputs. Four kinds including `Unserved`; the robot half is installation-wide because fan-out is by event; presence returns an AGE so the threshold stays with the brain | `RoleKind`/`RoleKinds`/`RolePresence` in `dotnet/captainHook/Core/RoleKinds.cs` (pure — no I/O, no clock); the digest lookup is `MailDigest.MailboxOf` (`Mail/MailDigest.cs`), LIFTED from `MailStatus` when the second caller appeared so the two cannot fork. Pinned by `dotnet/captainHookTests/RoleKindsTests.cs` (20 — the two added by the dead-mailbox rule are `RegisteredMailboxes`) |
+| the DEAD-MAILBOX rule (ADR-0018 d6 detection half, slice `watcher-dead-mailbox-rule`) — the brain's second pass: per INSTANCE mailbox with a cursor, not registered, holding mail, its own session not live, past a `reaper` rule's quiet ⇒ one `MailNudge` to `reaper` naming the box. Consent is the reaper's rule (its tokens); envelopes tracked under the ADDRESS so two dead boxes are two corpses, while `perRoleHour` stays one window on the reaper and counts same-pass nudges; the mailbox's own silence is checked unconditionally, never through `noLiveSession`; a registered `--as` box is standing, never a corpse | `WatcherBrain.DeadMailboxes` + `WatchDeadMailbox`, `WatcherBrain.ReaperRole`/`ReaperHow`, `WatchVerdict.Dead`, `MailNudge.Address`/`Subject`, `WatchedMailbox.HasCursor`, `RoleKinds.RegisteredMailboxes`/`IsRegisteredMailbox`; the CLI sweep is `MailWatch.RolesToWatch` (a `reaper` rule widens it to every role with a cursor file) and the report's `dead-mailbox candidate` lines. Pinned by `dotnet/captainHookTests/WatcherDeadMailboxTests.cs` (19), two `WatcherBrainGoldenTests` scenarios (`dead-mailbox-nudges-the-reaper`, `dead-mailbox-registered-box-is-standing`), four `MailWatchTests` cases, two `RoleKindsTests` cases and two `MailNudgeEventTests` cases (the `address` field present and absent, on the payload and the trail) |
+| the WATCHER'S BRAIN (ADR-0017 d4, slice `watcher-brain`) — pure `(mailboxes, presence, kinds, rules, state, NowMs) → {nudges, state, ONE NextCheckMs, per-role standing}`; unread = pending in every accepting mailbox; quiet from first sighting, restarted by `Record`; live = freshest dispatch ≤ 10 min; first admitting rule governs; strictest `perRoleHour`; state crosses a restart as ages, the gap uncounted; `Record` is the caller's so a denied nudge spends nothing | `WatcherBrain` (`Evaluate`, `LiveWithinMs`, `RoleWindowMs`, `ReplyHow`, `Dur`), `WatchInput`, `WatchVerdict`, `WatchRoleVerdict`, `WatchStanding`, `WatchedMailbox`, `NudgeState` (`Record`, `ToAges`, `FromAges`), `WatchedEnvelope`, `RoleNudge`, `NudgeStateAges` in `dotnet/captainHook/Core/WatcherBrain.cs`; the digest text is `MailDigest.Render` over a sessionless view. The CLI: `MailWatch` (`Run`, `ReadMailboxes`, `Usage`, `AsIfQuietMs`) in `dotnet/captainHook/Mail/MailWatch.cs`, routed as `mail watch` from `Program.cs`. Trail: `watch.verdict` (src `watch`, the calling session if any). Pinned by `dotnet/captainHookTests/WatcherBrainTests.cs` (57), `WatcherBrainGoldenTests.cs` (2, over `dotnet/captainHookTests/watcher-brain.golden.json` — real store + real digest-moved cursors; `CAPTAINHOOK_SCHEMA_UPDATE=1` regenerates) and `MailWatchTests.cs` (19) |
 | the ROBOT NUDGE as an ordinary event (ADR-0017 d5, slice `mail-nudge-event`) — `MailNudge` through the same dispatcher the shim uses: `handlers.json` registers `"events": ["mail-nudge"]`, `dispatch.json` is the consent, `workspace` is the cwd so `project` rules scope it; no stdout, no effects, no presence, and a denial that is logged rather than answered | `MailNudge`/`MailNudgeEvent`/`MailNudgeOutcome` in `dotnet/captainHook/Core/MailNudgeEvent.cs`; the embedded spec `dotnet/captainHook/harnesses/internal.json`; `NoWireAdapter` + `HarnessSpec.AnswersHooks` (`Core/Harness.cs`) and the refusal at both wire sites (`Core/HookRun.cs`, `Core/DaemonHost.cs`); `HookRun.DecidePolicy`/`PolicyRuling` (`Core/HookRun.cs`). Trail: `nudge.dispatch`, `nudge.denied` (src `nudge`, no `sessionId`) — `mail.nudge` proper is `nudge-state-and-trail`'s. Pinned by `dotnet/captainHookTests/MailNudgeEventTests.cs` (11) |
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished`, `mail.reap` (ADR-0018 d6: `role` + `instance` + `pendingIds` + `by`, and the one cursor-family event with NO `sessionId` — a reap has no window) — every other cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |

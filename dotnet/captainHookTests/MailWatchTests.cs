@@ -277,6 +277,16 @@ public class MailWatchTests
         failMode = "open",
     };
 
+    private static object DigestAs(string name, string role, string instance) => new
+    {
+        name,
+        command = "/usr/bin/captainHook",
+        args = new[] { "mail", "digest", "--role", role, "--as", instance, "--seam", "ambient" },
+        events = new[] { "user-prompt-submit" },
+        mode = "oneshot",
+        failMode = "open",
+    };
+
     private static object TurnPayload(string name) => new
     {
         name,
@@ -286,6 +296,91 @@ public class MailWatchTests
         mode = "oneshot",
         failMode = "open",
     };
+
+    // ---- the dead-mailbox rule (ADR-0018 d6) -------------------------------------
+
+    /// The CLI's half of the second rule, and the one claim that is the VERB's
+    /// rather than the brain's: a `reaper` rule widens the sweep to every role
+    /// with a cursor file. The dead box here belongs to `reviewer`, which has no
+    /// rule of its own — gathering only rule roles would make the whole rule
+    /// unreachable for exactly the boxes the field report found.
+    [Fact]
+    public void DeadMailbox_OfARoleWithNoRule_IsFound_AndWouldNudgeTheReaper()
+    {
+        using var w = new WatchWorld();
+        using var log = new CapturedLog();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("reaper", quietFor: "0s"));
+        w.Send("m-00", "reviewer");
+        w.Digest("reviewer", "s-1");                       // the window that dies, cursor and all
+        w.Send("m-01", "reviewer", MailPriority.Urgent);   // …holding this
+
+        var (exit, lines, _) = w.Run(stdin: "");
+        Assert.Equal(0, exit);
+        Assert.Contains(lines, l => l.StartsWith("reviewer@s-1: dead-mailbox candidate · 1 stranded · no dispatch seen · nudge —"));
+        Assert.Contains(lines, l => l.StartsWith("WOULD NUDGE reaper about reviewer@s-1: m-01"));
+        Assert.Contains(lines, l => l.Contains("reason: dead-mailbox reviewer@s-1 · 1 stranded past quiet"));
+
+        var verdict = Assert.Single(log.Events, e => e.Evt == "watch.verdict");
+        Assert.Contains("reviewer@s-1", verdict.ToJson());
+    }
+
+    /// …and without a reaper rule the sweep does not widen: the operator wrote
+    /// no consent for the reaper, so its lane does not exist and neither does
+    /// the reading of somebody else's mailbox.
+    [Fact]
+    public void WithoutAReaperRule_NoOtherRolesMailboxIsEvenRead()
+    {
+        using var w = new WatchWorld();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("ops", quietFor: "0s"));
+        w.Send("m-00", "reviewer");
+        w.Digest("reviewer", "s-1");
+        w.Send("m-01", "reviewer", MailPriority.Urgent);
+
+        var (_, lines, _) = w.Run(stdin: "");
+        Assert.DoesNotContain(lines, l => l.Contains("dead-mailbox"));
+        Assert.DoesNotContain(lines, l => l.StartsWith("reviewer"));
+        Assert.DoesNotContain(lines, l => l.StartsWith("WOULD NUDGE"));
+    }
+
+    /// A registered `--as` mailbox is standing an operator asked for. Named
+    /// through the REAL registration file, because that is where the fact lives
+    /// and a lookalike would drift from it.
+    [Fact]
+    public void RegisteredDurableMailbox_IsNeverACorpse()
+    {
+        using var w = new WatchWorld();
+        w.Register(TurnPayload("turn-claude"), DigestAs("robot-box", "reviewer", "robot"));
+        w.Rules(Rule("reaper", quietFor: "0s"));
+        w.Digest("reviewer", "s-2", instance: "robot");    // the durable box comes into being
+        w.Send("u-01", "reviewer@robot", MailPriority.Urgent);
+
+        var (_, lines, _) = w.Run(stdin: "");
+        Assert.DoesNotContain(lines, l => l.Contains("dead-mailbox"));
+        Assert.DoesNotContain(lines, l => l.StartsWith("WOULD NUDGE"));
+    }
+
+    /// `--as-if-quiet` reaches the dead lane too — it is the rule an operator
+    /// most wants to preview, and its memory is keyed by the ADDRESS rather than
+    /// the role, so the pretence has to be written under both.
+    [Fact]
+    public void AsIfQuiet_SeesPastTheDeadMailboxThreshold()
+    {
+        using var w = new WatchWorld();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("reaper", quietFor: "10min"));
+        w.Send("m-00", "reviewer");
+        w.Digest("reviewer", "s-1");
+        w.Send("m-01", "reviewer", MailPriority.Urgent);
+
+        var (_, plain, _) = w.Run(stdin: "");
+        Assert.Contains(plain, l => l.StartsWith("reviewer@s-1: dead-mailbox candidate") && l.EndsWith("none past its quiet threshold"));
+        Assert.DoesNotContain(plain, l => l.StartsWith("WOULD NUDGE"));
+
+        var (_, past, _) = w.Run(argv: ["--once", "--as-if-quiet"], stdin: "");
+        Assert.Contains(past, l => l.StartsWith("WOULD NUDGE reaper about reviewer@s-1: m-01"));
+    }
 
     private sealed class WatchWorld : IDisposable
     {

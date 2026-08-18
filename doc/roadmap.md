@@ -1751,6 +1751,60 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `watcher-dead-mailbox-rule` (2026-08-18; phase 3 — the OTHER
+  half of d6, and the half that decides nothing: detection. The ADR-0017 brain
+  grows a second pass, and it exists because the first one deliberately looks
+  away from this case — an envelope is "unread for a role" only when it is
+  pending in EVERY mailbox that accepts it, so mail a live sibling window read
+  long ago is not unread, and a dead cursor's held-forever mail is explicitly not
+  a reason to spend the role's tokens. Which leaves the four dead cursors the
+  2026-08-17 field report found holding mail forever with nothing in the system
+  looking at them. So: a different unit (one MAILBOX, not a role's mail) and a
+  different recipient (the `reaper`, whose job is disposition), with the box
+  named in `MailNudge.Address` and `ReaperHow` — forward / drop / hold, then
+  `mail reap` — where an ordinary nudge carries "answer on the bus".
+  **Four conditions, and the second one is load-bearing rather than a nicety.**
+  An INSTANCE mailbox with a cursor FILE (`mail reap` removes a cursor; a box
+  with none has no standing to remove, so the gatherer's sessionless read and
+  its ledger-addressed stand-ins are never candidates); NOT one an operator
+  registered (`--as`) — because since d3 a named cursor's key is a NAME, it can
+  never look live, and without this rule every durable mailbox would become a
+  corpse the moment its window shut for the night; holding mail; and no live
+  session for ITS OWN address, checked UNCONDITIONALLY rather than through the
+  rule's `noLiveSession`, since the mailbox's silence is what dead MEANS and a
+  live sibling of the same role says nothing about it. The registration fact
+  comes from `MailDigest.MailboxOf` like everything else that reads
+  registrations — never a second declaration.
+  **Three decisions the slice had to make.** Consent is the REAPER's rule, not
+  the dead role's: the nudge spends the reaper's tokens, and the dead box's role
+  is typically human-held with no rule at all, so a rule there would be consent
+  from the wrong party; no `reaper` rule ⇒ the pass does not exist (d7's
+  direction, unchanged), and a human-held reaper is reported and never nudged
+  because a dead-mailbox nudge puts no mail in the reaper's own box for a window
+  to find. Envelopes are tracked under the ADDRESS (`MailNudge.Subject`, which
+  `NudgeState.Record` follows) so two dead boxes holding one broadcast are two
+  corpses with their own quiet clocks and `perEnvelope` budgets — a role key
+  would have merged them — while `perRoleHour` stays ONE window on the reaper
+  and counts nudges decided in the SAME evaluation, which are not in the state
+  yet (`Record` is the caller's) and would otherwise let one pass hand over every
+  dead box at once whatever the budget said. And a live reaper window does not
+  hold a nudge: nothing is in the reaper's own mailbox to see, so holding would
+  mean nobody ever tends the corpse.
+  Everything else is the ordinary machinery on purpose — the same triage (lifted
+  to one `TriageEntries` so the two rules cannot disagree about "due"), the same
+  digest renderer over the box's own view, the same budgets, the same ONE
+  `NextCheckMs`. The CLI half is `MailWatch.RolesToWatch`: a `reaper` rule is
+  what widens the sweep from the rules' roles to every role with a cursor file,
+  since the box the reaper cares about belongs to somebody else — without it the
+  whole rule would be unreachable for exactly the mailboxes it exists for.
+  Tests: `WatcherDeadMailboxTests` (19), two `WatcherBrainGoldenTests` scenarios
+  (`dead-mailbox-nudges-the-reaper`, `dead-mailbox-registered-box-is-standing`;
+  golden regenerated, the diff is the two new scenarios plus `dead: []` and the
+  nudge's `address`/`subject` on the existing ones), four `MailWatchTests`, two
+  `RoleKindsTests`, two `MailNudgeEventTests`; suite 1328 → 1355 green twice.
+  Docs: ADR-0018 d6 detection ground-truth row + the slice marked landed;
+  `doc/flow/mailbox-bus.md` § the robot channel gains § *The second rule* and a
+  ground-truth row, and its diagram grows the per-mailbox lane.)
   Slices landed: `reap-verb` (2026-08-18; phase 3, slice 7 — `captainHook mail
   reap <address> [--by <address>]`, the mechanism half of d6. The POWER is not
   new: ADR-0016 d13 already says a cursor file is deletable at any moment, and

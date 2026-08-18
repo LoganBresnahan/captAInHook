@@ -80,9 +80,16 @@ public class WatcherBrainGoldenTests
 
     /// Every unread envelope seen at `firstSeen`, so thresholds can be crossed
     /// by choosing `now`.
+    /// Under BOTH keys the brain tracks: the role (the role rule's) and the
+    /// address (the dead-mailbox rule's subject, ADR-0018 d6). An entry no pass
+    /// tracks is simply dropped from the verdict's state, so the scenarios that
+    /// have no reaper rule are unaffected by the second key.
     private static NudgeState SeenAt(IReadOnlyList<WatchedMailbox> boxes, long firstSeen, int nudged = 0) =>
-        new(boxes.SelectMany(b => b.Pending.Select(p => (b.Address.Role, p.Envelope.Id))).Distinct()
-                 .Select(x => new WatchedEnvelope(x.Role, x.Id, firstSeen, firstSeen, nudged)).ToList(), []);
+        new(boxes.SelectMany(b => b.Pending.SelectMany(p => new[]
+                 {
+                     (Subject: b.Address.Role, Id: p.Envelope.Id), (Subject: b.Address.ToString(), Id: p.Envelope.Id),
+                 })).Distinct()
+                 .Select(x => new WatchedEnvelope(x.Subject, x.Id, firstSeen, firstSeen, nudged)).ToList(), []);
 
     private static readonly Scenario[] Scenarios =
     [
@@ -158,6 +165,40 @@ public class WatcherBrainGoldenTests
                 return new WatchInput(boxes, [], RobotOnly, [Rule("reviewer")], state, 40 * Min);
             }),
 
+        new("dead-mailbox-nudges-the-reaper",
+            "A window read the role once and then died holding two urgent envelopes. The ROLE rule sees nothing " +
+            "(a live sibling window has read them, so they are not unread for the role); the dead-mailbox rule " +
+            "sees the corpse and nudges the reaper about the box.",
+            w =>
+            {
+                w.Append("m-00", "reviewer");
+                w.Digest("reviewer", "s-dead");                     // the window that will die
+                w.Digest("reviewer", "s-live");                     // its sibling, still here
+                w.Append("m-01", "reviewer", MailPriority.Urgent);
+                w.Append("m-02", "reviewer", MailPriority.Urgent);
+                w.Digest("reviewer", "s-live");                     // the sibling reads them; s-dead never does
+                var boxes = w.Mailboxes("reviewer");
+                return new WatchInput(boxes, [("s-live", 0)], RobotOnly,
+                    [Rule("reviewer"), Rule(WatcherBrain.ReaperRole)], SeenAt(boxes, 0), 60 * Min);
+            }),
+
+        new("dead-mailbox-registered-box-is-standing",
+            "A `--as robot` mailbox holding an unread unicast: registered standing an operator asked for, so it is " +
+            "never a corpse — even though a named cursor can never look live. The ROLE rule still has it, which is " +
+            "the whole point: this box is served, not stranded.",
+            w =>
+            {
+                w.Digest("reviewer", "s-2", instance: "robot");      // the durable box comes into being
+                w.Append("u-01", "reviewer@robot", MailPriority.Urgent);
+                var boxes = w.Mailboxes("reviewer");
+                var kinds = new RoleKinds(new HashSet<string>(), true)
+                {
+                    RegisteredMailboxes = new HashSet<string> { "reviewer@robot" },
+                };
+                return new WatchInput(boxes, [], kinds,
+                    [Rule("reviewer"), Rule(WatcherBrain.ReaperRole)], SeenAt(boxes, 0), 60 * Min);
+            }),
+
         new("two-roles-two-rules",
             "Rules for two roles with different thresholds; the verdict holds one deadline, the minimum, and reports each role.",
             w =>
@@ -190,6 +231,11 @@ public class WatcherBrainGoldenTests
                 {
                     r.Role, Kind = r.Kind.ToString(), Standing = r.Standing.ToString(),
                     r.Unread, r.Due, r.FreshestDispatchAgeMs, r.NextCheckMs, r.Detail,
+                }),
+                dead = v.Dead.Select(d => new
+                {
+                    d.Address, d.Role, Standing = d.Standing.ToString(),
+                    d.Stranded, d.FreshestDispatchAgeMs, d.NextCheckMs, d.Detail,
                 }),
                 state = v.State,
             }, Web)),
@@ -254,6 +300,20 @@ public class WatcherBrainGoldenTests
         var spent = by["budgets-spent"];
         Assert.Equal(WatchStanding.Exhausted, spent.Roles.Single().Standing);
         Assert.Equal(5 * Min + WatcherBrain.RoleWindowMs, spent.NextCheckMs);
+
+        var dead = by["dead-mailbox-nudges-the-reaper"];
+        Assert.Equal(0, dead.Roles.Single(r => r.Role == "reviewer").Unread);   // the sibling read them
+        var corpse = Assert.Single(dead.Dead);
+        Assert.Equal("reviewer@s-dead", corpse.Address);
+        Assert.Equal(WatchStanding.Nudge, corpse.Standing);
+        var reaped = Assert.Single(dead.Nudges);
+        Assert.Equal(WatcherBrain.ReaperRole, reaped.Role);
+        Assert.Equal("reviewer@s-dead", reaped.Address);
+        Assert.Equal(["m-01", "m-02"], reaped.EnvelopeIds);
+
+        var standing = by["dead-mailbox-registered-box-is-standing"];
+        Assert.Empty(standing.Dead);                                  // never a corpse
+        Assert.Equal("reviewer", Assert.Single(standing.Nudges).Role);  // the role rule has it, as it should
 
         var two = by["two-roles-two-rules"];
         Assert.Equal(["ops"], two.Nudges.Select(n => n.Role));
