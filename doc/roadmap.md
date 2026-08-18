@@ -1558,6 +1558,55 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  Slices landed: `reap-verb` (2026-08-18; phase 3, slice 7 — `captainHook mail
+  reap <address> [--by <address>]`, the mechanism half of d6. The POWER is not
+  new: ADR-0016 d13 already says a cursor file is deletable at any moment, and
+  `mail.cursorVanished` is the warn a digest emits when it trips over one that
+  went. What the verb adds is a RECORD and a LOCK. The record, because the
+  difference between a mailbox that vanished — leaving a fresh anchor to
+  redeliver everything with no explanation — and one that was disposed of is
+  entirely in whether anybody wrote down who did it and what it was still
+  holding; the re-anchor that follows a reap is at `deliveries: 0` and therefore
+  INDISTINGUISHABLE from real first contact, so `mail.reap` is the only thing
+  that can ever explain the duplicate. The lock, because the same per-cursor
+  flock `Advance` takes is what stops a delete from interleaving with an advance
+  that would write the cursor back a moment later — a reaped mailbox standing
+  again with nothing on the trail saying it ever went. It is NOT unlinked: a
+  flock lives on the inode, so unlinking while holding it hands the next caller
+  a lock that excludes nobody, and the party it would fail to exclude is a
+  running digest. The stray `.lock` is invisible (every listing matches
+  `cursor.*.json`); existence is checked BEFORE the lock too, so reaping a
+  mailbox that never existed leaves nothing behind at all. **The verb does not
+  judge** — it never asks whether the box is dead, because detection is the
+  watcher's and disposition the reaper's (forward / drop / hold, THEN reap), and
+  a deadness test here would be a second one to disagree with the watcher's (N8).
+  **Only standing is removed:** the store is read and never written, so the
+  mailbox's whole history stays on the chain and a returning instance is a fresh
+  first contact. Two calls the plan did not make. (i) The trail row spells the
+  mailbox `role` + `instance` (write-when-named) rather than the joined `address`
+  the ADR's prose named — `plan-unicast`'s own reasoning, applied again: two
+  spellings of "which mailbox" on one trail is N8 in a new hat, and a reader that
+  learned the advance's columns needs nothing new. No `sessionId`, because a reap
+  has no window; `by` is grammar-checked and ABSENT when a human ran the verb by
+  hand, which is the honest record of a human at a terminal rather than a gap to
+  fill. (ii) The row is written AFTER the delete: a crash in that window loses
+  the record of a real reap, which reads exactly like the bare deletion d13
+  already tolerates, where the other order would put a reap that never happened
+  on an append-only chain nothing can take back. Reaping an already-reaped
+  mailbox is exit 0 and logs nothing — a reaper that retried, or raced another
+  one, has the outcome it asked for — and the only exit 1s are a bad argument and
+  a busy lock. The delete is the COMMIT POINT and the reporting sits outside the
+  guarded block behind it: a confirmation line into a closed pipe must not become
+  "cannot reap" about a reap that happened. A bare role reaps the sessionless reader's own mailbox, which is
+  d3's amendment paying out: the key IS the address, so the disposal verb needs
+  no second notion of which mailbox it is pointed at. One gap kept and named: the
+  reducer does not fold `mail.reap` — it lands as the forward-compat
+  `unknown-event` note, which is what that note exists for, since the picture
+  cannot place a reap before it models instances at all (`canvas-instances`).
+  19 tests (`MailReapTests`) + the `mail.reap` golden in `WireJsonlTests`; suite
+  1137 → 1157 green twice, web 253 unchanged. Docs: flow doc § *Reaping a
+  mailbox* + three ground-truth rows; ADR-0018's d6 row records the mechanism
+  half, its authority still open for `reaper-payloads`.)
   Slices landed: `answer-by-address` (2026-08-17; phase 4, slice 6 — and the
   evening's one AMENDMENT, taken first because the slice got simpler on top of
   it. **d3 amended: the cursor key IS the address.** As first landed an

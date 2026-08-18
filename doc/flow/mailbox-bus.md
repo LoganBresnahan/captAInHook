@@ -588,6 +588,71 @@ and every call re-reads the whole store, which is unbounded until rotation lands
 (N4). Nothing is cached and nothing is logged — a trail line per render would
 drown the trail it exists to help you read.
 
+## Reaping a mailbox (ADR-0018 d6, the `reap-verb` half)
+
+A cursor file has always been deletable at any moment — d13 says so out loud,
+and `mail.cursorVanished` is the warn a digest emits when it trips over one that
+went. So `captainHook mail reap` adds no power. What it adds is a **record** and
+a **lock**:
+
+```
+   captainHook mail reap main@laptop-a --by reaper@daemon
+             │
+             ├─ parse ─────────── MailAddress.TryParse, the envelope parser's own gate
+             │                    (--by too: a reaper nobody can address is a name
+             │                     on the ledger nobody can ask about)
+             │
+             ├─ exists? ───── no ──▶ "nothing to reap"  exit 0, nothing created
+             │                       (checked BEFORE the lock: taking it would leave
+             │                        a lock file for a mailbox that never existed)
+             │  yes
+             ├─ flock cursor.main.laptop-a.json.lock ── busy ──▶ exit 1, standing intact
+             │      (the SAME lock Advance takes — a delete under a running
+             │       advance would let it write the cursor back a moment later)
+             │
+             ├─ read what is stranded ── MailCursors.Pending(address, hookSession: null)
+             ├─ delete the cursor file
+             └─ mail.reap {role, instance?, pendingIds, by?}     ← AFTER the delete
+                    the lock file is NOT unlinked (flock is on the inode)
+```
+
+**It does not judge.** Nothing in the verb asks whether the mailbox is really
+dead. Detection is the watcher's (ADR-0017) and disposition is the reaper's —
+forward, drop, or hold, *then* reap. A verb that second-guessed its caller would
+either refuse a legitimate drop or grow a second deadness test to disagree with
+the watcher's (N8).
+
+**Only standing is removed.** Every envelope the mailbox read, and every one it
+never did, stays on the append-only chain; the verb reads the store and never
+writes it. If the instance returns, its next pickup is a fresh first contact and
+the ledger shows why it sees duplicates — quietly, because at `deliveries: 0` a
+deletion is indistinguishable from first contact, which is exactly why the
+`mail.reap` line is the only thing that can explain the repeat.
+
+**Three small decisions worth naming.** The trail row spells the mailbox as
+`role` + `instance` (written when the address has one) rather than as the joined
+`address` the ADR's prose used — the same columns `mail.deliver` and
+`mail.cursorAdvance` already carry, because two spellings of "which mailbox" on
+one trail is the second implementation this subsystem keeps refusing to grow.
+The row is written **after** the delete, never before: a crash in that window
+loses the record of a real reap, which reads exactly like the bare deletion d13
+already tolerates, whereas the other order would put a reap that never happened
+on an append-only chain. And the lock file is deliberately left behind — a
+`flock` lives on the inode, so unlinking it while holding it lets the next caller
+create a fresh one and take a lock that excludes nobody. The stray file is
+invisible: every listing matches `cursor.*.json`, and a `.lock` is not one.
+
+Reaping a mailbox that is already gone is **exit 0**. A reaper that retried, or
+raced another one, has the outcome it asked for; the two things that exit 1 are a
+bad argument and a lock it could not take. A bare role names the sessionless
+reader's own mailbox (d3: the key *is* the address) and its row carries a role
+alone.
+
+Not here yet: the reducer does not fold `mail.reap` — it lands as the
+forward-compatibility `unknown-event` note, since the picture cannot place a
+reap before it models instances at all (`canvas-instances`). The `reaper` role's
+payloads and its authority are `reaper-payloads`', still open in ADR-0018 d6.
+
 ## Ground truth
 
 Test counts below are **cases as the runner reports them**, per FILE — not
@@ -619,11 +684,12 @@ prose, not ground truth.
 | `MailPendingView`, `PendingMail`, `MailCursorWrite` (Written/Failed) | `dotnet/captainHook/Mail/MailCursor.cs` |
 | `MailDigest` (`TryParseArgs`, `TryParseRequest`, `Plan`, `Render`, `Run`, `LogDelivery`), `MailSeam`, `MailVehicle`, `MailPlan`, `MailRender`, `MailDigestOptions` | `dotnet/captainHook/Mail/MailDigest.cs` |
 | `MailSend.Run` (the universal write path; stamps `ts`) | `dotnet/captainHook/Mail/MailSend.cs` |
+| REAPING a mailbox (ADR-0018 d6, slice `reap-verb`) — `captainHook mail reap <address> [--by <address>]`: removes ONE mailbox's cursor under the same per-cursor flock `Advance` takes, never unlinking the lock file, and writes `mail.reap`. Standing only: the store is read, never written, and the mailbox's history stays on the chain. Does not judge deadness (the watcher detects, the reaper disposes); idempotent (already gone ⇒ exit 0); exit 1 only for a bad argument or a busy lock. The row spells the mailbox `role` + `instance` (write-when-named), not a joined `address` — one spelling per trail (N8) — and is written AFTER the delete | `MailReap` (`Run`, `TryParseArgs`, `LogReap`) in `dotnet/captainHook/Mail/MailReap.cs`, routed from `Program.cs`'s `mail` switch; the lock is `MailStore.TryLock` (`Mail/MailStore.cs`), the stranded list is `MailCursors.Pending(address, hookSession: null)` (`Mail/MailCursor.cs`). Pinned by `dotnet/captainHookTests/MailReapTests.cs` (18 — the byte-identical ledger, first-contact redelivery, idempotence creating nothing, the surviving lock file, the refusal under a held lock with no false record, the two row shapes, expired-is-not-stranded, and the argument refusals) and the `mail.reap` golden in `WireJsonlTests`. The reducer does NOT fold it yet — `canvas-instances` |
 | verb routing (`Mode.MailSend`, `mail <subverb>` on the argv contract) | `dotnet/captainHook/Program.cs`; `captainHookWire/` argv contract; refused by the shim |
 | `Stop`/`SubagentStop` declaring `decide` + the top-level block shape | `dotnet/captainHook/harnesses/claude-code.json`; `DecidesAtTopLevel`/`TopLevelDecision` in `dotnet/captainHook/Core/Harness.cs` — see [hook-dispatch.md](hook-dispatch.md) and platform.md § The Stop block shape |
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
-| trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished` — every cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
+| trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished`, `mail.reap` (ADR-0018 d6: `role` + `instance` + `pendingIds` + `by`, and the one cursor-family event with NO `sessionId` — a reap has no window) — every other cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
 | the read ENDPOINT (d14, slice 1) — one read-only snapshot: chain status, the ledger from `since`, every cursor's pending view, inferred presence; `since` absent ⇒ 0, off-boundary ⇒ `sinceAligned: false` (never a spliced prefix), malformed ⇒ 400 | `ApiReadModel.Mail` + the `/api/v1/mail` route (`dotnet/captainHook/Api/ApiReadModel.cs`, `Api/ApiHost.cs`); DTOs in `Api/ApiDtos.cs`; the write half unreachable by construction via `MailReadPort` (`dotnet/captainHook/Mail/MailReadPort.cs`); presence from `SessionPresence` ∪ cursor files. `MailApiTests.cs` (31) — reflection walk, `Api/` source pin, non-GET route theory asserting nothing is written |
 | the CANVAS (d14, slice 4) — ledger spine, a lane per role, a track per session, marks with the cursor's own arithmetic; semantic zoom in px-per-slot (far < 40 ≤ mid < 132 ≤ near); pan/zoom on ONE axis, every vertical measure a CSS pixel | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`; `data-lane`, `data-glyph`, `data-track`, `data-mark`, `data-tier`, `data-arrival`, `data-motion`) over `web/src/mailCanvas.ts` (`buildScene`, `MailView`); every status is `lineStatus`/`projectCursor`, never the canvas's own. `web/src/mailCanvas.test.ts` (39) against all 16 goldens; `web/e2e/mail.spec.ts` |
 | the observation surface's reducer (d14, slice 3) | `web/src/mail.ts` — pure `(state, trailLine) → state` seeded from `MailDto`; golden corpus `web/src/mail.golden.json` GENERATED by `dotnet/captainHookTests/MailReducerGoldenTests.cs` (2), replayed + attacked by `web/src/mail.test.ts` / `mail.skeptic.test.ts` (`npm test`) |

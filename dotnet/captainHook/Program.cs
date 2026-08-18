@@ -70,11 +70,15 @@ switch (inv.Mode)
         // are its registration args, invisible to Invocation on purpose).
         // `status` (ADR-0017 d2) is the third shape: a human DISPLAY verb whose
         // stdout is a status bar's line, read-only and ruleless — it interrupts
-        // nothing, so it needs no consent surface of its own.
+        // nothing, so it needs no consent surface of its own. `reap`
+        // (ADR-0018 d6) is a WRITE verb over standing rather than mail: it
+        // removes one mailbox's cursor and says so on the trail, and it reads
+        // no stdin because a reap is performed on an address, not by a window.
         return inv.EventName switch
         {
             "digest" => CaptainHook.Mail.MailDigest.Run(args[2..], Console.In, Console.Out, Console.Error),
             "status" => CaptainHook.Mail.MailStatus.Run(args[2..], Console.In, Console.Out, Console.Error),
+            "reap" => CaptainHook.Mail.MailReap.Run(args[2..], Console.Out, Console.Error),
             _ => CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error),
         };
 

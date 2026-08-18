@@ -25,19 +25,22 @@ namespace CaptainHook.Mail;
 public static class MailSend
 {
     /// Run the verb. `subverb` is argv's word after `mail` (Invocation carries
-    /// it in EventName); only "send" exists today — `mail digest` is phase 4.
+    /// it in EventName); this file serves "send" and refuses everything else,
+    /// the other verbs having been routed away before it is called.
     /// `nowTs` overrides the stamp for tests; production passes null.
     public static int Run(
         string? subverb, TextReader stdin, TextWriter stdout, TextWriter stderr,
         string? mailDir = null, string? nowTs = null)
     {
-        // `digest` is routed to MailDigest by Program.cs before this runs;
-        // this usage line still names both so a bare `mail` teaches the verb.
+        // `digest`, `status` and `reap` are routed to their own files by
+        // Program.cs before this runs; the usage line still names every verb,
+        // because this is where a bare or misspelled `mail` lands and it is
+        // the only place the whole set is taught.
         if (subverb != "send")
         {
             stderr.WriteLine(subverb is null
-                ? "captainHook mail: a subverb is required — usage: captainHook mail <send|digest>  (send: one JSON envelope on stdin)"
-                : $"captainHook mail: unknown subverb '{subverb}' — usage: captainHook mail <send|digest>  (send: one JSON envelope on stdin)");
+                ? "captainHook mail: a subverb is required — usage: captainHook mail <send|digest|status|reap>  (send: one JSON envelope on stdin)"
+                : $"captainHook mail: unknown subverb '{subverb}' — usage: captainHook mail <send|digest|status|reap>  (send: one JSON envelope on stdin)");
             return 1;
         }
 

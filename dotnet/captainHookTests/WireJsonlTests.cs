@@ -170,6 +170,35 @@ public class WireJsonlTests
             wire);
     }
 
+    /// `mail.reap` (ADR-0018 d6, slice `reap-verb`) — the row that says a
+    /// mailbox's standing ended. It names the mailbox in the SAME two columns
+    /// `mail.cursorAdvance` and `mail.deliver` use (`role`, plus `instance`
+    /// when the address has one), never a joined `address`, so a reader that
+    /// learned the advance's spelling of "which mailbox" needs nothing new.
+    /// There is no `sessionId`: a reap is performed on an address, not by a
+    /// window — `by` names who decided, and both it and `instance` are absent
+    /// rather than blank when there is nothing to say.
+    [Fact]
+    public void MailReap_IdenticalBytes_NamesTheMailboxAndWhatItStranded()
+    {
+        var (fsharp, wire) = RenderBoth("info", "mail", "mail.reap",
+            msg: "mailbox reaped: its standing is gone, its mail stays on the ledger",
+            data: new Dictionary<string, object>
+            {
+                ["role"] = "main",
+                ["pendingIds"] = new List<string> { "m-02", "m-03" },
+                ["instance"] = "laptop-a",
+                ["by"] = "reaper@daemon",
+            });
+
+        Assert.Equal(fsharp, wire);
+        Assert.Equal(
+            """
+            {"ts":"2026-07-06T03:04:05.789Z","lvl":"info","src":"mail","evt":"mail.reap","msg":"mailbox reaped: its standing is gone, its mail stays on the ledger","data":{"role":"main","pendingIds":["m-02","m-03"],"instance":"laptop-a","by":"reaper@daemon"}}
+            """,
+            wire);
+    }
+
     [Fact]
     public void DataValueKinds_IdenticalBytes()
     {
