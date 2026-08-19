@@ -146,6 +146,16 @@ public class MailWatcherTests
             poll: TimeSpan.FromMilliseconds(20));
         watcher.Start();
 
+        // LET THE START TICK HAPPEN FIRST, against an empty store. The pump's
+        // `Start` trigger fires on whichever tick evaluates FIRST, so a machine
+        // that schedules that tick between `Send` and `Trail` below gets the
+        // nudge on `Start` and the row's own evaluation a tick later — two
+        // evaluations, both correct, and the frozen-count assertion at the
+        // bottom fails for a reason that has nothing to do with what it tests.
+        // (Observed ~20% of full-suite runs; never in this class alone.)
+        await PollUntilAsync(() => Task.FromResult(log.Events.Any(e => e.Evt == "watch.evaluate")),
+            TimeSpan.FromSeconds(10), "the start-tick evaluation, before there is any mail");
+
         w.Send("m-01", "reviewer", MailPriority.Urgent);
         w.Trail("""{"evt":"mail.append","data":{"id":"m-01"}}""");
         await PollUntilAsync(() => Task.FromResult(Volatile.Read(ref seen) == 1),
@@ -159,10 +169,22 @@ public class MailWatcherTests
             w.Trail(e.ToJson());
         w.Trail("""{"evt":"exec.stderr","msg":"mail.append id=m-02"}""");
 
-        // Deterministic negative: five poll intervals with the row count frozen.
-        var before = log.Events.Count(e => e.Evt == "watch.evaluate");
-        await Task.Delay(150);
-        Assert.Equal(before, log.Events.Count(e => e.Evt == "watch.evaluate"));
+        // THE NEGATIVE IS ABOUT THE GATE, so it counts TRAIL-triggered
+        // evaluations and not every evaluation. `Start` (the first tick),
+        // `Deadline` (an armed number the FakeClock cannot reach but a step may
+        // re-arm at) and `Restart` (a stalled ask under a loaded machine) are
+        // the pump's own business and say nothing about which ROWS wake it; a
+        // count over all of them made this assertion fail ~20% of full-suite
+        // runs for reasons the test does not test. What must stay frozen is
+        // that no replayed row of the actor's own is ever read as a trigger.
+        string? Trigger(LogEvent e) =>
+            e.Fields.Data is { } d && d.TryGetValue("trigger", out var v) ? v?.ToString() : null;
+        int Trail() => log.Events.Count(e => e.Evt == "watch.evaluate" && Trigger(e) == "Trail");
+
+        var before = Trail();
+        Assert.Equal(1, before);   // the row that mattered, once — and it is why `seen` is 1
+        await Task.Delay(150);   // five poll intervals
+        Assert.Equal(before, Trail());
         Assert.Equal(1, Volatile.Read(ref seen));
     }
 
