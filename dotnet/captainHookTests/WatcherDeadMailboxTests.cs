@@ -72,6 +72,46 @@ public class WatcherDeadMailboxTests
         new(boxes.SelectMany(b => b.Pending.Select(p =>
             new WatchedEnvelope(b.Address.ToString(), p.Envelope.Id, at, at, nudged))).ToList(), []);
 
+    // ---- the turn payload's own mailbox --------------------------------------
+
+    /// **A DRIVEN TURN NEVER LEAVES A CORPSE** — the question ADR-0017's
+    /// `turn-claude-payload` row left open, answered by the mailbox the payload
+    /// picks up as rather than by a declaration.
+    ///
+    /// The hazard the brain review named was a FRESH SESSION PER TURN: a
+    /// `role@<sessionId>` cursor per turn, never live again, holding pending the
+    /// moment the next broadcast lands — one reaper wake per past turn, and the
+    /// rule has no fact to exempt them on. `turn-claude.sh` reads the role's
+    /// SESSIONLESS mailbox instead (no `--as`, no session), which has no
+    /// INSTANCE — and condition (i) of this rule is an instance mailbox. So the
+    /// exemption is structural: there is nothing to declare, nothing for a human
+    /// window in the same cwd to inherit, and no number of turns can grow a
+    /// candidate.
+    [Fact]
+    public void TheTurnPayloadsSessionlessMailbox_IsNeverADeadMailboxCandidate()
+    {
+        // Exactly the shape a corpse is otherwise made of: holding mail, no live
+        // session, long past the reaper's quiet threshold, reaper rule armed.
+        var turn = Box("reviewer", null, Mail("m-1", 0));
+        var v = WatcherBrain.Evaluate(Input([turn], now: 60 * Min, state: SeenAt([turn], 0)));
+
+        Assert.Empty(v.Dead);
+        Assert.DoesNotContain(v.Nudges, n => n.Role == WatcherBrain.ReaperRole);
+    }
+
+    /// The contrast that gives the test above its meaning: the SAME mail in the
+    /// SAME state, in a mailbox that has an instance, is a candidate. If this
+    /// ever goes green while the one above does too, the rule has stopped
+    /// looking at instances and the exemption is accidental.
+    [Fact]
+    public void TheSameMailInAnInstanceMailbox_IsACandidate()
+    {
+        var window = Box("reviewer", "s-dead", Mail("m-1", 0));
+        var v = WatcherBrain.Evaluate(Input([window], now: 60 * Min, state: SeenAt([window], 0)));
+
+        Assert.Equal("reviewer@s-dead", Assert.Single(v.Dead).Address);
+    }
+
     // ---- consent -------------------------------------------------------------
 
     /// No rule for the reaper is the operator saying no — the same direction

@@ -1508,6 +1508,55 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `turn-claude-payload` (2026-08-18; phase 4 — what a robot nudge
+  actually WAKES. `examples/payloads/turn-claude.sh`, an ordinary exec handler on
+  `"events": ["mail-nudge"]`, dependency-free `sh` like every other payload,
+  because d6 keeps harness CLIs out of the engine.
+  **Both open questions resolved, and the reentrancy one in the OPPOSITE
+  direction to the plan's.** The plan assumed the driven claude's own
+  `UserPromptSubmit` must fire, so ADR-0010 N7's `--setting-sources ""` guard
+  could not be copied verbatim. As built the guard IS kept verbatim, and **the
+  payload does the pickup itself** — d6's own second branch ("identity comes from
+  the harness if it fires hooks, ELSE from the payload"), taken for claude too.
+  A second guard is new and this payload's own: it REFUSES any event but
+  `MailNudge`, because the internal event is the entire reason a turn can never
+  fire what woke it, and that holds only while the registration does — a
+  misregistration on `Stop` rebuilds the classic regress and is now refused
+  loudly instead of silently.
+  **Keeping guard 1 is what answers the corpse question, and structurally rather
+  than by declaration.** A turn with no hooks leaves no session cursor at all,
+  and the payload's `captainHook mail digest --role <role>` (no `--as`, no
+  session) reads the role's SESSIONLESS mailbox — a real cursor and a real
+  `mail.deliver`, so the ledger says the robot read it and the watcher stops
+  re-nudging, and a mailbox with no INSTANCE, which ADR-0018 d6's rule never
+  considers. No number of turns can grow a candidate; nothing is registered;
+  nothing is inherited by a human window in the same cwd; every turn of a role
+  shares one durable mailbox whose per-cursor lock makes the pickup first-come.
+  The `--as`-a-registered-mailbox route the brain review proposed was rejected on
+  the way and recorded: scoping such a registration to the turn alone needs
+  either a second workspace path or a permanently-denied registration existing
+  only to be read back — a fact declared where it can drift, which d3 refuses.
+  **Order is the safety property:** every cheap refusal (wrong event, no role, no
+  workspace, no model on PATH) happens BEFORE the pickup, because a pickup is
+  destructive — a turn that dies after it has lost that digest rather than
+  doubled it, `mail digest`'s own direction. A pickup that finds nothing (a
+  window read it between the decision and the spawn) spends no turn at all.
+  **Three costs stated rather than hidden:** the pickup's `mail.deliver` carries
+  `hookEvent: UserPromptSubmit` — the seam a turn's first prompt IS, and what
+  makes the digest render as an inject at all since the `internal` harness
+  declares no effects — recognizable by its absent `sessionId` and the nudge's
+  `dispatchId`; a hookless turn reads its mail ONCE, at its start, with no
+  mid-turn seam; and `--setting-sources ""` removes the operator's PERMISSION
+  settings along with their hooks, so `--allowedTools` ships allowing the reply
+  path plus read-only search and widens through `TURN_ALLOWED_TOOLS`.
+  `MailNudge.Workspace` stays null (nothing in `watch.json` names one), so the
+  workspace is the entry's `TURN_WORKSPACE` and an unset one REFUSES.
+  Tests: `TurnPayloadTests` (10 — the shipped script run as a real process
+  against a real store, with a stub `claude` that exits nonzero when the guard is
+  missing, plus the mutation proving the stub enforces), two
+  `WatcherDeadMailboxTests` cases; suite 1391 → 1403 green twice.
+  Docs: examples/payloads/README.md gains the payload's row and the `watch.json`
+  rule an operator also needs; handlers.json gains the entry.)
   Slices landed: `nudge-state-and-trail` (2026-08-18; phase 4 — the brain's
   memory on disk and the one row that says a nudge happened. `NudgeStore`
   (`Core/NudgeStore.cs`) over `~/.captainHook/mail/nudges.jsonl` stores exactly

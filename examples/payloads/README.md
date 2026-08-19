@@ -32,6 +32,23 @@ thing is not the effect on your own loop (both answer `noop`) but what reaches
 | --- | --- | --- | --- |
 | [`starter-mail-observer.sh`](starter-mail-observer.sh) | write-only member | `PostToolUse` | stream this agent's reads and edits onto the bus; escalate to `urgent` when the edit hits a file the PEER is holding — the stale-view warning no single agent can compute |
 | [`starter-mail-watcher.sh`](starter-mail-watcher.sh) | on-demand LLM member | `Stop` | a deterministic gate decides whether a turn is worth waking a model over; past it, a second model writes the handoff note. Carries the `--setting-sources ""` reentrancy guard |
+| [`turn-claude.sh`](turn-claude.sh) | woken member | `mail-nudge` | what a robot NUDGE wakes (ADR-0017 d6): the daemon's watcher decides a role is falling behind, and this opens one fresh `claude -p` turn to deal with it. Carries BOTH guards — `--setting-sources ""`, and a refusal to run on any event but the internal `MailNudge` |
+
+⚠ **A turn payload alone wakes nobody.** Installing `turn-claude.sh` makes the
+robot channel *exist* (it is what `RoleKinds` calls a turn payload, and it is
+installation-wide); the per-role consent is a `~/.captainHook/watch.json` rule,
+and without one no nudge is ever raised:
+
+```json
+{ "version": 1,
+  "rules": [
+    { "role": "reviewer",
+      "when":   { "priority": ">=urgent", "quietFor": "10min", "noLiveSession": true },
+      "budget": { "perEnvelope": 1, "perRoleHour": 4 } } ] }
+```
+
+Run `captainHook mail watch --once` to see what those rules would do before they
+do it — it is dry, and `--as-if-quiet` shows past every threshold.
 
 ⚠ **Two agents need two ROLES, and registration alone cannot give them that** —
 `handlers.json` is global, so both members run in both windows. Dispatch policy

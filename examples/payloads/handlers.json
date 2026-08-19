@@ -52,6 +52,19 @@
       }
     },
     {
+      "name": "turn-claude",
+      "command": "/home/oof/captAInHook/examples/payloads/turn-claude.sh",
+      "events": ["mail-nudge"],
+      "mode": "oneshot",
+      "failMode": "open",
+      "budgetMs": 600000,
+      "env": {
+        "TURN_WORKSPACE": "/home/oof/captAInHook",
+        "CAPTAINHOOK_BIN": "/home/oof/.captainHook/bin/captainHook",
+        "TURN_ALLOWED_TOOLS": "Read,Grep,Glob,Bash(/home/oof/.captainHook/bin/captainHook mail send:*)"
+      }
+    },
+    {
       "name": "mail-watcher-alpha",
       "command": "/home/oof/captAInHook/examples/payloads/starter-mail-watcher.sh",
       "events": ["Stop"],
