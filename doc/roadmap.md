@@ -1508,6 +1508,45 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `e2e-stub-runner-loop` (2026-08-19; phase 6 — the whole chain,
+  zero tokens, and the first time the six parts of the robot channel are joined in
+  one line. A human asks a role nobody is sitting in; the daemon's own watcher
+  notices off a trail row a CLI in ANOTHER PROCESS wrote — which is the live path,
+  since neither `mail send` nor `mail digest` is ever raised in-daemon — dispatches
+  `MailNudge` through the ordinary dispatcher, the shipped `turn-claude.sh` runs as
+  a real exec handler, picks its mail up out of the role's sessionless mailbox, and
+  the turn answers on the bus; the asker reads that answer on its next prompt,
+  exactly once. **The ONE stub is `claude`**: it enforces reentrancy guard 1 by
+  exiting nonzero without it, reads the envelope id out of the prompt it was
+  handed, and writes one `kind: answer` envelope to the real `mail send`. Everything
+  else in the picture is the shipped artifact run verbatim.
+  **The plan's shape for this slice was superseded by its own phase 4, and saying so
+  is the point.** The ADR row has the stub payload "fire `captainShim hook
+  user-prompt-submit` with its own session id"; `turn-claude-payload` resolved
+  reentrancy in the opposite direction, so guard 1 is kept verbatim, a woken turn
+  fires NO hooks, and the payload does the pickup. A turn firing hooks here would
+  have tested a shape that ships nowhere. Likewise `mail ask --wait` is absent and
+  that is not a gap in the loop — it belongs to the unlanded thread lane, and the
+  asker closes the loop the way every live window already does, on its next digest;
+  when `--wait` lands it is a second way to READ the same answer, not a second loop.
+  Three claims no unit reaches: the LEDGER JOINS end to end (the turn's
+  `mail.deliver` carries the nudge's own `dispatchId`, `hookEvent:
+  UserPromptSubmit` and no `sessionId`, and leaves `cursor.reviewer..json` — the
+  sessionless box that can never become an ADR-0018 d6 corpse); `inReplyTo` survives
+  nudge → prompt → answer → the asker's inject; and **the loop STOPS** — the turn's
+  own pickup and answer are trail rows the watcher re-evaluates on purpose (the
+  self-feed guard is a filter on WHICH rows re-trigger, never a claim that none do),
+  and one nudge is still the whole bill for the exchange (N1). That last one is
+  asserted only after waiting for an evaluation the turn's rows caused, because the
+  same assertion taken the instant the answer lands would pass on a system that
+  pokes again a tick later. Sandbox `HOME`, throwaway rendezvous, `FakeClock`: the
+  live tree is untouched and no idle window is waited out. The flaky-guard exposure
+  the plan warned about cost no retry cycle — the whole chain runs in ~0.7s.
+  `WatcherLoopE2ETests` (1); suite 1418 → 1419 green twice. Docs:
+  `doc/flow/mailbox-bus.md` gains § *The loop closes* and a ground-truth row;
+  ADR-0017 row 6 ✅. Left on the lane: the thread slices (`thread-fields` →
+  `thread-aware-delivery` / `mail-ask-wait` → `thread-canvas`) and phase 7's
+  `docs-and-ground-truth` sweep.)
   Slices landed: `watcher-actor` (2026-08-18; phase 5 — the watcher lane's
   critical-path slice: the brain and the payload existed, and nothing in the
   daemon RAN them. `MailWatcher` (`Core/MailWatcher.cs`) is an F# `Worker` under
