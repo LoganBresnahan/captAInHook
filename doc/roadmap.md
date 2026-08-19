@@ -1508,6 +1508,49 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `watcher-actor` (2026-08-18; phase 5 — the watcher lane's
+  critical-path slice: the brain and the payload existed, and nothing in the
+  daemon RAN them. `MailWatcher` (`Core/MailWatcher.cs`) is an F# `Worker` under
+  its own `Supervisor`, fed by a C# pump that tails the trail file from its END
+  with `TrailCursor` — the same file the SSE stream tails, because `mail send` is
+  a CLI process and `mail digest` an exec child, so neither event is ever raised
+  in-daemon — and gates on the row's PARSED `evt`: the substring is a filter and
+  never the decision, so the actor's own `mail.nudge`/`nudge.*`/`watch.*` rows,
+  the woken turn's `dispatch.*`, and an `exec.stderr` quoting the names (the live
+  trail's shape) re-trigger nothing, while a woken turn's own pickup and reply do,
+  on purpose. **The deadline is one held number, not a timer:** the brain's
+  `NextCheckMs` is compared against the injected monotonic clock every poll tick;
+  no `Task.Delay(deadline−now)`, no `DateTime`; the tail's 1s pacing is the
+  resolution and the tests fire deadlines by advancing a `FakeClock`. **Persist
+  THEN dispatch:** `MailNudgeEvent` split into `Admit` (policy, a decision) and
+  `RunAsync` (the wake), so the actor charges the budget, writes `mail.nudge` and
+  `Save`s before waking anything; a crash between costs one poke that never went
+  out — a `mail.nudge` with no `dispatch.start` after it, on the trail — and can
+  never spend twice; the plan's "neither a double nor a lost nudge" is honestly
+  "never a double, at worst one lost", the conservative direction. The wake is
+  fire-and-forget from the actor (a turn runs for minutes; the next `mail.append`
+  deserves an evaluation now) and COUNTS as daemon activity
+  (`ServeStats.OnInternalStart`) so a running turn defers idle-exit while the
+  armed deadline never does — N2 kept, and pinned by a daemon-level test each
+  way. **Restart = the durable state, and the first cut got it wrong in a way a
+  test caught:** the fresh instance reloaded `nudges.jsonl`, whose last save was
+  the first sighting re-derived as age 0, so a supervised restart on a quiet bus
+  silently pushed every deadline out by a full quiet period; now it starts from
+  THIS process's last evaluated state (its monotonic stamps are still valid — the
+  restarted actor watched every minute the crashed one did) and reads the file
+  only when there is none, which is a new process. Three faults in a minute
+  escalate to `watch.dead`, once, and the daemon serves hooks without a watcher.
+  On start the first evaluation waits one poll interval so the hook that spawned
+  the daemon has stamped presence; a deadline that fell while it slept is due
+  then. The brain review's cost note is paid — `MailCursors.Pending` takes
+  pre-read lines and `ReadMailboxes` reads the store ONCE per evaluation. The
+  watcher exists only when `DaemonHost.RunAsync` is handed a `watchPath`
+  (`Program.cs` always; no test daemon ever), so the suite cannot write a
+  `nudges.jsonl` into the operator's live tree. Flow doc gains § *The watcher*
+  and a ground-truth row; ADR-0017 row 5 ✅ with the as-built notes. 12
+  `MailWatcherTests` + 3 `MailWatcherDaemonTests`; suite 1400 → 1418 green
+  twice. Next on the lane: `e2e-stub-runner-loop` (the whole chain, zero
+  tokens), or the thread lane's `thread-fields`.)
   Slices landed: `turn-claude-payload` (2026-08-18; phase 4 — what a robot nudge
   actually WAKES. `examples/payloads/turn-claude.sh`, an ordinary exec handler on
   `"events": ["mail-nudge"]`, dependency-free `sh` like every other payload,

@@ -12,7 +12,9 @@ namespace CaptainHook.Core;
 // back. This file is the only place that state touches a file, and the only
 // place a `mail.nudge` line is written — the two halves of "a nudge really
 // happened", kept together so a charged budget and the record of it can never
-// disagree (`Record`).
+// disagree (`Record`). "Happened" is ADMITTED: the actor records and saves
+// before it wakes the turn (persist-then-dispatch, `MailWatcher`), so the row
+// precedes `dispatch.start` on the trail.
 //
 // **What is stored is AGES, never stamps.** `NudgeState`'s numbers are
 // monotonic milliseconds of the process that made them, and a monotonic epoch
@@ -179,10 +181,22 @@ public sealed class NudgeStore
     /// `nudge.denied`, which `MailNudgeEvent` already writes. The state still
     /// takes it — uncharged, quiet clock restarted — so a refusal recurs once
     /// per quiet period rather than on every evaluation.
-    public static NudgeState Record(NudgeState state, MailNudge nudge, MailNudgeOutcome outcome, long nowMs)
+    public static NudgeState Record(NudgeState state, MailNudge nudge, MailNudgeOutcome outcome, long nowMs) =>
+        Record(state, nudge, outcome.Ran, outcome.DispatchId, nowMs);
+
+    /// The same, from an ADMISSION rather than an outcome — the watcher actor's
+    /// spelling (ADR-0017 d4, slice `watcher-actor`). Its order is persist THEN
+    /// dispatch: the row is written and the budget charged the moment the
+    /// policy admits the nudge and BEFORE the turn is woken, so a crash between
+    /// the two costs one poke that never went out (visible on the trail as a
+    /// `mail.nudge` with no `dispatch.start` after it) and can never double one
+    /// — the conservative direction, like every choice in this ADR. `ran` is
+    /// therefore "admitted" here; what the turn then returned is
+    /// `nudge.dispatch`'s to say, joined by the same `dispatchId`.
+    public static NudgeState Record(NudgeState state, MailNudge nudge, bool ran, string dispatchId, long nowMs)
     {
-        if (outcome.Ran) LogNudge(nudge, outcome);
-        return state.Record(nudge, nowMs, charged: outcome.Ran);
+        if (ran) LogNudge(nudge, dispatchId);
+        return state.Record(nudge, nowMs, charged: ran);
     }
 
     /// `mail.nudge` (ADR-0017 d10) — a nudge is a TRAIL LINE, never an envelope:
@@ -209,7 +223,7 @@ public sealed class NudgeStore
     ///
     /// `address` rides only a dead-mailbox nudge (ADR-0018 d6): the row goes to
     /// the reaper's lane, and the box it is about is the whole fact.
-    private static void LogNudge(MailNudge nudge, MailNudgeOutcome outcome)
+    private static void LogNudge(MailNudge nudge, string dispatchId)
     {
         var data = new Dictionary<string, object>
         {
@@ -228,7 +242,7 @@ public sealed class NudgeStore
 
         Log.Info("mail", "mail.nudge", new LogFields
         {
-            DispatchId = outcome.DispatchId,
+            DispatchId = dispatchId,
             Msg = nudge.Address is null
                 ? "robot nudge raised: a turn was woken for mail this role had not read"
                 : "robot nudge raised: the reaper was woken about a dead mailbox",

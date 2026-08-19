@@ -542,12 +542,23 @@ public sealed class MailCursors(MailStore store)
     /// case, just what "no instance" means.
     ///
     /// `hookSession` is WHO is reading, and it only ever rides the trail.
-    public MailPendingView Pending(MailAddress requested, string? hookSession)
+    public MailPendingView Pending(MailAddress requested, string? hookSession) =>
+        Pending(requested, hookSession, Store.Read());
+
+    /// The same read over lines the caller already has. The watcher's gatherer
+    /// (`MailWatch.ReadMailboxes`) reads MANY mailboxes per evaluation — one per
+    /// cursor file plus every instance the ledger addresses — and an evaluation
+    /// runs on every `mail.append` / `mail.cursorAdvance` for as long as the
+    /// daemon lives; one `Store.Read()` per mailbox made that O(mailboxes ×
+    /// store) per event (ADR-0017's brain-review cost note). So the store is
+    /// read ONCE and each mailbox is derived from that one read. The lines
+    /// must be `Store.Read()`'s own — the same store, in file order — which is
+    /// the only thing a caller can hand in; nothing here writes.
+    public MailPendingView Pending(MailAddress requested, string? hookSession, IReadOnlyList<MailLine> lines)
     {
         var mailbox = new MailAddress(requested.Role, requested.Instance ?? hookSession);
         var role = mailbox.Role;
         var instance = mailbox.Instance;
-        var lines = Store.Read();
 
         // The frontier stops BEFORE an unterminated tail: those bytes may be
         // an append in flight, and a frontier inside them would consume mail

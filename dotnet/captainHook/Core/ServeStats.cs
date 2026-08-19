@@ -21,6 +21,14 @@ public sealed class ServeStats
     /// A connection finished (its dispatch answered or failed).
     public void OnDone() => Interlocked.Decrement(ref _active);
 
+    /// An INTERNAL dispatch began — a robot nudge the watcher raised (ADR-0017
+    /// d5): no connection, so nothing is "served", but a turn is running under
+    /// this daemon's dispatcher and that IS activity — the idle watchdog must
+    /// not starve a daemon mid-turn, and the drain must give it its chance
+    /// before the child phase cuts it. `Active` counts it; `Served` does not.
+    public void OnInternalStart() => Interlocked.Increment(ref _active);
+    public void OnInternalDone() => Interlocked.Decrement(ref _active);
+
     public int Active => Volatile.Read(ref _active);
     public long Served => Volatile.Read(ref _served);
 }

@@ -54,6 +54,7 @@ switch (inv.Mode)
         return await DaemonHost.RunAsync(idleWindow: idle, policyPath: DispatchPolicy.ResolvePath(),
             apiPort: ApiHost.ResolvePort(Environment.GetEnvironmentVariable("CAPTAINHOOK_API_PORT")),
             handlersPath: ExecHandlersFile.ResolvePath(),
+            watchPath: WatchRules.ResolvePath(),
             sse: heartbeat is null ? null : new SseOptions(WireJsonl.DefaultLogPath(), Heartbeat: heartbeat));
     }
 

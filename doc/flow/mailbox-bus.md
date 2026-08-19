@@ -958,10 +958,14 @@ not know — or one carrying a member it does not know — is skipped rather tha
 guessed at, which costs an older daemon reading a newer one's state exactly one
 quiet period.
 
-**`mail.nudge` is the row, and it is written only when a nudge really ran.** A
-nudge is a trail line and never an envelope (mail about mail would recurse), and
-`NudgeStore.Record` writes it in the same call that charges the budgets, so a
-poke on the picture and a spent budget cannot disagree. Three of the columns
+**`mail.nudge` is the row, and it is written only when a nudge is admitted and
+charged — before the turn is woken.** A nudge is a trail line and never an
+envelope (mail about mail would recurse), and `NudgeStore.Record` writes it in
+the same call that charges the budgets, so a poke on the picture and a spent
+budget cannot disagree; the actor (§ *The watcher*) calls it after the policy
+admits and before it dispatches, so on the trail the row precedes the turn's
+`dispatch.start` under the same `dispatchId`, and a row with no `dispatch.start`
+after it is the one shape a crash between the two can leave. Three of the columns
 ADR-0017 d10's prose named are as-built decisions: there is no `channel` (the
 human channel is a pull — a count `mail status` reads off the cursors — so every
 line that can exist here is a robot nudge, and a column with one value is a fact
@@ -1028,9 +1032,73 @@ takes the operator's permission settings along with their hooks, so
 workspace comes from the entry's `TURN_WORKSPACE` and an unset one refuses — the
 daemon's working directory is not a workspace anybody chose.
 
-Not here yet: the in-daemon actor that feeds the brain, arms its deadline, and
-calls `Record`/`Save` for real (`watcher-actor`). This section grows into
-§ *The watcher* at `docs-and-ground-truth`.
+### The watcher (ADR-0017 d4, slice `watcher-actor`)
+
+The brain is pure and `--once` is dry; `MailWatcher` is the one place the two
+are joined to a schedule — and the schedule is not a timer.
+
+```
+  trail.jsonl ──tail (TrailCursor, from END)──▶ pump ──┐  one poll tick:
+        ▲            every tick: Poll(); gate on evt   │   Trail?   (relevant rows)
+        │                                              │   Start?   (first tick)
+        │            ┌─────────────────────────────────┘   Deadline? (clock ≥ held)
+        │            ▼
+        │      Worker<WatchTrigger,WatchStep> under Supervisor("watcher")     ← restart = the durable
+        │            │  Evaluate:                                               state (this process's
+        │            │   read store ONCE → mailboxes · presence · kinds · rules  last, else nudges.jsonl)
+        │            │   WatcherBrain.Evaluate → verdict
+        │            │   per nudge: Admit (policy) → Record (charge / mail.nudge)
+        │            │   Save(state) ─────────────────────────── PERSIST
+        │            │   Fire(RunAsync) ×admitted ── fire-and-forget ── THEN DISPATCH
+        │            └─▶ WatchStep{NextCheckMs} ── the pump HOLDS it (one number)
+        │
+        └── mail.nudge · nudge.dispatch · dispatch.* · watch.evaluate   (not triggers)
+            mail digest --as (turn) → mail.cursorAdvance ─────────────── a trigger, on purpose
+```
+
+**Fed by the trail, because nothing else sees the events.** `mail send` is a
+CLI process and `mail digest` is an exec child; neither `mail.append` nor
+`mail.cursorAdvance` is ever raised in the daemon. The pump tails the same file
+the SSE stream tails, from the file's END at start (history is `nudges.jsonl`),
+and evaluates once per batch. Relevance is the row's parsed `evt` — the
+substring is a filter, never the decision — so the actor's own rows and a
+payload's stderr quoting the names are nothing, and the self-feeding loop the
+plan's verify names is closed by the gate. A woken turn's pickup
+(`mail.cursorAdvance`) and reply (`mail.append`) re-trigger on purpose: each
+such evaluation finds less unread than the last.
+
+**One deadline, no timer, no wall clock.** The brain returns `NextCheckMs`; the
+pump holds it and compares the injected monotonic clock against it every tick.
+Re-arm is replacement; disarm is the next verdict returning later or nothing.
+The only `Task.Delay` is the tail's pacing (a second), which is the deadline's
+resolution against thresholds of minutes. Tests drive `StepAsync` with a
+`FakeClock` and the deadline fires when the clock says so.
+
+**Persist THEN dispatch.** Per nudge: `Admit` (policy — a decision, no action),
+`Record` (charged if admitted, quiet restarted either way; the `mail.nudge` row
+is written here), `Save`, and only then `RunAsync`, fire-and-forget from the
+actor. A crash between save and wake costs one poke that never went out —
+visible as a `mail.nudge` with no `dispatch.start` after it — and can never
+double one. A save that fails has warned; the nudge still goes, charged in
+memory, because holding it would let a read-only tree silently kill the channel.
+
+**Supervised means restart = the durable state.** An evaluation that throws is
+reply-then-crash; the supervisor re-runs the factory and the fresh instance
+starts from this process's last evaluated state (its monotonic stamps are still
+valid — the restarted actor watched every minute the crashed one did; the FILE
+would come back younger by everything since its last save), else `nudges.jsonl`.
+The pump sees the fault, drops its held deadline, and re-evaluates as `Restart`.
+Past the window (3 in a minute) the handle is dead: `watch.dead` once, the pump
+stops, the daemon serves hooks without a watcher.
+
+**N2, kept.** The held deadline defers no idle-exit; a turn the watcher woke IS
+activity (`ServeStats.OnInternalStart`) for exactly as long as it runs, so the
+watchdog cannot starve a daemon mid-turn and the drain gives it its chance
+before the child phase cuts it. The first evaluation waits one poll interval so
+the hook that spawned the daemon has stamped presence — a deadline that fell
+while the daemon slept is due then, at once. The watcher exists only when
+`DaemonHost.RunAsync` is handed a `watchPath` (production always; test daemons
+never), so no test can write a `nudges.jsonl` into the operator's live tree.
 
 ## Ground truth
 
@@ -1072,8 +1140,9 @@ prose, not ground truth.
 | the DEAD-MAILBOX rule (ADR-0018 d6 detection half, slice `watcher-dead-mailbox-rule`) — the brain's second pass: per INSTANCE mailbox with a cursor, not registered, holding mail, its own session not live, past a `reaper` rule's quiet ⇒ one `MailNudge` to `reaper` naming the box. Consent is the reaper's rule (its tokens); envelopes tracked under the ADDRESS so two dead boxes are two corpses, while `perRoleHour` stays one window on the reaper and counts same-pass nudges; the mailbox's own silence is checked unconditionally, never through `noLiveSession`; a registered `--as` box is standing, never a corpse | `WatcherBrain.DeadMailboxes` + `WatchDeadMailbox`, `WatcherBrain.ReaperRole`/`ReaperHow`, `WatchVerdict.Dead`, `MailNudge.Address`/`Subject`, `WatchedMailbox.HasCursor`, `RoleKinds.RegisteredMailboxes`/`IsRegisteredMailbox`; the CLI sweep is `MailWatch.RolesToWatch` (a `reaper` rule widens it to every role with a cursor file) and the report's `dead-mailbox candidate` lines. Pinned by `dotnet/captainHookTests/WatcherDeadMailboxTests.cs` (19), two `WatcherBrainGoldenTests` scenarios (`dead-mailbox-nudges-the-reaper`, `dead-mailbox-registered-box-is-standing`), four `MailWatchTests` cases, two `RoleKindsTests` cases and two `MailNudgeEventTests` cases (the `address` field present and absent, on the payload and the trail) |
 | the WATCHER'S BRAIN (ADR-0017 d4, slice `watcher-brain`) — pure `(mailboxes, presence, kinds, rules, state, NowMs) → {nudges, state, ONE NextCheckMs, per-role standing}`; unread = pending in every accepting mailbox; quiet from first sighting, restarted by `Record`; live = freshest dispatch ≤ 10 min; first admitting rule governs; strictest `perRoleHour`; state crosses a restart as ages, the gap uncounted; `Record` is the caller's so a denied nudge spends nothing | `WatcherBrain` (`Evaluate`, `LiveWithinMs`, `RoleWindowMs`, `ReplyHow`, `Dur`), `WatchInput`, `WatchVerdict`, `WatchRoleVerdict`, `WatchStanding`, `WatchedMailbox`, `NudgeState` (`Record`, `ToAges`, `FromAges`), `WatchedEnvelope` (keyed by `Subject` — a role, or a `role@instance` address for the dead-mailbox rule; the field phase 4 persists), `RoleNudge`, `NudgeStateAges` in `dotnet/captainHook/Core/WatcherBrain.cs`; the digest text is `MailDigest.Render` over a sessionless view. The CLI: `MailWatch` (`Run`, `ReadMailboxes`, `Usage`, `AsIfQuietMs`) in `dotnet/captainHook/Mail/MailWatch.cs`, routed as `mail watch` from `Program.cs`. Trail: `watch.verdict` (src `watch`, the calling session if any); behind a hook the report is stderr and stdout is one `MailDigest.Noop` line. Pinned by `dotnet/captainHookTests/WatcherBrainTests.cs` (57), `WatcherBrainGoldenTests.cs` (2, over `dotnet/captainHookTests/watcher-brain.golden.json` — real store + real digest-moved cursors; `CAPTAINHOOK_SCHEMA_UPDATE=1` regenerates) and `MailWatchTests.cs` (24 — including the exec-wire shape and the state it reads but never writes) |
 | WHAT A NUDGE WAKES (ADR-0017 d6, slice `turn-claude-payload`) — one exec payload per harness, `claude` first; two guards (`--setting-sources ""` verbatim, and a refusal to run on any event but `MailNudge`); the PAYLOAD does the pickup, as the role's SESSIONLESS mailbox, which is why a turn can never leave a dead-mailbox candidate | `examples/payloads/turn-claude.sh` + its entry in `examples/payloads/handlers.json`; the pickup is `captainHook mail digest --role <role> --harness claude-code --seam ambient` over a synthesized exec-wire envelope carrying the nudge's own `dispatchId`. Env: `TURN_WORKSPACE` (required — refused, not guessed), `TURN_ALLOWED_TOOLS`, `TURN_MODEL_CMD`, `TURN_TIMEOUT_S`, `CAPTAINHOOK_BIN`. Trail: the ordinary `dispatch.start → exec.spawn → exec.exit` for the nudge, plus one `mail.deliver` with `hookEvent: UserPromptSubmit`, no `sessionId`, and the nudge's `dispatchId`. Pinned by `dotnet/captainHookTests/TurnPayloadTests.cs` (10 — the shipped script as a real process, with the guard-enforcing stub and the mutation that proves it enforces) and two `WatcherDeadMailboxTests` cases |
-| the BRAIN'S MEMORY and the RECORD of a nudge (ADR-0017 d4 + d10, slice `nudge-state-and-trail`) — `mail/nudges.jsonl` holds exactly the brain's state as AGES (never stamps), append-only with the LAST parsing line winning, so a torn tail costs one save and a file that parses nowhere re-anchors; `mail.nudge` is written only when a nudge RAN, in the same call that charges the budgets | `NudgeStore` (`Load`, `Save`, `Record`, `Render`, `TryParseLine`, `FileName`, `Version`, `CompactAtBytes`) in `dotnet/captainHook/Core/NudgeStore.cs`; `MailNudgeBudget` (`Clause` — the one rendering the brain's `reason` also uses) in `dotnet/captainHook/Core/MailNudgeEvent.cs`; read by `MailWatch.Run` and never written by it. Trail: `mail.nudge` (src `mail`, `dispatchId` and no `sessionId`, `budget` as numbers, `address` only for a dead mailbox), `watch.stateTorn`, `watch.stateReanchor`, `watch.stateUnwritable` (src `watch`). Pinned by `dotnet/captainHookTests/NudgeStoreTests.cs` (29) and the cross-emitter goldens in `WireJsonlTests.cs` (23) |
+| the BRAIN'S MEMORY and the RECORD of a nudge (ADR-0017 d4 + d10, slice `nudge-state-and-trail`) — `mail/nudges.jsonl` holds exactly the brain's state as AGES (never stamps), append-only with the LAST parsing line winning, so a torn tail costs one save and a file that parses nowhere re-anchors; `mail.nudge` is written only when a nudge is ADMITTED and charged (persist-then-dispatch: before the wake), in the same call that charges the budgets | `NudgeStore` (`Load`, `Save`, `Record`, `Render`, `TryParseLine`, `FileName`, `Version`, `CompactAtBytes`) in `dotnet/captainHook/Core/NudgeStore.cs`; `MailNudgeBudget` (`Clause` — the one rendering the brain's `reason` also uses) in `dotnet/captainHook/Core/MailNudgeEvent.cs`; read by `MailWatch.Run` and never written by it. Trail: `mail.nudge` (src `mail`, `dispatchId` and no `sessionId`, `budget` as numbers, `address` only for a dead mailbox), `watch.stateTorn`, `watch.stateReanchor`, `watch.stateUnwritable` (src `watch`). Pinned by `dotnet/captainHookTests/NudgeStoreTests.cs` (29) and the cross-emitter goldens in `WireJsonlTests.cs` (23) |
 | the ROBOT NUDGE as an ordinary event (ADR-0017 d5, slice `mail-nudge-event`) — `MailNudge` through the same dispatcher the shim uses: `handlers.json` registers `"events": ["mail-nudge"]`, `dispatch.json` is the consent, `workspace` is the cwd so `project` rules scope it; no stdout, no effects, no presence, and a denial that is logged rather than answered | `MailNudge`/`MailNudgeEvent`/`MailNudgeOutcome` in `dotnet/captainHook/Core/MailNudgeEvent.cs`; the embedded spec `dotnet/captainHook/harnesses/internal.json`; `NoWireAdapter` + `HarnessSpec.AnswersHooks` (`Core/Harness.cs`) and the refusal at both wire sites (`Core/HookRun.cs`, `Core/DaemonHost.cs`); `HookRun.DecidePolicy`/`PolicyRuling` (`Core/HookRun.cs`). Trail: `nudge.dispatch`, `nudge.denied` (src `nudge`, no `sessionId`) — `mail.nudge` proper is `NudgeStore`'s, below. Pinned by `dotnet/captainHookTests/MailNudgeEventTests.cs` (11) |
+| the WATCHER ACTOR (ADR-0017 d4, slice `watcher-actor`) — in-daemon, supervised, fed by a from-END tail of the trail (`mail.append` / `mail.cursorAdvance` by parsed `evt`), holding ONE monotonic deadline re-checked per poll tick (no timer, no wall clock), persist-then-dispatch, fire-and-forget wake counted as activity, restart = this process's last state else the file, N2 (no idle-defer), built only with a `watchPath` | `MailWatcher` (`Start`, `StepAsync`, `IsTrigger`, `Armed`, `InFlight`, `IsDead`, `Generation`, `DefaultPoll`), `MailWatcherOptions`, `WatchTrigger` (`Start`/`Trail`/`Deadline`/`Restart`), `WatchStep` in `dotnet/captainHook/Core/MailWatcher.cs`; wired in `DaemonHost.RunAsync` (`watchPath`, `watchPoll`) from `Program.cs` (`WatchRules.ResolvePath()`); `MailNudgeEvent.Admit` / `RunAsync` / `MailNudgeAdmission` (the split `DispatchAsync` now composes), `NudgeStore.Record(state, nudge, ran, dispatchId, now)`, `ServeStats.OnInternalStart/Done`, `MailCursors.Pending(address, hookSession, lines)` (one store read per evaluation — the brain review's cost note, paid). Trail: `watch.start`, `watch.evaluate` (debug; `trigger`, `nudges`, `admitted`, `nextCheckInMs`, `stateSaved`), `watch.evaluateFailed`, `watch.evaluateStalled`, `watch.dead`, `watch.dispatchFailed`, `watch.stop` (src `watch`); `mail.nudge` now precedes `dispatch.start` under one `dispatchId`. Pinned by `dotnet/captainHookTests/MailWatcherTests.cs` (12 — the clock-driven deadline, the pump over a real trail file, the gate, own-rows-do-not-retrigger, state-on-disk-before-the-turn-runs, the denial, the fallen deadline on start, restart-from-in-process-state, escalation, no-rules-writes-nothing, unchanged-not-rewritten, a registration seen without restart) and `MailWatcherDaemonTests.cs` (3 — no watch path ⇒ no watcher; an armed deadline defers no idle-exit; a woken turn is activity) |
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished`, `mail.reap` (ADR-0018 d6: `role` + `instance` + `pendingIds` + `by`, and the one cursor-family event with NO `sessionId` — a reap has no window) — every other cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
 | the read ENDPOINT (d14, slice 1) — one read-only snapshot: chain status, the ledger from `since`, every cursor's pending view, inferred presence; `since` absent ⇒ 0, off-boundary ⇒ `sinceAligned: false` (never a spliced prefix), malformed ⇒ 400 | `ApiReadModel.Mail` + the `/api/v1/mail` route (`dotnet/captainHook/Api/ApiReadModel.cs`, `Api/ApiHost.cs`); DTOs in `Api/ApiDtos.cs`; the write half unreachable by construction via `MailReadPort` (`dotnet/captainHook/Mail/MailReadPort.cs`); presence from `SessionPresence` ∪ cursor files. `MailApiTests.cs` (31) — reflection walk, `Api/` source pin, non-GET route theory asserting nothing is written |

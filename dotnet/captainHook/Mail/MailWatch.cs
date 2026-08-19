@@ -215,9 +215,17 @@ public static class MailWatch
         var files = MailCursors.List(cursors.Store.Dir);
         var wanted = new HashSet<string>(roles, StringComparer.Ordinal);
 
-        // Instances the ledger names for a wanted role, one read of the store.
+        // ONE read of the store for the whole evaluation: the addresses below
+        // and every mailbox's pending are derived from these same lines
+        // (`Pending`'s lines overload). The actor runs this on every
+        // `mail.append` / `mail.cursorAdvance` the daemon sees, so a read per
+        // mailbox was O(mailboxes × store) per event — the brain review's cost
+        // note, paid here before the actor landed on a busy bus.
+        var lines = cursors.Store.Read();
+
+        // Instances the ledger names for a wanted role.
         var addressed = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-        foreach (var line in cursors.Store.Read())
+        foreach (var line in lines)
         {
             if (line.Envelope is not { } e || !MailAddress.TryParse(e.To, out var to)) continue;
             if (to.Instance is null || !wanted.Contains(to.Role)) continue;
@@ -231,21 +239,21 @@ public static class MailWatch
             var mine = files.Where(f => f.Role == role).ToList();
             var keys = new HashSet<string?>(mine.Select(f => f.Session));
             if (mine.Count == 0)
-                boxes.Add(new WatchedMailbox(new MailAddress(role, null), cursors.Pending(role, null).Pending, HasCursor: false));
+                boxes.Add(new WatchedMailbox(new MailAddress(role, null), cursors.Pending(new MailAddress(role, null), null, lines).Pending, HasCursor: false));
             foreach (var (_, key) in mine)
             {
                 // The cursor key IS the instance (ADR-0018 d3): read the mailbox
                 // the file names, on behalf of nobody — `hookSession` only ever
                 // rides the trail, and this read writes none.
                 var address = new MailAddress(role, key);
-                boxes.Add(new WatchedMailbox(address, cursors.Pending(address, hookSession: null).Pending));
+                boxes.Add(new WatchedMailbox(address, cursors.Pending(address, hookSession: null, lines).Pending));
             }
             if (addressed.TryGetValue(role, out var instances))
                 foreach (var instance in instances.Where(i => !keys.Contains(i)))
                 {
                     var address = new MailAddress(role, instance);
                     boxes.Add(new WatchedMailbox(
-                        address, cursors.Pending(address, hookSession: null).Pending, HasCursor: false));
+                        address, cursors.Pending(address, hookSession: null, lines).Pending, HasCursor: false));
                 }
         }
         return boxes;

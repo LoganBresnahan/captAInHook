@@ -108,6 +108,16 @@ public sealed record MailNudge(
     }
 }
 
+/// The policy's answer for one nudge, with everything `RunAsync` needs to
+/// wake the turn: the parsed event, the dispatch id (minted or adopted), and
+/// the handler exclusions that ride into the fan-out. `Admitted` false means
+/// the nudge does not happen — `Denied` is the outcome to report for it.
+public sealed record MailNudgeAdmission(
+    HookEvent Event, string DispatchId, bool Admitted, IReadOnlySet<string> Excluded, string? DenialTrace)
+{
+    public MailNudgeOutcome Denied => new(Ran: false, DispatchId, "noop", DenialTrace);
+}
+
 /// What a nudge dispatch did. `Ran` is false when policy denied it — the one
 /// outcome the watcher must count differently, since a denied nudge should not
 /// spend a budget the operator's rules already refused to let it use.
@@ -125,20 +135,36 @@ public static class MailNudgeEvent
     /// data where every other harness capability lives (ADR-0003).
     public const string HarnessName = "internal";
 
-    /// Raise a nudge through the ordinary dispatcher.
+    /// Raise a nudge through the ordinary dispatcher: admit, then run.
     ///
     /// `dispatcher` is the daemon's own — the same fan-out, the same supervised
     /// workers, the same hot reload. `spec` is the `internal` harness; passing
     /// it in rather than resolving it here keeps this testable and keeps the
     /// registry's reload contract in the caller's hands.
+    public static async Task<MailNudgeOutcome> DispatchAsync(
+        MailNudge nudge, Dispatcher dispatcher, HarnessSpec spec, PolicyResolution policy,
+        string? dispatchId = null)
+    {
+        var admission = Admit(nudge, spec, policy, dispatchId);
+        return admission.Admitted
+            ? await RunAsync(admission, nudge, dispatcher, spec)
+            : admission.Denied;
+    }
+
+    /// The first half: parse the nudge into its event and put it to the policy.
+    /// Split from `RunAsync` for the watcher actor (ADR-0017 d4, slice
+    /// `watcher-actor`), whose ordering is PERSIST THEN DISPATCH — it must know
+    /// whether the nudge is admitted before it charges a budget and writes the
+    /// `mail.nudge` row, and it must have done both before the turn is woken.
+    /// Everything here is decision, not action: the only side effects are the
+    /// policy's own trail lines and, on a denial, `nudge.denied`.
     ///
     /// The dispatch id is MINTED here when the caller has none: a nudge has no
     /// shim to mint one (ADR-0004 d2's usual source), and without an id the
     /// `dispatch.start → exec.spawn → exec.exit` rows for a woken turn would
     /// join to nothing.
-    public static async Task<MailNudgeOutcome> DispatchAsync(
-        MailNudge nudge, Dispatcher dispatcher, HarnessSpec spec, PolicyResolution policy,
-        string? dispatchId = null)
+    public static MailNudgeAdmission Admit(
+        MailNudge nudge, HarnessSpec spec, PolicyResolution policy, string? dispatchId = null)
     {
         var id = dispatchId ?? Guid.NewGuid().ToString("N")[..8];
 
@@ -168,10 +194,21 @@ public static class MailNudgeEvent
             {
                 ["trace"] = ruling.TraceLine!,
             }));
-            return new MailNudgeOutcome(Ran: false, id, "noop", ruling.TraceLine);
         }
+        return new MailNudgeAdmission(evt, id, ruling.Work, ruling.Excluded, ruling.TraceLine);
+    }
 
-        var result = await dispatcher.DispatchAsync(evt, id, ruling.Excluded);
+    /// The second half: wake the turn. Only for an admitted nudge — running a
+    /// denied one would be a dispatch the policy refused, so it throws rather
+    /// than quietly doing what `dispatch.json` said not to.
+    public static async Task<MailNudgeOutcome> RunAsync(
+        MailNudgeAdmission admission, MailNudge nudge, Dispatcher dispatcher, HarnessSpec spec)
+    {
+        if (!admission.Admitted)
+            throw new InvalidOperationException("MailNudgeEvent.RunAsync: the nudge was denied by policy and cannot run");
+        var id = admission.DispatchId;
+
+        var result = await dispatcher.DispatchAsync(admission.Event, id, admission.Excluded);
 
         // The capability gate is what makes "effects are logged and ignored"
         // true, and it is the SHIPPED mechanism rather than a rule written
@@ -180,7 +217,7 @@ public static class MailNudgeEvent
         // becomes Noop. The kind is reported below so the caller can see what
         // was thrown away without reading two lines.
         var kind = Harness.KindOf(result.Merged);
-        var final = Harness.ApplyCapabilityGate(spec, evt, result.Merged, id);
+        var final = Harness.ApplyCapabilityGate(spec, admission.Event, result.Merged, id);
 
         // …and nothing is serialized. An internal event has no stdout; `final`
         // exists to prove the gate ran and to be asserted on, not to be written.

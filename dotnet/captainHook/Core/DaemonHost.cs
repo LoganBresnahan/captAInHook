@@ -39,7 +39,8 @@ public static class DaemonHost
         Registry? registry = null, TimeSpan? drainDeadline = null,
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
         int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null,
-        string? uiDir = null, string? handlersPath = null, string? mailDir = null)
+        string? uiDir = null, string? handlersPath = null, string? mailDir = null,
+        string? watchPath = null, TimeSpan? watchPoll = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -146,7 +147,8 @@ public static class DaemonHost
         // `presence` is the dispatch half of presence inference, stamped in
         // DispatchOneAsync below off the SAME monotonic clock uptime uses.
         var presence = new SessionPresence(clk);
-        var mailPort = MailReadPort.Over(MailStore.ResolveDir(mailDir));
+        var resolvedMailDir = MailStore.ResolveDir(mailDir);
+        var mailPort = MailReadPort.Over(resolvedMailDir);
 
         // Resolved HERE rather than at the ApiHost call below, because the mail
         // snapshot and the SSE stream must name the SAME trail file: the
@@ -191,6 +193,25 @@ public static class DaemonHost
                 handlersWriter: handlersWriter)
             : null;
         superseded ??= MakeSupersededProbe();
+
+        // The mail watcher (ADR-0017 d4, slice `watcher-actor`): a supervised
+        // actor fed by a tail of the SAME trail file the SSE stream tails,
+        // holding one monotonic deadline, raising `MailNudge` through THIS
+        // dispatcher under the CURRENT policy and `internal` spec. Only when a
+        // watch path is configured — production always passes one; a test
+        // daemon that passes none has no watcher, so it can never touch the
+        // operator's live `nudges.jsonl` or wake a turn against the live bus.
+        // Its armed deadline defers no idle-exit (N2); a turn it woke counts as
+        // activity through `stats` for exactly as long as it runs.
+        MailWatcher? watcher = null;
+        if (watchPath is not null)
+        {
+            watcher = new MailWatcher(new MailWatcherOptions(
+                resolvedMailDir, watchPath, handlersPath, sseOptions.TrailPath,
+                dispatcher, () => harnesses.Current.Get(MailNudgeEvent.HarnessName), () => policy.Current,
+                presence, clk, stats, watchPoll));
+            watcher.Start();
+        }
 
         // Drain triggers: real SIGTERM/SIGINT in production, `ct` in tests —
         // one linked source, one code path. ctx.Cancel = true claims the
@@ -309,6 +330,10 @@ public static class DaemonHost
         // § Loopback TCP — a synchronous call here would wedge the whole drain
         // before daemon.drainStart and never release the version lock).
         api?.Stop();
+        // The watcher's pump ends with the intake: no new evaluation, no new
+        // nudge. A turn already woken is a dispatch like any other — phases 1
+        // and 3 below give it its chance and then cut it with the children.
+        if (watcher is not null) await watcher.DisposeAsync();
         Log.Info("daemon", "daemon.drainStart", new LogFields
         {
             Data = new Dictionary<string, object>
