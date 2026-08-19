@@ -1582,7 +1582,18 @@ run live*. The framework underneath is what exists today.
   cursors, on the reducer golden's precedent), `MailWatchTests` (15); C# suite
   green twice. Docs: ADR-0017 d4 as-built note +
   Ground truth row; `doc/flow/mailbox-bus.md` § the robot channel gains the
-  brain's diagram row, its three-rule protocol and the restart story.)
+  brain's diagram row, its three-rule protocol and the restart story.
+  **Review pass (fable, 2026-08-18, after the dead-mailbox rule landed on top):**
+  the protocol held; three things fixed in place — `mail watch --once` behind
+  a hook (exec-wire stdin) now reports on stderr and answers one noop line on
+  stdout, where as built it would have failed every dispatch and lost its own
+  trail line to the kill; `WatchedEnvelope.Role` → `Subject` before phase 4
+  freezes it into `nudges.jsonl` (golden regenerated, rename only); the dead
+  pass tracks before it gates, like the role pass. Two things pinned forward
+  rather than fixed: a robot turn's own ephemeral cursor is a future
+  dead-mailbox candidate (→ `turn-claude-payload`, read `--as` a registered
+  mailbox), and the gatherer's per-mailbox store reads (→ `watcher-actor`,
+  read once per evaluation).)
   Slices landed: `role-kind-inference` (2026-08-18; phase 2 — what KIND of thing
   holds a role, and whether anybody is home. Two questions kept apart on purpose,
   because d4's brain takes them as separate inputs and answering one with the
@@ -1804,7 +1815,15 @@ run live*. The framework underneath is what exists today.
   `RoleKindsTests`, two `MailNudgeEventTests`; suite 1328 → 1355 green twice.
   Docs: ADR-0018 d6 detection ground-truth row + the slice marked landed;
   `doc/flow/mailbox-bus.md` § the robot channel gains § *The second rule* and a
-  ground-truth row, and its diagram grows the per-mailbox lane.)
+  ground-truth row, and its diagram grows the per-mailbox lane.
+  **Review pass (fable, 2026-08-18):** the dead pass now tracks stranded
+  envelopes BEFORE the reaper-channel gate (installing the reaper's payload
+  later no longer restarts every box's clock), and the state key is spelled
+  `WatchedEnvelope.Subject`. Named, not fixable here: a robot turn's own
+  ephemeral cursor is indistinguishable from a dead human window, so
+  `turn-claude-payload` must read `--as` a registered mailbox — pinned on that
+  ADR-0017 row and as 0018 sequencing risk (a′); `reaper-payloads` and the e2e
+  assume it.)
   Slices landed: `reap-verb` (2026-08-18; phase 3, slice 7 — `captainHook mail
   reap <address> [--by <address>]`, the mechanism half of d6. The POWER is not
   new: ADR-0016 d13 already says a cursor file is deletable at any moment, and

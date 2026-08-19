@@ -99,6 +99,16 @@ namespace CaptainHook.Core;
 //     different budgets share it, and the strictest bound applies; a generous
 //     rule's spend can therefore hold a strict rule's mail until the window
 //     frees. Write one budget per role.
+//   * (Review pass, 2026-08-18.) A ROBOT'S OWN CURSOR IS A FUTURE CORPSE. A turn
+//     payload runs a fresh session per turn, and that session's `mail digest`
+//     leaves an ephemeral `role@<sessionId>` cursor behind — unnamed, with a
+//     cursor file, never live again. The moment the next broadcast lands it
+//     holds pending mail with no live session, and the dead-mailbox rule below
+//     cannot tell it from a human's window that died: with a `reaper` rule on,
+//     the reaper is woken once per past robot turn per new broadcast. The
+//     brain has no fact to exempt it on; the fix is the turn payload's — read
+//     `--as` a REGISTERED durable mailbox, which `IsRegisteredMailbox` exempts —
+//     and is pinned on ADR-0017's `turn-claude-payload` row.
 //
 // **The second rule this file holds: DEAD MAILBOXES** (ADR-0018 d6, slice
 // `watcher-dead-mailbox-rule`). The rule above is about a ROLE falling behind,
@@ -128,11 +138,17 @@ namespace CaptainHook.Core;
 public sealed record WatchedMailbox(
     MailAddress Address, IReadOnlyList<PendingMail> Pending, bool HasCursor = true);
 
-/// The brain's memory of one envelope for one role: when it first went unread,
-/// when its quiet clock last (re)started, and how often it has been nudged.
+/// The brain's memory of one envelope for one SUBJECT: when it first went
+/// unread, when its quiet clock last (re)started, and how often it has been
+/// nudged. The subject is the key the brain tracked it under — a ROLE for the
+/// role rule, a mailbox ADDRESS (`role@instance`) for the dead-mailbox rule —
+/// exactly `MailNudge.Subject`, so `Record` matches on the same string. Named
+/// `Subject` rather than `Role` on purpose: phase 4 persists this record as-is,
+/// and a field called `role` holding `maintainer@abc` would be a lie frozen
+/// into `nudges.jsonl`.
 /// All stamps are MONOTONIC milliseconds of the process that wrote them — see
 /// `NudgeState.ToAges` for how they cross a restart.
-public sealed record WatchedEnvelope(string Role, string Id, long FirstSeenMs, long QuietSinceMs, int Nudged);
+public sealed record WatchedEnvelope(string Subject, string Id, long FirstSeenMs, long QuietSinceMs, int Nudged);
 
 /// One nudge that was recorded for a role, for the sliding `perRoleHour` window.
 public sealed record RoleNudge(string Role, long AtMs);
@@ -140,7 +156,7 @@ public sealed record RoleNudge(string Role, long AtMs);
 /// The same two lists as durations from a moment rather than stamps of one —
 /// the ONLY form in which the state may leave the process (phase 4's
 /// `nudges.jsonl` writes exactly this). See `NudgeState.ToAges`.
-public sealed record WatchedEnvelopeAges(string Role, string Id, long UnreadForMs, long QuietForMs, int Nudged);
+public sealed record WatchedEnvelopeAges(string Subject, string Id, long UnreadForMs, long QuietForMs, int Nudged);
 public sealed record RoleNudgeAges(string Role, long AgoMs);
 public sealed record NudgeStateAges(IReadOnlyList<WatchedEnvelopeAges> Envelopes, IReadOnlyList<RoleNudgeAges> Nudges);
 
@@ -172,7 +188,7 @@ public sealed record NudgeState(IReadOnlyList<WatchedEnvelope> Envelopes, IReadO
         var ids = new HashSet<string>(nudge.EnvelopeIds, StringComparer.Ordinal);
         var subject = nudge.Subject;
         var envelopes = Envelopes.Select(e =>
-            e.Role == subject && ids.Contains(e.Id)
+            e.Subject == subject && ids.Contains(e.Id)
                 ? e with { QuietSinceMs = nowMs, Nudged = charged ? e.Nudged + 1 : e.Nudged }
                 : e).ToList();
         IReadOnlyList<RoleNudge> nudges = charged
@@ -201,12 +217,12 @@ public sealed record NudgeState(IReadOnlyList<WatchedEnvelope> Envelopes, IReadO
     /// rule — fewer nudges, again the conservative direction.
     public NudgeStateAges ToAges(long nowMs) => new(
         Envelopes.Select(e => new WatchedEnvelopeAges(
-            e.Role, e.Id, Math.Max(0, nowMs - e.FirstSeenMs), Math.Max(0, nowMs - e.QuietSinceMs), e.Nudged)).ToList(),
+            e.Subject, e.Id, Math.Max(0, nowMs - e.FirstSeenMs), Math.Max(0, nowMs - e.QuietSinceMs), e.Nudged)).ToList(),
         Nudges.Select(n => new RoleNudgeAges(n.Role, Math.Max(0, nowMs - n.AtMs))).ToList());
 
     public static NudgeState FromAges(NudgeStateAges ages, long nowMs) => new(
         ages.Envelopes.Select(e => new WatchedEnvelope(
-            e.Role, e.Id, nowMs - Math.Max(0, e.UnreadForMs), nowMs - Math.Max(0, e.QuietForMs), Math.Max(0, e.Nudged))).ToList(),
+            e.Subject, e.Id, nowMs - Math.Max(0, e.UnreadForMs), nowMs - Math.Max(0, e.QuietForMs), Math.Max(0, e.Nudged))).ToList(),
         ages.Nudges.Select(n => new RoleNudge(n.Role, nowMs - Math.Max(0, n.AgoMs))).ToList());
 }
 
@@ -343,8 +359,8 @@ public static class WatcherBrain
         // First entry wins on a duplicated (role, id): the state will one day
         // come off a file (phase 4), and a doubled line must not take the
         // brain down.
-        var prior = new Dictionary<(string Role, string Id), WatchedEnvelope>();
-        foreach (var e in input.State.Envelopes) prior.TryAdd((e.Role, e.Id), e);
+        var prior = new Dictionary<(string Subject, string Id), WatchedEnvelope>();
+        foreach (var e in input.State.Envelopes) prior.TryAdd((e.Subject, e.Id), e);
         var tracked = new List<WatchedEnvelope>();
         var nudges = new List<MailNudge>();
         var reports = new List<WatchRoleVerdict>();
@@ -567,7 +583,7 @@ public static class WatcherBrain
     private static IReadOnlyList<WatchDeadMailbox> DeadMailboxes(
         WatchInput input,
         IReadOnlyList<WatchRule> rules,
-        Dictionary<(string Role, string Id), WatchedEnvelope> prior,
+        Dictionary<(string Subject, string Id), WatchedEnvelope> prior,
         List<WatchedEnvelope> tracked,
         List<MailNudge> nudges,
         Dictionary<string, int> emitted,
@@ -598,6 +614,34 @@ public static class WatcherBrain
                 reports.Add(new WatchDeadMailbox(
                     address, box.Address.Role, standing, box.Pending.Count, freshest, next, detail));
 
+            if (RolePresence.AnyLiveSession(box.Address.Role, cursor, input.Presence, TimeSpan.FromMilliseconds(LiveWithinMs)))
+            {
+                // Not dead — and deliberately NOT tracked: a box that comes back
+                // to life leaves the state, and if it goes silent again its
+                // quiet counts from that silence, not from the first one.
+                next = Min(next, now + (LiveWithinMs - (freshest ?? 0)) + 1);
+                nextCheck = Min(nextCheck, next!.Value);
+                Report(WatchStanding.LiveSession,
+                    $"{box.Pending.Count} pending, but this mailbox's own session dispatched {Dur(freshest ?? 0)} ago — not dead");
+                continue;
+            }
+
+            // Track every stranded envelope BEFORE asking whether anything can
+            // be woken for it — the same order as the role rule, for the same
+            // reason: quiet accrues from the first sighting, and installing the
+            // reaper's turn payload later must not restart every dead box's
+            // clock because the brain declined to remember while there was no
+            // one to tell.
+            var entries = new List<(WatchedEnvelope Entry, PendingMail Mail)>();
+            foreach (var mail in box.Pending)
+            {
+                var entry = prior.TryGetValue((address, mail.Envelope.Id), out var have)
+                    ? have
+                    : new WatchedEnvelope(address, mail.Envelope.Id, now, now, 0);
+                entries.Add((entry, mail));
+                tracked.Add(entry);
+            }
+
             // The reaper channel has to exist at all — d3's gate, asked of the
             // role the nudge would GO to. A human-held reaper is a role whose
             // window would learn nothing (a dead-mailbox nudge puts no mail in
@@ -608,25 +652,6 @@ public static class WatcherBrain
                 Report(input.Kinds.Of(ReaperRole) == RoleKind.HumanHeld ? WatchStanding.HumanHeld : WatchStanding.Unserved,
                     $"a rule names {ReaperRole}, but no turn payload is installed for it — nothing can be woken to tend this box");
                 continue;
-            }
-
-            if (RolePresence.AnyLiveSession(box.Address.Role, cursor, input.Presence, TimeSpan.FromMilliseconds(LiveWithinMs)))
-            {
-                next = Min(next, now + (LiveWithinMs - (freshest ?? 0)) + 1);
-                nextCheck = Min(nextCheck, next!.Value);
-                Report(WatchStanding.LiveSession,
-                    $"{box.Pending.Count} pending, but this mailbox's own session dispatched {Dur(freshest ?? 0)} ago — not dead");
-                continue;
-            }
-
-            var entries = new List<(WatchedEnvelope Entry, PendingMail Mail)>();
-            foreach (var mail in box.Pending)
-            {
-                var entry = prior.TryGetValue((address, mail.Envelope.Id), out var have)
-                    ? have
-                    : new WatchedEnvelope(address, mail.Envelope.Id, now, now, 0);
-                entries.Add((entry, mail));
-                tracked.Add(entry);
             }
 
             var triage = TriageEntries(entries, rules, now);

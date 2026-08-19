@@ -26,9 +26,22 @@ namespace CaptainHook.Mail;
 //   * The dispatcher. A dry verdict costs nothing and spends nothing; the nudge
 //     it prints is the value the actor would hand `MailNudgeEvent.DispatchAsync`.
 //
-// The output is a human's, on stdout, and one `watch.verdict` trail line — so a
+// The output is a human's report and one `watch.verdict` trail line — so a
 // window that wires this behind a hook for a dogfood week leaves a record of
 // what the brain would have done, and the field report can be written from it.
+//
+// WHERE the report goes depends on who is asking, because stdout is not the
+// same channel in the two shapes stdin can take. On a terminal (hook-shaped
+// JSON, or nothing) the report is stdout, like any CLI. Behind a hook — the
+// exec-wire envelope on stdin — stdout is the ANSWER channel: the engine reads
+// exactly one JSON line off it and kills the child on anything else
+// (`ExecHandler`, `exec.protocolError`), which would both fail every dispatch
+// and, since the kill lands after the first line, lose the very trail record
+// this verb exists to leave. So in that shape the report goes to stderr (which
+// the engine drains onto the trail), the trail line is written FIRST, and
+// stdout carries the one line the wire wants: `{"effect":"noop","dispatchId"}`
+// — the same spelling `mail digest` answers with, because a watch never
+// changes a hook's outcome.
 public static class MailWatch
 {
     public const string Usage =
@@ -68,13 +81,19 @@ public static class MailWatch
             return 1;
         }
 
-        var session = ReadSession(stdin);
+        var (session, execWire) = ReadSession(stdin);
         var now = nowMs ?? Environment.TickCount64;
+
+        // Behind a hook the human report is stderr and stdout is the wire's;
+        // on a terminal both are the terminal's stdout. Everything below writes
+        // the report through `report`, and only the wire answer touches
+        // `stdout` directly.
+        var report = execWire is null ? stdout : stderr;
 
         // ---- the inputs, each named on the report ------------------------------
         var resolution = WatchResolution.Resolve(WatchRules.ResolvePath(watchPath));
         var rules = resolution.Effective();
-        stdout.WriteLine(resolution switch
+        report.WriteLine(resolution switch
         {
             WatchResolution.Absent => "watch.json: absent — no rules, so no robot nudge can ever fire",
             WatchResolution.Malformed m => $"watch.json: malformed — no robot nudge can fire until it parses ({m.Error})",
@@ -83,13 +102,13 @@ public static class MailWatch
 
         var handlers = ExecHandlersFile.Resolve(ExecHandlersFile.ResolvePath(handlersPath));
         var kinds = RoleKinds.From(handlers);
-        stdout.WriteLine(handlers is ExecHandlersResolution.Loaded
+        report.WriteLine(handlers is ExecHandlersResolution.Loaded
             ? $"handlers.json: turn payload on mail-nudge: {(kinds.TurnPayloadInstalled ? "installed" : "none")}; human-held roles: "
               + (kinds.HumanHeld.Count == 0 ? "none" : string.Join(", ", kinds.HumanHeld.Order(StringComparer.Ordinal)))
             : "handlers.json: absent or malformed — nothing registered, every role is unserved");
 
         IReadOnlyList<(string Session, long AgeMs)> presence = session is null ? [] : [(session, 0L)];
-        stdout.WriteLine(session is null
+        report.WriteLine(session is null
             ? "presence: not visible from the CLI (the daemon's own view) — no session treated as live"
             : $"presence: only what the CLI can claim — the calling session {session} is live now; no other window is visible from here");
 
@@ -101,35 +120,35 @@ public static class MailWatch
         // before any threshold. The state carries the pretence, so the brain
         // itself is untouched — the same function, a different memory.
         var state = asIfQuiet ? QuietForever(mailboxes, now) : NudgeState.Empty;
-        stdout.WriteLine(asIfQuiet
+        report.WriteLine(asIfQuiet
             ? "state: --as-if-quiet — every unread envelope treated as past every quiet threshold"
             : "state: none — every unread envelope is first seen now, so no quiet threshold has been crossed (add --as-if-quiet to see past it)");
 
         // ---- the decision ---------------------------------------------------------
         var verdict = WatcherBrain.Evaluate(new WatchInput(mailboxes, presence, kinds, rules, state, now));
 
-        stdout.WriteLine();
+        report.WriteLine();
         if (verdict.Roles.Count == 0)
-            stdout.WriteLine("no rule names a role — nothing to evaluate");
+            report.WriteLine("no rule names a role — nothing to evaluate");
         foreach (var r in verdict.Roles)
         {
             var live = r.FreshestDispatchAgeMs is { } age ? $"freshest dispatch {WatcherBrain.Dur(age)} ago" : "no dispatch seen";
-            stdout.WriteLine($"{r.Role}: {Wire(r.Kind)} · {r.Unread} unread · {live} · {Wire(r.Standing)} — {r.Detail}");
+            report.WriteLine($"{r.Role}: {Wire(r.Kind)} · {r.Unread} unread · {live} · {Wire(r.Standing)} — {r.Detail}");
         }
         foreach (var d in verdict.Dead)
         {
             var seen = d.FreshestDispatchAgeMs is { } age ? $"freshest dispatch {WatcherBrain.Dur(age)} ago" : "no dispatch seen";
-            stdout.WriteLine($"{d.Address}: dead-mailbox candidate · {d.Stranded} stranded · {seen} · {Wire(d.Standing)} — {d.Detail}");
+            report.WriteLine($"{d.Address}: dead-mailbox candidate · {d.Stranded} stranded · {seen} · {Wire(d.Standing)} — {d.Detail}");
         }
         foreach (var n in verdict.Nudges)
         {
-            stdout.WriteLine();
-            stdout.WriteLine($"WOULD NUDGE {n.Role}{(n.Address is { } about ? $" about {about}" : "")}: {string.Join(", ", n.EnvelopeIds)}");
-            stdout.WriteLine($"  reason: {n.Reason}");
-            foreach (var line in n.Digest.Split('\n')) stdout.WriteLine("  | " + line);
+            report.WriteLine();
+            report.WriteLine($"WOULD NUDGE {n.Role}{(n.Address is { } about ? $" about {about}" : "")}: {string.Join(", ", n.EnvelopeIds)}");
+            report.WriteLine($"  reason: {n.Reason}");
+            foreach (var line in n.Digest.Split('\n')) report.WriteLine("  | " + line);
         }
-        stdout.WriteLine();
-        stdout.WriteLine(verdict.NextCheckMs is { } next
+        report.WriteLine();
+        report.WriteLine(verdict.NextCheckMs is { } next
             ? $"next check: in {WatcherBrain.Dur(next - now)}"
             : "next check: nothing armed");
 
@@ -157,6 +176,11 @@ public static class MailWatch
                 ["nextCheckInMs"] = verdict.NextCheckMs is { } nc ? nc - now : (object)"none",
             },
         });
+
+        // Last, and only here: the one line the exec wire reads. After the trail
+        // line and the report, so a child the engine reaps the instant it has
+        // its answer has already left its record.
+        if (execWire is not null) stdout.WriteLine(MailDigest.Noop(execWire.DispatchId));
         return 0;
     }
 
@@ -261,19 +285,21 @@ public static class MailWatch
     }
 
     /// The calling session, from either shape stdin can carry: an exec-wire
-    /// envelope (this verb behind a hook registration) or hook-shaped JSON (a
-    /// status-line style caller, or a human's `printf`). Neither present ⇒ null:
-    /// nobody is claimed live, and the report says so.
-    private static string? ReadSession(TextReader stdin)
+    /// envelope (this verb behind a hook registration — returned as `ExecWire`,
+    /// because its presence decides where the report goes and what stdout owes
+    /// the engine) or hook-shaped JSON (a status-line style caller, or a
+    /// human's `printf`). Neither present ⇒ null session: nobody is claimed
+    /// live, and the report says so.
+    private static (string? Session, DigestRequest? ExecWire) ReadSession(TextReader stdin)
     {
         string text;
         try { text = stdin.ReadToEnd(); }
-        catch (IOException) { return null; }
-        if (string.IsNullOrWhiteSpace(text)) return null;
+        catch (IOException) { return (null, null); }
+        if (string.IsNullOrWhiteSpace(text)) return (null, null);
 
         var firstLine = text.Split('\n', 2)[0];
-        if (MailDigest.TryParseRequest(firstLine, out _) is { } req) return req.SessionId;
-        return MailStatus.ReadCaller(new StringReader(text)).Session;
+        if (MailDigest.TryParseRequest(firstLine, out _) is { } req) return (req.SessionId, req);
+        return (MailStatus.ReadCaller(new StringReader(text)).Session, null);
     }
 
     private static string Wire(RoleKind k) => k switch

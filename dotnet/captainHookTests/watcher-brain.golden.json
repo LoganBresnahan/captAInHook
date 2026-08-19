@@ -37,14 +37,14 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
               "nudged": 0
             },
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-02",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -91,7 +91,7 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-02",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -125,7 +125,7 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -159,7 +159,7 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -206,7 +206,7 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "u-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -240,14 +240,14 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
               "nudged": 1
             },
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-02",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -332,14 +332,14 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer@s-dead",
+              "subject": "reviewer@s-dead",
               "id": "m-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
               "nudged": 0
             },
             {
-              "role": "reviewer@s-dead",
+              "subject": "reviewer@s-dead",
               "id": "m-02",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -396,7 +396,7 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "u-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
@@ -454,21 +454,21 @@
         "state": {
           "envelopes": [
             {
-              "role": "reviewer",
+              "subject": "reviewer",
               "id": "m-01",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
               "nudged": 0
             },
             {
-              "role": "ops",
+              "subject": "ops",
               "id": "m-02",
               "firstSeenMs": 0,
               "quietSinceMs": 0,
               "nudged": 0
             },
             {
-              "role": "ops",
+              "subject": "ops",
               "id": "m-03",
               "firstSeenMs": 0,
               "quietSinceMs": 0,

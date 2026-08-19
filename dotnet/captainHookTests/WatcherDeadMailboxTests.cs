@@ -105,6 +105,10 @@ public class WatcherDeadMailboxTests
         Assert.Equal(expected, Assert.Single(v.Dead).Standing);
         Assert.Empty(v.Nudges);
         Assert.Null(v.NextCheckMs);
+        // …but the stranded envelope IS remembered under the box's address, so
+        // installing the reaper's turn payload later does not restart its
+        // quiet clock — the same order as the role rule.
+        Assert.Single(v.State.Envelopes, e => e.Subject == "reviewer@s-1" && e.Id == "m-1" && e.FirstSeenMs == 0);
     }
 
     // ---- the four conditions --------------------------------------------------
@@ -320,7 +324,7 @@ public class WatcherDeadMailboxTests
         var after = v.State.Record(Assert.Single(v.Nudges), nowMs: 60 * Min);
 
         var entry = Assert.Single(after.Envelopes);
-        Assert.Equal("reviewer@s-1", entry.Role);
+        Assert.Equal("reviewer@s-1", entry.Subject);
         Assert.Equal(60 * Min, entry.QuietSinceMs);          // quiet restarted
         Assert.Equal(1, entry.Nudged);
         Assert.Equal(WatcherBrain.ReaperRole, Assert.Single(after.Nudges).Role);
@@ -372,7 +376,7 @@ public class WatcherDeadMailboxTests
         var box = Box("reviewer", "s-1", Mail("m-1", 0), Mail("m-2", 1));
         var first = WatcherBrain.Evaluate(Input([box], now: 0));
         Assert.Equal(2, first.State.Envelopes.Count);
-        Assert.All(first.State.Envelopes, e => Assert.Equal("reviewer@s-1", e.Role));
+        Assert.All(first.State.Envelopes, e => Assert.Equal("reviewer@s-1", e.Subject));
 
         var reaped = WatcherBrain.Evaluate(Input([Box("reviewer", "s-1", Mail("m-2", 1))], now: 5 * Min, state: first.State));
         var kept = Assert.Single(reaped.State.Envelopes);

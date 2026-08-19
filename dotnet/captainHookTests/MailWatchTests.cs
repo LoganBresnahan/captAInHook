@@ -116,18 +116,50 @@ public class MailWatchTests
     }
 
     /// Behind a hook the stdin is an exec-wire envelope; the session rides in it.
+    /// Behind a hook, stdin is the exec-wire envelope — and stdout is the WIRE:
+    /// the engine reads exactly one JSON line off it and kills the child on
+    /// anything else. So the report moves to stderr, the trail line is written
+    /// before the answer, and stdout is exactly `mail digest`'s noop, dispatchId
+    /// echoed. Without this the verb's own header comment ("wire it behind a
+    /// hook for a dogfood week") described a payload that failed every dispatch
+    /// with `exec.protocolError` and lost its `watch.verdict` line to the kill.
     [Fact]
-    public void ExecWireStdin_NamesTheSessionToo()
+    public void ExecWireStdin_NamesTheSessionToo_ReportsOnStderr_AndAnswersNoopOnTheWire()
     {
         using var w = new WatchWorld();
+        using var log = new CapturedLog();
         w.Register(TurnPayload("turn-claude"), Digest("mail-digest-reviewer", "reviewer"));
         w.Rules(Rule("reviewer", quietFor: "0s"));
         w.Send("m-00", "reviewer");
         w.Digest("reviewer", "s-7");
         w.Send("m-01", "reviewer", MailPriority.Urgent);
-        var (_, lines, _) = w.Run(stdin: DigestFixtures.Request("d-9", "UserPromptSubmit", "s-7"));
-        Assert.Contains(lines, l => l.Contains("the calling session s-7 is live now"));
-        Assert.Contains(lines, l => l.Contains("· live-session —"));
+        var (exit, lines, err) = w.Run(stdin: DigestFixtures.Request("d-9", "UserPromptSubmit", "s-7"));
+
+        Assert.Equal(0, exit);
+        // stdout: one line, the wire's, and nothing else — not even a trailing blank.
+        var answer = Assert.Single(lines.Where(l => l.Length > 0));
+        Assert.Equal("""{"effect":"noop","dispatchId":"d-9"}""", answer);
+        // stderr: the whole human report.
+        Assert.Contains("the calling session s-7 is live now", err);
+        Assert.Contains("· live-session —", err);
+        Assert.Contains("next check:", err);
+        // and the trail line, before the answer could have let the engine reap us.
+        Assert.Single(log.Events, e => e.Evt == "watch.verdict" && e.Fields.SessionId == "s-7");
+    }
+
+    /// Hook-shaped or empty stdin is a terminal: the report is stdout, and
+    /// nothing wire-shaped is printed — a human's `printf` must not see a noop.
+    [Fact]
+    public void TerminalStdin_ReportsOnStdout_AndAnswersNothing()
+    {
+        using var w = new WatchWorld();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("reviewer", quietFor: "0s"));
+        w.Send("m-01", "reviewer", MailPriority.Urgent);
+        var (_, lines, err) = w.Run(stdin: JsonSerializer.Serialize(new { session_id = "s-3" }));
+        Assert.Contains(lines, l => l.StartsWith("next check:"));
+        Assert.DoesNotContain(lines, l => l.Contains("\"effect\""));
+        Assert.Equal("", err);
     }
 
     // ---- state: none, unless --as-if-quiet -----------------------------------------------

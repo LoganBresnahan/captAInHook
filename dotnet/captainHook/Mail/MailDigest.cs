@@ -780,7 +780,7 @@ public static class MailDigest
         return null;
     }
 
-    private static string Noop(string? dispatchId) =>
+    internal static string Noop(string? dispatchId) =>
         dispatchId is null
             ? """{"effect":"noop"}"""
             : $$"""{"effect":"noop","dispatchId":"{{JsonEncodedText.Encode(dispatchId)}}"}""";
