@@ -409,10 +409,11 @@ that would otherwise bite first: a mailbox's cursor is a *file* named
 address past ~242 characters was already a mailbox whose cursor could never be
 written.
 
-Nothing fills `replyTo` yet. `mail ask` (ADR-0017) will, from the caller's own
+**`mail ask` fills it** (slice `mail-ask-wait`, below), from the caller's own
 registration the way `mail status` learns it — a sender that spells its own
 address by hand can get it wrong, and a wrong return address misroutes answers
-silently, the one failure this whole design is against.
+silently, the one failure this whole design is against. When the registrations
+name no mailbox, or two, the verb refuses rather than picking.
 
 ### The thread: a depth that is stored, and a request that gets closed (ADR-0017 d8)
 
@@ -473,6 +474,45 @@ the reducer: it can only ever be a superset.
 There is deliberately **no hop chain-fault kind**. A rotated-away parent must
 never read as tampering — and a retroactive edit of a stored depth is already a
 `PrevMismatch`, because the number rides the hashed bytes.
+
+### Asking, and waiting: the one synchronous shape (ADR-0017 d8)
+
+```
+  captainHook mail ask --to reviewer --topic "hops?" --wait 60   < question.txt
+        │
+        ├─ replyTo ← --reply-to, else THIS workspace's own registrations
+        │            (0 or 2+ ⇒ refuse: an answer with nowhere to go)
+        ├─ append ─────────────────────────────► mail.jsonl   (a `request`, depth 0)
+        │
+        └─ poll the LEDGER every 500ms until min(--wait, tool timeout, 600s)
+              ├─ an `answer` naming this id ⇒ print it
+              └─ deadline ⇒ "unanswered after Ns (which bound)" · exit 0
+```
+
+There is no transport here and no daemon in the loop. `--wait` is a bounded
+READ of the same file everything else reads, and the asker *chooses* to yield
+its turn to it — which is the only synchronous shape ADR-0016 d9 was willing to
+admit ("daemon-hosted; MCP-shaped" reads as "a verb the agent runs").
+
+**Waiting is not delivering.** The poll moves no cursor, so an answer the verb
+prints is still pending for the asker's own digest and arrives again at its next
+seam. Consuming it here would be a write from a read-shaped verb, and an
+interrupted wait would have eaten the answer outright: seeing it twice is
+recoverable, losing it is not.
+
+**Three deadlines, and the output names the one that fired** (N4). A harness
+with a hard tool timeout truncates a blocked call, and the engine cannot know
+that number — it belongs to the thing running the tool — so the installation
+declares it in `CAPTAINHOOK_ASK_TOOL_TIMEOUT_S`, and the wait is the shortest of
+that, `--wait`, and the verb's own 600s cap. All of it is monotonic
+(`Stopwatch`, injected in tests), the deadline is checked before the first nap
+so `--wait 0` still reads once, and the last nap is the remainder rather than a
+poll interval past the end.
+
+An expired wait exits **0**: the request was written and is on the chain, so an
+agent chaining on `&&` should carry on, and the line says where the answer will
+turn up instead. Only `kind: answer` ends a wait — a status quoting the request
+is a comment on it, the same rule the read model's closed-by index follows.
 
 ## Provenance, and the ledger's other direction
 
@@ -1215,6 +1255,7 @@ prose, not ground truth.
 | `forwardedFrom` PROVENANCE (ADR-0018 d8, slice 4) — `{id, address}` on the envelope, the second and last envelope-to-envelope reference. The id is validated PRESENCE-ONLY (the ledger rotates; a forward that stopped parsing when its original aged out would destroy the provenance it exists to keep), the ADDRESS is grammar-checked (an address no sender could write names no mailbox that existed). Object-shaped and strictly walked like `from` — a half-read provenance link would name an origin nobody can check. Carries the address BESIDE the id because the id alone cannot say whose mailbox the mail was stranded in: the original's `to` may be a bare role a dozen mailboxes hold | `MailForwardedFrom` + `ParseForwardedFrom` (`Mail/MailEnvelope.cs`); `MailStore.Render` writes it beside `inReplyTo` and omits it when absent; `MailForwardedFromDto` (`Api/ApiDtos.cs`) → `api.schema.json` → `api.gen.ts` → `MailEnvelopeView.forwardedFrom` (`web/src/mail.ts`, snapshot-only like `body`/`ts`). Nothing READS it yet — the reaper (d6) is what writes one. Pinned by six parse tests + two store round trips |
 | unicast has NO TTL (ADR-0018 d5, slice 2) — `ttlDeliveries` REFUSED on a `role@instance` address (not ignored), `MailEnvelope.TtlDeliveries` nullable, omitted from the stored line and from `mail.append`, null through DTO → reducer → canvas; expiry simply does not run, so a held unicast is never spent. No new write-side guard was needed: `Append` already re-parses what it renders | `MailEnvelope.TryParse` + `HasTtl`; `MailStore.Render`/`Append`; `MailCursors.Pending`'s expiry guard (`MailCursor.cs`); `MailEnvelopeDto`/`MailPendingDto` (`Api/ApiDtos.cs`); `isExpired` + `onAppend`'s ttl-applies rule (`web/src/mail.ts`); the three renderings in `web/src/MailPanel.tsx` (mark reads `n held`, the card reads `none — unicast`, the standing line says unicast mail does not expire). Pinned by the parse table's d5 block, `MailStoreFormatTests.Render_UnicastLine_ReParsesCleanWithNoTtl` + `Append_RefusesAUnicastEnvelopeCarryingATtl` (the adversarial case: a contradiction constructible in process, refused at the append), and `mail.skeptic.test.ts` § 9 |
 | UNICAST ROUTING (ADR-0018 d4, slice 5; d3 AMENDED the same day) — the recipient predicate: a mailbox reads its role's BROADCAST always, plus its own `role@instance` UNICAST. `MailAddress.Accepts` is the one spelling and BOTH of `MailCursors`' recipient filters call it — the pending scan (what may be delivered) and `LoadOrAnchor`'s held-entry check (what a cursor may still hold), the second of which no happy-path drive reaches: a reader HOLDING a unicast is where a disagreement surfaces, as a re-anchor loop that drops held state and redelivers, blaming the store. **The key IS the address** (the amendment): `Pending(MailAddress requested, hookSession)` resolves the mailbox as `role@(Instance ?? hookSession)`, so a window is reachable at `role@<session>` (ephemeral), a `--as` mailbox is durable, and a sessionless reader has no instance and reads broadcast alone. `mail.deliver` gains the `instance` column beside `role`, same write-only-when-named rule as `mail.cursorAdvance`. The read-only snapshot reads every cursor file as the mailbox its name spells — no under-claim | `MailAddress.Accepts` (`Mail/MailAddress.cs`); `MailCursors.Pending(MailAddress, hookSession)` + its 2-arg window overload and `LoadOrAnchor` (`Mail/MailCursor.cs`); `MailDigestOptions.Mailbox` + `LogDelivery` (`Mail/MailDigest.cs`); `MailStatus.Run` passes the address whole (`Mail/MailStatus.cs`); `MailReadPort.Over` (`Mail/MailReadPort.cs`). Pinned by `MailUnicastRoutingTests` (31 — the two predicate tables, the window's-own-address block, sibling invisibility, the held-unicast survival and non-expiry, the ledger column, the snapshot, and the two `answer-by-address` pins) + two `MailStatusTests` cases. The reducer does NOT mirror the predicate yet — `canvas-instances` owns that, and the golden corpus needed no regeneration for the routing (only for `replyTo`, below) |
+| ASK/REPLY as a VERB (ADR-0017 d8, slice `mail-ask-wait`) — `captainHook mail ask --to <address> --topic <t> [--wait <s>]`, body on stdin: composes a `request` (depth 0, the address deciding its TTL) and appends it through the same `MailStore.Append` every writer uses, then optionally polls the LEDGER for an `answer` naming its id. `replyTo` is spelled or inferred from the caller's own registrations, and 0-or-2+ candidates is a refusal with nothing written. Priority defaults to AMBIENT so the verb is not a cheaper way to buy the urgent seam than `mail send` is. The wait is the shortest of `--wait`, `CAPTAINHOOK_ASK_TOOL_TIMEOUT_S` and a 600s cap, and the output names which fired; an expired wait exits 0. No cursor moves and no new trail event exists — `mail.append` is the record | `MailAsk` (`Run`, `Deadline`, `TryParseArgs`, `MaxWaitSeconds`, `PollMs`, `ToolTimeoutEnv`) + `MailAskBound` in `dotnet/captainHook/Mail/MailAsk.cs`, routed from `Program.cs`'s `mail` switch; the return-address lookup is `MailStatus.ReadableMailboxes` (shared, not forked) and the harness comes from `MailDigest.TryParseArgs` over the caller's own registration. Pinned by `dotnet/captainHookTests/MailAskTests.cs` (30 — the argument table, the composed envelope, the two refusals that name what they found, the bound table including a typo'd env value, the answer that lands mid-wait, the status that does not end one, and the pin that a printed answer is still pending for the asker's digest), all with an injected clock and sleeper |
 | THE THREAD (ADR-0017 d8, slice `thread-fields`) — `inReplyTo` becomes READ, and the thread's depth is STORED on the line rather than walked (rotation makes the walk reset counts silently). Parse: optional `hops >= 0`, default 0, REFUSED without a link; the BUDGET is policy, not format. Write: `mail send` stamps `parent + 1` from a resident parent, refuses a disagreeing claim, leaves an absent parent's depth alone, and refuses at `HopBudget` with nothing written. Read: `mail.append` carries `inReplyTo` + `hops` together so the live canvas can close a thread on arrival, and `MailDto.closedBy` is the id→first-`answer` index built over the WHOLE ledger because `?since=` routinely splits a request from its answer. No hop fault kind — a rotated-away parent is not tampering | `MailEnvelope.Hops`/`HopBudget` + the `hops` block in `TryParse` (`Mail/MailEnvelope.cs`); `MailStore.Render` + the trail columns in `Append` (`Mail/MailStore.cs`); `MailSend.WithThreadDepth`/`HopsStated` (`Mail/MailSend.cs`); `MailDigest.ItemBlock`'s `· answers <id> · hop n/N` (`Mail/MailDigest.cs`) and `WatcherBrain.ReplyHow` (a woken turn is told not to write it); `ApiReadModel.ClosedBy` + `MailDto.ClosedBy`/`HopBudget` (`Api/`) → `api.schema.json` → `api.gen.ts` → `MailEnvelopeView.hops` / `MailState.closedBy`/`hopBudget` / `closeThread` (`web/src/mail.ts`) → the detail card's `answers` and `answered by` rows (`web/src/MailPanel.tsx`). Pinned by `dotnet/captainHookTests/MailThreadFieldsTests.cs` (26 — including `AReplyWhoseParentHasRotatedAway_StillCountsItsHops`, the test the deciding answer named, which every derived implementation fails), four thread cases in `web/src/mail.test.ts`, and the `thread-closed` golden scenario |
 | THE RETURN ADDRESS (ADR-0018 d4 as built, slice `answer-by-address`) — `replyTo`: optional top-level address in `to`'s grammar, the thread's routing half beside `inReplyTo`'s correlation half; a property of the REQUEST not the sender (a forward's sender is the reaper, its reply address the asker's); rendered in the digest head `· reply to <address>` verbatim and unclamped; the grammar gains its ONE length bound (`MailAddress.MaxChars` = 120) at parse and at registration so the head stays bounded without a clamp | `MailEnvelope.ReplyTo` + the `replyTo` block in `TryParse` (`Mail/MailEnvelope.cs`); `MailStore.Render` (`Mail/MailStore.cs`); `MailAddress.MaxChars` + `TryParse`'s length gate (`Mail/MailAddress.cs`); `MailDigest.TryParseArgs`' composed-address check + `ItemBlock` (`Mail/MailDigest.cs`); `MailEnvelopeDto.ReplyTo` (`Api/ApiDtos.cs`) → `web/schema/api.schema.json` → `web/src/api.gen.ts` → `MailEnvelopeView.replyTo` (`web/src/mail.ts`) → the detail card's `reply to` row (`web/src/MailPanel.tsx`). Pinned by the replyTo block in `MailEnvelopeTests` (9 cases), two length theories in `MailAddressTests` (4), `MailDigestTests.AnAddressPastTheLengthBound_IsRefusedAtRegistration`, `MailStoreFormatTests.Render_WritesReplyTo_BesideInReplyTo_AndOmitsItWhenAbsent`, and in `MailUnicastRoutingTests` `Render_ShowsTheReturnAddress_InTheHead` + `AnAnswerAddressedToTheRequestsReplyTo_ReachesTheAskerAlone` (the plan's misaddressing pin). Golden corpus: 62 pure `"replyTo": null` insertions. Nothing FILLS it yet — `mail ask` (ADR-0017) will |
 | INSTANCE registration (ADR-0018 d3, slice 3) — `mail digest --as <instance>`; cursor key = role × instance (`--as` ?? session id) so the unnamed path is byte-identical; `--role`/`--as` both grammar-checked at registration; the cursor keys on the instance while the trail keeps the window (`sessionId` = who moved it, a new `instance` column = which mailbox, written only when they differ); `mail status` follows the same key and names a qualified line by its full address | `MailDigestOptions.Instance`/`CursorKey` + `--as` in `MailDigest.TryParseArgs` (`Mail/MailDigest.cs`); `MailPendingView.HookSession`/`Named` and the two `MailCursors.Pending` overloads — the 2-arg one is the SAFE one on purpose, and since d4 it is also the UNNAMED one (`Mail/MailCursor.cs`); `MailStatus.ReadableMailboxes`/`MailboxOf` (`Mail/MailStatus.cs`). Pinned by `MailInstanceRegistrationTests` (13) and four `MailStatusTests` cases; byte-identity proven by the reducer's golden corpus needing no regeneration |

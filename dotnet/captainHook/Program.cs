@@ -78,12 +78,17 @@ switch (inv.Mode)
         // `watch --once` (ADR-0017 d4) runs the watcher's brain once and PRINTS
         // its verdict — verification of the rules, never a schedule; the
         // in-daemon actor is what runs the brain for real.
+        // `ask` (ADR-0017 d8) is `send` with the envelope composed for you and,
+        // with `--wait`, a BOUNDED READ of the ledger afterwards — the one
+        // synchronous shape on the bus, and still no transport: the asker
+        // chooses to yield its turn to a poll it can name the deadline of.
         return inv.EventName switch
         {
             "digest" => CaptainHook.Mail.MailDigest.Run(args[2..], Console.In, Console.Out, Console.Error),
             "status" => CaptainHook.Mail.MailStatus.Run(args[2..], Console.In, Console.Out, Console.Error),
             "reap" => CaptainHook.Mail.MailReap.Run(args[2..], Console.Out, Console.Error),
             "watch" => CaptainHook.Mail.MailWatch.Run(args[2..], Console.In, Console.Out, Console.Error),
+            "ask" => CaptainHook.Mail.MailAsk.Run(args[2..], Console.In, Console.Out, Console.Error),
             _ => CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error),
         };
 

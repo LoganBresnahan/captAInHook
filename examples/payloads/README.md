@@ -141,3 +141,18 @@ your deployment's delivery capability; the Stop/reconcile seam is not wired
 for claude-code yet (its spec declares no Stop effects — ADR-0016 phase 5).
 Mail lands on the bus from anything that can run a process:
 `printf '{...envelope...}' | captainHook mail send`.
+
+To ASK somebody something and wait for the answer, the envelope is composed for
+you (ADR-0017 d8):
+
+```sh
+echo "stored or derived?" | captainHook mail ask --to reviewer --topic hops --wait 60
+```
+
+`--wait` is a bounded READ of the ledger, not a subscription: it prints the
+answer, or `unanswered` and which deadline fired — yours, your harness's
+(declare it once in `CAPTAINHOOK_ASK_TOOL_TIMEOUT_S` so a blocked tool call
+fails closed at the shorter bound), or the verb's own 600s cap. The request is on
+the chain either way, and the answer reaches you through the ordinary digest
+whether you waited or not. The return address comes from your own `mail digest`
+registration above, so an answer knows where to go without you spelling it.

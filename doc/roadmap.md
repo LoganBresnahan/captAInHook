@@ -1531,6 +1531,40 @@ run live*. The framework underneath is what exists today.
   maintainer's own session kept the daemon warm), presence false negatives on a
   `mixed` role, recurrence against `perRoleHour`, and whether `mail ask --wait`
   is actually wanted.
+  Slices landed: `mail-ask-wait` (2026-08-19; phase 2, thread lane — d8's verb,
+  and the first thing that ever fills `replyTo`. `captainHook mail ask --to
+  <address> --topic <t> [--wait <s>]` composes a `request` (depth 0, the address
+  deciding its TTL) and appends it through the same `MailStore.Append` every
+  writer uses — `mail send` stays the universal path for an arbitrary envelope —
+  then, with `--wait`, polls the LEDGER for an `answer` naming its id. No
+  transport, no daemon in the loop: the asker CHOOSES to yield its turn to a
+  bounded read, which is the only synchronous shape ADR-0016 d9 admits.
+  **Where the answer goes is never guessed**: explicit `--reply-to`, else the
+  caller's own `mail digest` registrations through the SAME
+  `MailStatus.ReadableMailboxes` the status line uses (shared, not forked), and
+  zero or two candidates is a refusal naming what it found — an ask whose answer
+  has nowhere to go should fail at the ask, not at the answer. Provenance is
+  learned the same way (`from.agent` = the reply mailbox's role, `from.harness` =
+  what that registration declares, else `cli`, which is honest since a command
+  line really did write it; no session, the write-only member's own shape).
+  `--priority` defaults to AMBIENT on purpose: urgent buys a mid-turn seam and
+  can trip a `watch.json` rule into spending the owner's tokens, and this verb
+  must not be a cheaper way to buy that than `mail send` is. **N4 as built —
+  three bounds, not two:** the wait is the shortest of `--wait`, the
+  installation's declared harness timeout (`CAPTAINHOOK_ASK_TOOL_TIMEOUT_S`, the
+  number the engine cannot know) and the verb's own 600s cap, and the output
+  names which fired; a typo'd env value is ignored rather than made an argument
+  error. The deadline is checked before the first nap (so `--wait 0` reads once
+  and still finds an answer that landed during the append) and the last nap is
+  the remainder, never a poll past the end. **Waiting is not delivering:** the
+  poll moves no cursor, so a printed answer is still pending for the asker's own
+  digest — consuming here would be a write from a read-shaped verb, and an
+  interrupted wait would have eaten it. An expired wait exits 0 and says where
+  the answer will turn up. `MailAskTests` (30) with an injected clock and
+  sleeper, so nothing waits; suite 1445 → 1475 green twice. Docs: ADR-0017 row 2
+  ✅ + N4's as-built note + a Ground truth row; `doc/flow/mailbox-bus.md` gains
+  § *Asking, and waiting* and its row; CLAUDE.md's env list gains the one new
+  variable.)
   Slices landed: `thread-fields` (2026-08-19; phase 1, thread lane — the lane's
   first slice, and the one whose blocking question was answered BY the thing this
   item builds: the 2026-08-19 robot turn decided stored-vs-derived `hops` on the

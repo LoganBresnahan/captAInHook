@@ -138,10 +138,12 @@ public static class MailStatus
         catch (JsonException) { return (null, null); }
     }
 
-    /// The roles this caller may read, sorted, deduped. A role served by two
+    /// The roles this caller may read, sorted, deduped. Shared with `mail ask`
+    /// (ADR-0017 d8), which infers a request's return address from exactly this
+    /// set — one lookup for "which mailboxes are mine", never two. A role served by two
     /// registrations (an ambient seam and an urgent one — the normal shape)
     /// appears once: the cursor is per role × session, not per registration.
-    private static IReadOnlyList<MailAddress> ReadableMailboxes(
+    internal static IReadOnlyList<MailAddress> ReadableMailboxes(
         string? cwd, string? session, string? handlersPath, string? policyPath)
     {
         if (ExecHandlersFile.Resolve(ExecHandlersFile.ResolvePath(handlersPath))
