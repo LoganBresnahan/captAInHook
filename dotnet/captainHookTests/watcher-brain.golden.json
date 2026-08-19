@@ -17,6 +17,13 @@
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
             "workspace": null,
             "address": null,
+            "budget": {
+              "envelope": 1,
+              "perEnvelope": 1,
+              "roleHour": 1,
+              "perRoleHour": 4,
+              "clause": "budget envelope 1/1 · role 1/4 this hour"
+            },
             "subject": "reviewer"
           }
         ],
@@ -71,6 +78,13 @@
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
             "workspace": null,
             "address": null,
+            "budget": {
+              "envelope": 1,
+              "perEnvelope": 1,
+              "roleHour": 1,
+              "perRoleHour": 4,
+              "clause": "budget envelope 1/1 · role 1/4 this hour"
+            },
             "subject": "reviewer"
           }
         ],
@@ -186,6 +200,13 @@
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
             "workspace": null,
             "address": null,
+            "budget": {
+              "envelope": 1,
+              "perEnvelope": 1,
+              "roleHour": 1,
+              "perRoleHour": 4,
+              "clause": "budget envelope 1/1 · role 1/4 this hour"
+            },
             "subject": "reviewer"
           }
         ],
@@ -292,6 +313,13 @@
             "replyHow": "This mailbox is dead: the window that held it is gone and the mail above is stranded there. For each message decide FORWARD (pipe a NEW envelope to `captainHook mail send` addressed to a live role or role@instance, carrying \"forwardedFrom\": {\"id\": <the original id>, \"address\": <this mailbox>}), DROP (leave it — the ledger keeps it either way), or HOLD (do nothing at all and say so). Then remove the standing with `captainHook mail reap <role@instance>` unless you held it.",
             "workspace": null,
             "address": "reviewer@s-dead",
+            "budget": {
+              "envelope": 1,
+              "perEnvelope": 1,
+              "roleHour": 1,
+              "perRoleHour": 4,
+              "clause": "budget envelope 1/1 · role 1/4 this hour"
+            },
             "subject": "reviewer@s-dead"
           }
         ],
@@ -366,6 +394,13 @@
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
             "workspace": null,
             "address": null,
+            "budget": {
+              "envelope": 1,
+              "perEnvelope": 1,
+              "roleHour": 1,
+              "perRoleHour": 4,
+              "clause": "budget envelope 1/1 · role 1/4 this hour"
+            },
             "subject": "reviewer"
           }
         ],
@@ -424,6 +459,13 @@
             "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
             "workspace": null,
             "address": null,
+            "budget": {
+              "envelope": 1,
+              "perEnvelope": 2,
+              "roleHour": 1,
+              "perRoleHour": 4,
+              "clause": "budget envelope 1/2 · role 1/4 this hour"
+            },
             "subject": "ops"
           }
         ],

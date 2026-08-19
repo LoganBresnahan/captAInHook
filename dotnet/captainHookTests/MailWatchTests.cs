@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CaptainHook.Core;
 using CaptainHook.Mail;
 
 namespace CaptainHook.Tests;
@@ -186,9 +187,83 @@ public class MailWatchTests
         w.Rules(Rule("reviewer", quietFor: "10min"));
         w.Send("m-01", "reviewer", MailPriority.Urgent);
         var (_, lines, _) = w.Run(argv: ["--once", "--as-if-quiet"]);
-        Assert.Contains("state: --as-if-quiet — every unread envelope treated as past every quiet threshold", lines);
+        Assert.Contains(lines, l => l.StartsWith("state: --as-if-quiet — every clock pushed past every quiet threshold"));
         Assert.Contains("WOULD NUDGE reviewer: m-01", lines);
         Assert.Contains(lines, l => l.StartsWith("  reason: 1 unread past quiet (596h31m+)"));
+    }
+
+    /// Since `nudge-state-and-trail` the brain's memory is a real file, and
+    /// `--once` reads it: an envelope the daemon has been watching go quiet for
+    /// twelve minutes is due here too, with no `--as-if-quiet` and no pretence.
+    [Fact]
+    public void TheRememberedState_IsRead_SoAQuietClockCrossesForReal()
+    {
+        using var w = new WatchWorld();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("reviewer", quietFor: "10min"));
+        w.Send("m-01", "reviewer", MailPriority.Urgent);
+        w.Remember(("reviewer", "m-01", 12 * 60_000, 0));
+
+        var (_, lines, _) = w.Run();
+        Assert.Contains(lines, l => l.StartsWith("state: nudges.jsonl — 1 envelope(s) remembered"));
+        Assert.Contains("WOULD NUDGE reviewer: m-01", lines);
+        Assert.Contains(lines, l => l.StartsWith("  reason: 1 unread past quiet (12m+)"));
+    }
+
+    /// A state file that cannot be read costs a quiet period and nothing else:
+    /// the verb re-anchors, says the same thing it says on first contact, and
+    /// the reason why is on the trail rather than on the report.
+    [Fact]
+    public void AnUnreadableState_ReanchorsAndReadsAsFirstContact()
+    {
+        using var w = new WatchWorld();
+        using var log = new CapturedLog();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("reviewer", quietFor: "10min"));
+        w.Send("m-01", "reviewer", MailPriority.Urgent);
+        File.WriteAllText(Path.Combine(w.MailDir, NudgeStore.FileName), "{ not a state\n");
+
+        var (_, lines, _) = w.Run();
+        Assert.Contains(lines, l => l.StartsWith("state: none — every unread envelope is first seen now"));
+        Assert.DoesNotContain(lines, l => l.StartsWith("WOULD NUDGE"));
+        Assert.Contains(log.Events, e => e.Evt == "watch.stateReanchor");
+    }
+
+    /// `--as-if-quiet` pretends TIME passed, and a `perEnvelope` budget is not a
+    /// fact about time: an envelope this role has already been nudged about once,
+    /// under a rule that allows one, is not a nudge the preview may promise.
+    [Fact]
+    public void AsIfQuiet_KeepsWhatWasAlreadySpent()
+    {
+        using var w = new WatchWorld();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("reviewer", quietFor: "10min"));
+        w.Send("m-01", "reviewer", MailPriority.Urgent);
+        w.Remember(("reviewer", "m-01", 0, 1));   // perEnvelope 1, already spent
+
+        var (_, lines, _) = w.Run(argv: ["--once", "--as-if-quiet"]);
+        Assert.DoesNotContain(lines, l => l.StartsWith("WOULD NUDGE"));
+        Assert.Contains(lines, l => l.Contains("past their perEnvelope budget"));
+    }
+
+    /// Dry means dry in both directions: the verb reads the memory and never
+    /// writes one. A `--once` that saved would leave the daemon a state nothing
+    /// in the daemon made — charging nothing and restarting nothing.
+    [Fact]
+    public void Once_NeverWritesTheState()
+    {
+        using var w = new WatchWorld();
+        w.Register(TurnPayload("turn-claude"));
+        w.Rules(Rule("reviewer", quietFor: "0s"));
+        w.Send("m-01", "reviewer", MailPriority.Urgent);
+
+        w.Run();
+        Assert.False(File.Exists(Path.Combine(w.MailDir, NudgeStore.FileName)));
+
+        w.Remember(("reviewer", "m-01", 12 * 60_000, 0));
+        var before = File.ReadAllBytes(Path.Combine(w.MailDir, NudgeStore.FileName));
+        w.Run();
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(w.MailDir, NudgeStore.FileName)));
     }
 
     // ---- read-only, and the trail line ------------------------------------------------------
@@ -447,6 +522,16 @@ public class MailWatchTests
                 stdout, stderr, mailDir: MailDir, harnessDir: TestUtil.NoHarnessDir());
             Assert.True(exit == 0, $"digest exited {exit}: {stderr}");
         }
+
+        /// The brain's memory as the daemon would have left it, written at the
+        /// same `Now` the verb runs at — so an age here is the age the verb
+        /// re-derives (`NudgeState.ToAges`/`FromAges`).
+        public void Remember(params (string Subject, string Id, long QuietForMs, int Nudged)[] entries) =>
+            new NudgeStore(MailDir).Save(
+                new NudgeState(
+                    entries.Select(e => new WatchedEnvelope(e.Subject, e.Id, Now - e.QuietForMs, Now - e.QuietForMs, e.Nudged)).ToList(),
+                    []),
+                Now);
 
         public string CursorPath(string role, string? key) =>
             new MailCursors(new MailStore(MailDir)).CursorPath(role, key);

@@ -18,11 +18,16 @@ namespace CaptainHook.Mail;
 //     verdict is computed from, and the report names it. Behind a hook (a
 //     registration on UserPromptSubmit, say) that is the calling window; on a
 //     bare terminal it is nobody.
-//   * STATE. The brain's memory (`nudges.jsonl`) is `nudge-state-and-trail`'s
-//     and does not exist yet, so every unread envelope is first seen NOW and no
-//     `quietFor` threshold has been crossed. `--as-if-quiet` evaluates as though
-//     every threshold already had — the operator's way to see what their rules
-//     WOULD do once time has passed, without waiting for it.
+//   * STATE is READ but never written. Since `nudge-state-and-trail` the
+//     brain's memory is a real file (`mail/nudges.jsonl`, `NudgeStore`), so
+//     `--once` reports what the daemon actually remembers — and, because the
+//     state crosses a process as AGES, the clocks it re-derives are the same
+//     ones the daemon would. What the CLI cannot do is SAVE: a dry verb that
+//     wrote the state would charge nothing and restart nothing, yet leave the
+//     daemon a memory nothing in the daemon made. With no file yet (or a
+//     reanchored one) every unread envelope is first seen NOW, and
+//     `--as-if-quiet` evaluates as though every threshold had already passed —
+//     the operator's way to see what their rules WOULD do, without waiting.
 //   * The dispatcher. A dry verdict costs nothing and spends nothing; the nudge
 //     it prints is the value the actor would hand `MailNudgeEvent.DispatchAsync`.
 //
@@ -116,13 +121,19 @@ public static class MailWatch
         var roles = RolesToWatch(cursors, rules);
         var mailboxes = ReadMailboxes(cursors, roles);
 
+        // The brain's real memory, read and never written (see the header).
+        var nudgeStore = new NudgeStore(cursors.Store.Dir);
+        var remembered = nudgeStore.Load(now);
+
         // `--as-if-quiet`: pretend every envelope has been unread since long
         // before any threshold. The state carries the pretence, so the brain
         // itself is untouched — the same function, a different memory.
-        var state = asIfQuiet ? QuietForever(mailboxes, now) : NudgeState.Empty;
+        var state = asIfQuiet ? QuietForever(mailboxes, now, remembered) : remembered;
         report.WriteLine(asIfQuiet
-            ? "state: --as-if-quiet — every unread envelope treated as past every quiet threshold"
-            : "state: none — every unread envelope is first seen now, so no quiet threshold has been crossed (add --as-if-quiet to see past it)");
+            ? $"state: --as-if-quiet — every clock pushed past every quiet threshold and every budget window aged out; {remembered.Envelopes.Count} remembered perEnvelope count(s) kept"
+            : remembered.Envelopes.Count == 0 && remembered.Nudges.Count == 0
+                ? "state: none — every unread envelope is first seen now, so no quiet threshold has been crossed (add --as-if-quiet to see past it)"
+                : $"state: {NudgeStore.FileName} — {remembered.Envelopes.Count} envelope(s) remembered, {remembered.Nudges.Count} nudge(s) still in an hour window");
 
         // ---- the decision ---------------------------------------------------------
         var verdict = WatcherBrain.Evaluate(new WatchInput(mailboxes, presence, kinds, rules, state, now));
@@ -267,9 +278,25 @@ public static class MailWatch
     /// since, the parser's maximum duration ago — past every threshold a loaded
     /// rule can state. A finite number rather than a sentinel, so the report's
     /// durations render and the brain sees nothing it would not see in life.
-    private static NudgeState QuietForever(IReadOnlyList<WatchedMailbox> mailboxes, long now)
+    ///
+    /// **It is the REMEMBERED state with its clocks moved, not a blank one.**
+    /// The pretence is "that much time has passed", and the two facts time
+    /// changes are the quiet clocks and the sliding hour window — so both are
+    /// pushed back together (`AsIfQuietMs` is far past `RoleWindowMs`, so the
+    /// brain's own pruning frees every window slot). What time does NOT change
+    /// is how often an envelope has already been nudged, so `Nudged` is carried
+    /// through: an operator previewing their rules must still see `perEnvelope`
+    /// spent where it really is spent, or the preview promises nudges the
+    /// budget would refuse.
+    private static NudgeState QuietForever(
+        IReadOnlyList<WatchedMailbox> mailboxes, long now, NudgeState remembered)
     {
         var longAgo = now - AsIfQuietMs;
+        // First entry wins on a duplicated (subject, id) — the brain's own rule
+        // for a state that came off a file.
+        var nudged = new Dictionary<(string, string), int>();
+        foreach (var e in remembered.Envelopes) nudged.TryAdd((e.Subject, e.Id), e.Nudged);
+
         var seen = new HashSet<(string, string)>();
         var entries = new List<WatchedEnvelope>();
         foreach (var box in mailboxes)
@@ -279,9 +306,13 @@ public static class MailWatch
                 // Keying only the role would leave `--as-if-quiet` blind to the
                 // one rule an operator most wants to preview.
                 foreach (var subject in new[] { box.Address.Role, box.Address.ToString() }.Distinct(StringComparer.Ordinal))
-                    if (seen.Add((subject, mail.Envelope.Id)))
-                        entries.Add(new WatchedEnvelope(subject, mail.Envelope.Id, longAgo, longAgo, 0));
-        return new NudgeState(entries, []);
+                {
+                    var key = (subject, mail.Envelope.Id);
+                    if (seen.Add(key))
+                        entries.Add(new WatchedEnvelope(
+                            subject, mail.Envelope.Id, longAgo, longAgo, nudged.GetValueOrDefault(key)));
+                }
+        return new NudgeState(entries, remembered.Nudges.Select(n => n with { AtMs = longAgo }).ToList());
     }
 
     /// The calling session, from either shape stdin can carry: an exec-wire

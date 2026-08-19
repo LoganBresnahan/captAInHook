@@ -34,6 +34,24 @@ namespace CaptainHook.Core;
 //      decision (and the one emitter of the policy trail lines); only callers
 //      that own a stdout go on to build one.
 
+/// What the brain's budgets stood at when it decided this nudge — as NUMBERS,
+/// because the trail row `nudge-state-and-trail` writes must not be a sentence
+/// a reader parses to learn what a poke cost (`mail.nudge`'s `budget`), and
+/// because the reason's prose and the row must come from ONE arithmetic.
+///
+/// `Envelope`/`PerEnvelope` is the per-envelope×subject bound — how many times
+/// the most-nudged envelope in this nudge will have been named, out of what the
+/// governing rule allows. `RoleHour`/`PerRoleHour` is the role's sliding window,
+/// counting this nudge and any decided earlier in the same evaluation. Both are
+/// the values the nudge WOULD spend; a nudge policy denies spends neither
+/// (`MailNudgeOutcome.Ran`), and no `mail.nudge` row is written for it.
+public sealed record MailNudgeBudget(int Envelope, int PerEnvelope, int RoleHour, int PerRoleHour)
+{
+    /// The one rendering of these four numbers as prose. The brain's `Reason`
+    /// sentence uses it, so the sentence and the row can never disagree.
+    public string Clause => $"budget envelope {Envelope}/{PerEnvelope} · role {RoleHour}/{PerRoleHour} this hour";
+}
+
 /// One nudge, as ADR-0017 d5 spells it. `Digest` is rendered by the caller and
 /// deterministic — the watcher's brain is pure (d4), so the text a payload is
 /// woken with is a value, never something this path composes from the store.
@@ -49,7 +67,8 @@ public sealed record MailNudge(
     string Digest,
     string ReplyHow,
     string? Workspace = null,
-    string? Address = null)
+    string? Address = null,
+    MailNudgeBudget? Budget = null)
 {
     /// What the nudge is ABOUT, when that is not simply the role it is sent to.
     /// Set only by the dead-mailbox rule (ADR-0018 d6): the nudge goes to the

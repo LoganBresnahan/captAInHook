@@ -1508,6 +1508,55 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  Slices landed: `nudge-state-and-trail` (2026-08-18; phase 4 — the brain's
+  memory on disk and the one row that says a nudge happened. `NudgeStore`
+  (`Core/NudgeStore.cs`) over `~/.captainHook/mail/nudges.jsonl` stores exactly
+  `NudgeStateAges` — the shape `watcher-brain` fixed, written as DURATIONS and
+  read back as stamps re-derived from the moment of reading, which is the only
+  form in which a monotonic number may cross a process (invariant 2); the gap
+  the daemon was down stays uncounted, as the brain already promised.
+  **The file is APPEND-ONLY and unlocked, and the reader's torn-line tolerance
+  IS the concurrency story.** Each save appends one line holding the whole
+  state; a read takes the LAST line that parses. There is one writer by design
+  (the daemon's watcher — `mail watch --once` is dry), and what a lock would
+  otherwise buy is bought by the reader instead: a crashed or interleaved
+  append can only ever leave a line that does not parse, and such a line is
+  SKIPPED. Losing the tail costs one save (ages that under-count elapsed
+  quiet); losing every line is a REANCHOR to `NudgeState.Empty`, every clock
+  restarted. Both are *fewer nudges, later* — the direction every choice in
+  this subsystem takes — and both leave a line (`watch.stateTorn`,
+  `watch.stateReanchor`), as does a save that could not land
+  (`watch.stateUnwritable`, never a throw: a watcher that cannot remember
+  merely forgets, one that dies stops watching). Past 256 KiB a save rewrites
+  to the single current line through a sibling temp + rename, so it cannot grow
+  forever. Strictness is per LINE, never per file — an unknown `v`, an unknown
+  member, a wrong type or the deferred-unescape trap all reject that line
+  alone, so an older daemon reading a newer one's state re-anchors once and
+  pays exactly one quiet period.
+  **`mail.nudge` (d10) is written only when the dispatch RAN**, by the same
+  `NudgeStore.Record` call that charges the budgets, so a poke on the picture
+  and a spent budget cannot disagree; a denial writes nothing on the mail lane
+  (its record is `nudge.denied`) and the state takes it uncharged, so a refusal
+  recurs once per quiet period rather than once per evaluation. Three of d10's
+  prose columns are as-built calls, each recorded rather than silently dropped:
+  no `channel` (the human channel is a pull and emits nothing, so the column
+  would have one possible value — `mail.reap`'s reasoning), no `sessionId` (a
+  nudge belongs to a role and carries no window; `dispatchId` is what joins the
+  row to the woken turn), and `budget` as NUMBERS rather than the sentence in
+  `reason` — `MailNudgeBudget.Clause` is the one rendering the reason itself
+  uses, so prose and row come from one arithmetic. The canvas does not draw it
+  yet: it folds as the forward-compat `unknown-event` note until
+  `thread-canvas`.
+  `mail watch --once` now READS the state and still writes none — a dry verb
+  that saved would leave the daemon a memory nothing in the daemon made — and
+  `--as-if-quiet` moves the REMEMBERED clocks and the hour window with them
+  while keeping `Nudged`, because a `perEnvelope` count is not a fact about
+  time and a preview must not promise a nudge the budget would refuse.
+  Tests: `NudgeStoreTests` (29), four `MailWatchTests`, two `WireJsonlTests`
+  cross-emitter goldens; suite 1356 → 1391 green twice. The brain golden
+  regenerated for `MailNudgeBudget` — a pure 42-line insertion, no reason text
+  moved. `thread-fields` had not started, so the plan's "land serially, one
+  regen each" constraint had nothing to serialise against.)
   Slices landed: `watcher-brain` (2026-08-18; phase 3 — the decision, as a pure
   function, and the plan's one **fable / high** row on the watcher lane.
   `WatcherBrain.Evaluate(WatchInput) → WatchVerdict`: mailboxes, presence, role

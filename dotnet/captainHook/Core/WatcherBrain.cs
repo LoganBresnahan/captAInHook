@@ -502,14 +502,19 @@ public static class WatcherBrain
             var perEnvelope = chosen.Min(d => d.Rule.Budget.PerEnvelope);
             var envelopeUse = Math.Min(chosen.Max(d => d.Entry.Nudged) + 1, perEnvelope);
             var quietMin = chosen.Min(d => now - d.Entry.QuietSinceMs);
+            // ONE arithmetic, two renderings: the sentence a human reads and
+            // the numbers `mail.nudge` carries come from the same value, so a
+            // reader never has to parse prose to learn what a poke spent
+            // (`NudgeStore.LogNudge`).
+            var budget = new MailNudgeBudget(envelopeUse, perEnvelope, inWindow.Count + 1, perRoleHour);
             var reason =
                 $"{ids.Count} unread past quiet ({Dur(quietMin)}+)"
                 + (chosen.Any(d => d.Rule.When.NoLiveSession) ? " · no live session" : " · live session allowed")
-                + $" · budget envelope {envelopeUse}/{perEnvelope} · role {inWindow.Count + 1}/{perRoleHour} this hour"
+                + $" · {budget.Clause}"
                 + (heldByCap > 0 ? $" · {heldByCap} more due, held for the next nudge by the digest cap" : "")
                 + (spent > 0 ? $" · {spent} more unread but spent" : "")
                 + (heldByPresence > 0 ? $" · {heldByPresence} more due but held for a live session" : "");
-            nudges.Add(new MailNudge(role, ids, reason, digest, ReplyHow));
+            nudges.Add(new MailNudge(role, ids, reason, digest, ReplyHow, Budget: budget));
             emitted[role] = emitted.GetValueOrDefault(role) + 1;
 
             // Projected re-arm: when the caller records this nudge — charged or
@@ -694,13 +699,15 @@ public static class WatcherBrain
             var perEnvelope = chosen.Min(d => d.Rule.Budget.PerEnvelope);
             var envelopeUse = Math.Min(chosen.Max(d => d.Entry.Nudged) + 1, perEnvelope);
             var quietMin = chosen.Min(d => now - d.Entry.QuietSinceMs);
+            var budget = new MailNudgeBudget(envelopeUse, perEnvelope, inWindow.Count + already + 1, perRoleHour);
             var reason =
                 $"dead-mailbox {address} · {ids.Count} stranded past quiet ({Dur(quietMin)}+)"
                 + (freshest is { } age ? $" · no dispatch for {Dur(age)}" : " · no dispatch ever seen")
-                + $" · budget envelope {envelopeUse}/{perEnvelope} · role {inWindow.Count + already + 1}/{perRoleHour} this hour"
+                + $" · {budget.Clause}"
                 + (heldByCap > 0 ? $" · {heldByCap} more stranded, held for the next nudge by the digest cap" : "")
                 + (triage.Spent > 0 ? $" · {triage.Spent} more stranded but spent" : "");
-            nudges.Add(new MailNudge(ReaperRole, ids, reason, digest, ReaperHow, Workspace: null, Address: address));
+            nudges.Add(new MailNudge(
+                ReaperRole, ids, reason, digest, ReaperHow, Workspace: null, Address: address, Budget: budget));
             emitted[ReaperRole] = already + 1;
 
             foreach (var d in chosen) next = Min(next, now + (d.Rule.When.QuietForMs ?? 0));

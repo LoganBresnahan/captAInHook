@@ -199,6 +199,71 @@ public class WireJsonlTests
             wire);
     }
 
+    /// `mail.nudge` (ADR-0017 d10, slice `nudge-state-and-trail`) — the row that
+    /// says a robot turn was WOKEN. A nudge is a trail line and never an
+    /// envelope (mail about mail would recurse), and this is the line the Mail
+    /// canvas draws as a mark on the role's lane. Its `budget` is a NESTED
+    /// OBJECT of numbers rather than the sentence in `reason`, because a reader
+    /// must never parse prose to learn what a poke cost; `dispatchId` — not a
+    /// `sessionId`, which a nudge does not have — is what joins it to the
+    /// `dispatch.start → exec.spawn → exec.exit` rows of the turn it woke. The
+    /// literal below carries the trail's own escaping (`\u00B7` for the reason's
+    /// separators): the golden is the BYTES, not a re-render of them.
+
+    [Fact]
+    public void MailNudge_IdenticalBytes_CarriesTheBudgetAsNumbers()
+    {
+        var (fsharp, wire) = RenderBoth("info", "mail", "mail.nudge",
+            dispatchId: "abc12345",
+            msg: "robot nudge raised: a turn was woken for mail this role had not read",
+            data: new Dictionary<string, object>
+            {
+                ["role"] = "reviewer",
+                ["envelopeIds"] = new List<string> { "m-01", "m-02" },
+                ["reason"] = "2 unread past quiet (12m+) · no live session · budget envelope 1/1 · role 1/4 this hour",
+                ["budget"] = new Dictionary<string, object>
+                {
+                    ["envelope"] = 1, ["perEnvelope"] = 1, ["roleHour"] = 1, ["perRoleHour"] = 4,
+                },
+            });
+
+        Assert.Equal(fsharp, wire);
+        Assert.Equal(
+            // A REGULAR string literal, not a raw one. The trail escapes `+` and
+            // the separator (both emitters use the BCL's default encoder), and a
+            // `"""` literal turns those \uXXXX sequences back into the characters
+            // before the comparison runs — so the golden would be a re-render of
+            // the bytes rather than the bytes. A doubled backslash keeps them.
+            "{\"ts\":\"2026-07-06T03:04:05.789Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.nudge\",\"dispatchId\":\"abc12345\",\"msg\":\"robot nudge raised: a turn was woken for mail this role had not read\",\"data\":{\"role\":\"reviewer\",\"envelopeIds\":[\"m-01\",\"m-02\"],\"reason\":\"2 unread past quiet (12m\\u002B) \\u00B7 no live session \\u00B7 budget envelope 1/1 \\u00B7 role 1/4 this hour\",\"budget\":{\"envelope\":1,\"perEnvelope\":1,\"roleHour\":1,\"perRoleHour\":4}}}",
+            wire);
+    }
+
+    /// The dead-mailbox shape of the same row (ADR-0018 d6): `address` names the
+    /// box the reaper was woken about — the whole fact, since `role` here is the
+    /// reaper's own lane and says nothing about whose mail is stranded.
+    [Fact]
+    public void MailNudge_ForADeadMailbox_NamesTheBox()
+    {
+        var (fsharp, wire) = RenderBoth("info", "mail", "mail.nudge",
+            dispatchId: "abc12345",
+            msg: "robot nudge raised: the reaper was woken about a dead mailbox",
+            data: new Dictionary<string, object>
+            {
+                ["role"] = "reaper",
+                ["envelopeIds"] = new List<string> { "m-07" },
+                ["reason"] = "dead-mailbox main@laptop-a · 1 stranded past quiet (2h+) · no dispatch for 3h · budget envelope 1/1 · role 1/2 this hour",
+                ["budget"] = new Dictionary<string, object>
+                {
+                    ["envelope"] = 1, ["perEnvelope"] = 1, ["roleHour"] = 1, ["perRoleHour"] = 2,
+                },
+                ["address"] = "main@laptop-a",
+            });
+
+        Assert.Equal(fsharp, wire);
+        Assert.Contains("\"evt\":\"mail.nudge\"", wire);
+        Assert.Contains("\"address\":\"main@laptop-a\"", wire);
+    }
+
     [Fact]
     public void DataValueKinds_IdenticalBytes()
     {
