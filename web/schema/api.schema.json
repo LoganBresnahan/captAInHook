@@ -500,6 +500,9 @@
                       "null"
                     ]
                   },
+                  "hops": {
+                    "type": "integer"
+                  },
                   "replyTo": {
                     "type": [
                       "string",
@@ -549,6 +552,7 @@
                   "topic",
                   "priority",
                   "inReplyTo",
+                  "hops",
                   "replyTo",
                   "forwardedFrom",
                   "ttlDeliveries",
@@ -793,6 +797,15 @@
         },
         "deliveriesComplete": {
           "type": "boolean"
+        },
+        "closedBy": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "hopBudget": {
+          "type": "integer"
         }
       },
       "required": [
@@ -806,7 +819,9 @@
         "cursors",
         "presence",
         "deliveries",
-        "deliveriesComplete"
+        "deliveriesComplete",
+        "closedBy",
+        "hopBudget"
       ],
       "title": "MailDto"
     },

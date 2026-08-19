@@ -52,6 +52,7 @@ internal static class MailFixtures
         MailPriority priority = MailPriority.Ambient,
         string? session = "s-77",
         string? inReplyTo = null,
+        int hops = 0,
         string? replyTo = null,
         MailForwardedFrom? forwardedFrom = null,
         int? ttl = 3) =>
@@ -64,6 +65,7 @@ internal static class MailFixtures
             Topic: "build",
             Priority: priority,
             InReplyTo: inReplyTo,
+            Hops: hops,
             ReplyTo: replyTo,
             ForwardedFrom: forwardedFrom,
             TtlDeliveries: ttl,
@@ -180,7 +182,9 @@ public class MailStoreFormatTests
         var line = MailStore.Render(
             MailFixtures.Envelope(inReplyTo: "m-99", replyTo: "maintainer@laptop-a"), MailStore.Genesis);
 
-        Assert.Contains("\"inReplyTo\":\"m-99\",\"replyTo\":\"maintainer@laptop-a\"", line);
+        // `hops` (ADR-0017 d8) sits between them: the link, the depth it
+        // counts, then where an answer goes.
+        Assert.Contains("\"inReplyTo\":\"m-99\",\"hops\":0,\"replyTo\":\"maintainer@laptop-a\"", line);
         Assert.DoesNotContain("replyTo", MailStore.Render(MailFixtures.Envelope(), MailStore.Genesis));
 
         var reparsed = MailEnvelope.TryParseLine(line, out var errors);

@@ -631,6 +631,7 @@ function Detail(
   if (line === null) return null;
   const e = line.envelope;
   const readers = state.cursors.filter((c) => e !== null && c.role === e.to);
+  const closedBy = e === null ? undefined : state.closedBy[e.id];
   return (
     <div className="mail-detail" data-mail-detail={line.offset}>
       <div className="mail-detail-head">
@@ -656,7 +657,22 @@ function Detail(
                 which envelope this answers, `replyTo` where an answer to THIS
                 one should go (ADR-0018 d4). Snapshot-only fields, so a card
                 for a trail-learned line simply lacks them. */}
-            {e.inReplyTo !== null && <div><dt>answers</dt><dd><code>{e.inReplyTo}</code></dd></div>}
+            {e.inReplyTo !== null && <div><dt>answers</dt><dd>
+              <code>{e.inReplyTo}</code>
+              {/* The depth against d8's budget, as the envelope's ORDINAL in
+                  its thread (a head is 1/N) so N/N reads as full — the same
+                  spelling the digest head hands a model. STORED, never walked:
+                  the number is what this line's own bytes say. */}
+              {" "}· <span className="muted" data-detail-hops>
+                hop {e.hops + 1}{state.hopBudget === null ? "" : `/${state.hopBudget}`}
+              </span>
+            </dd></div>}
+            {/* Who closed it, from the thread index — the server builds it over
+                the WHOLE ledger, so a request answered before this page loaded
+                still reads as answered. */}
+            {closedBy !== undefined && <div><dt>answered by</dt><dd>
+              <code data-detail-closed-by>{closedBy}</code>
+            </dd></div>}
             {e.replyTo !== null && <div><dt>reply to</dt><dd><code data-detail-reply-to>{e.replyTo}</code></dd></div>}
             <div><dt>ttl</dt><dd>{e.ttlDeliveries === null
               ? <>none — unicast, delivered once to <code>{e.to}</code></>

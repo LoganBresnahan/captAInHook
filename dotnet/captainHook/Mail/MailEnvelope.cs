@@ -60,9 +60,38 @@ public sealed record MailForwardedFrom(string Id, string Address);
 
 /// One mail envelope, v1 (ADR-0016 d2).
 ///
-/// `InReplyTo` is RESERVED AND UNREAD in v1 (d9): the parser accepts and
-/// preserves it so today's envelopes survive a future ask/reply design without
-/// a version bump, and nothing in v1 may branch on it.
+/// `InReplyTo` is READ since ADR-0017 d8 (slice `thread-fields`): it names the
+/// envelope this one answers, and an `answer` that names a request CLOSES it
+/// (the read model's closed-by index). It was reserved-and-unread in v1
+/// deliberately, so the ask/reply design could land without a version bump —
+/// which is exactly what happened, and no envelope already on a chain had to
+/// change to make it true.
+///
+/// `Hops` is the thread's DEPTH, and it is STORED rather than walked (ADR-0017
+/// d8, decided 2026-08-19 on the bus itself). A derived count would have to
+/// walk `inReplyTo` back to the head, and that walk breaks routinely rather
+/// than adversarially: rotation (d13) starts a new chain per generation, so
+/// once a thread's head has rotated away the walk hits a link naming an id
+/// this store no longer holds — a link validated PRESENCE-ONLY by design
+/// (`MailForwardedFrom`'s reasoning) — and the walker must either treat the
+/// dangling link as the head, silently RESETTING the count on precisely the
+/// longest-lived threads (the ones that caused the rotation, and the likeliest
+/// to be looping on the owner's bill), or refuse a legitimate reply for a
+/// reason no reader can see. A bound whose failure direction is
+/// unbounded-and-silent is not a bound.
+///
+/// STORED has one failure mode and it is named rather than found later: a
+/// FORWARD starts a new chain. A reaper forward is a new envelope with
+/// `ForwardedFrom` and no `InReplyTo`, so its depth is 0 — a thread at 3/6 that
+/// is reaped and forwarded comes back at 0, budget laundered, durably, hashed,
+/// unamendable. Accepted: the laundering needs a mailbox to actually die, so it
+/// is not a cycle two agents can drive.
+///
+/// One property comes free: `Hops` rides the bytes `MailStore.Render` emits, so
+/// a retroactive edit of a stored depth is already a `PrevMismatch`. There is
+/// deliberately NO hop `MailChainFaultKind` — a rotated-away parent must never
+/// read as tampering — and the only child-vs-parent cross-check lives at WRITE
+/// time in `MailSend`, where the parent is either resident or provably gone.
 ///
 /// `ReplyTo` (ADR-0018 d4, slice `answer-by-address`) is the other half of a
 /// thread: `InReplyTo` says which envelope this one answers (correlation),
@@ -92,6 +121,7 @@ public sealed record MailEnvelope(
     string Topic,
     MailPriority Priority,
     string? InReplyTo,
+    int Hops,
     string? ReplyTo,
     MailForwardedFrom? ForwardedFrom,
     int? TtlDeliveries,
@@ -103,6 +133,19 @@ public sealed record MailEnvelope(
     /// would rot mail while the recipient idles overnight, which is house
     /// invariant 2 violated at the design level).
     public const int DefaultTtlDeliveries = 3;
+
+    /// How many envelopes ONE THREAD may carry, head included (ADR-0017 d8's
+    /// N). A reply whose computed depth reaches it is refused by `mail send`:
+    /// with 6, a thread is the head plus five replies, and the sixth reply is
+    /// where two well-meaning agents stop ping-ponging on the owner's bill.
+    ///
+    /// A POLICY, not a format rule — which is why it lives here as a number the
+    /// write verb consults and NOT in the parser: a line already on a chain
+    /// stays readable if this ever moves, and lowering it can never make
+    /// somebody's archive unparseable. Six because an honest exchange is
+    /// ask → answer → clarify → answer → confirm (five), and anything longer is
+    /// a new question that deserves its own topic rather than a deeper thread.
+    public const int HopBudget = 6;
 
     /// `TtlDeliveries` is NULL for exactly one reason: the address is unicast
     /// (ADR-0018 d5). With one addressee, *delivered* is a fact rather than a
@@ -120,7 +163,7 @@ public sealed record MailEnvelope(
         new HashSet<string>
         {
             "v", "id", "ts", "from", "to", "kind", "topic",
-            "priority", "inReplyTo", "replyTo", "forwardedFrom", "ttlDeliveries", "body", "prev",
+            "priority", "inReplyTo", "hops", "replyTo", "forwardedFrom", "ttlDeliveries", "body", "prev",
         };
 
     private static readonly IReadOnlySet<string> KnownFromFields =
@@ -241,6 +284,34 @@ public sealed record MailEnvelope(
 
         var inReplyTo = Optional(root, "inReplyTo", errs);
 
+        // hops: optional, >= 0, defaulting to 0, and MEANINGLESS WITHOUT A
+        // LINK — the `ttlDeliveries`-on-a-unicast shape (a field that does not
+        // apply is REFUSED, never accepted-and-ignored, because an ignored
+        // field on an append-only chain is a lie that outlives everyone who
+        // could correct it).
+        //
+        // Absent-with-a-link means 0 and that is a real state, not a missing
+        // one: `mail send` stamps the depth from a RESIDENT parent, and when
+        // the parent has rotated away there is nothing on this machine that
+        // knows the count — 0 is what the store can honestly say, and the
+        // stored value is verbatim from then on.
+        //
+        // The BUDGET is not checked here. Depth is what the format records;
+        // `HopBudget` is what the write verb enforces (see the constant).
+        var hops = 0;
+        if (root.TryGetProperty("hops", out var h))
+        {
+            if (inReplyTo is null)
+                errs.Add(
+                    "'hops' is not allowed without 'inReplyTo' — an envelope that answers " +
+                    "nothing is the head of its own thread and is at depth 0 by construction " +
+                    "(only a reply link can advance the count)");
+            else if (h.ValueKind != JsonValueKind.Number || !h.TryGetInt32(out var n2) || n2 < 0)
+                errs.Add($"'hops' must be an integer >= 0 (got {RawText(h)})");
+            else
+                hops = n2;
+        }
+
         // replyTo: optional, and an ADDRESS when present — `to`'s grammar,
         // `to`'s refusal. It is where an answer to this envelope should be
         // sent, so an ungrammatical one names a mailbox no answer can reach and
@@ -259,7 +330,7 @@ public sealed record MailEnvelope(
             ? null
             : new MailEnvelope(
                 id!, ts!, from!, to!, kind, topic!, priority,
-                inReplyTo, replyTo, forwardedFrom, ttl, body!, prev);
+                inReplyTo, hops, replyTo, forwardedFrom, ttl, body!, prev);
     }
 
     /// One STORE LINE: the JSONL reader's entry point. Bad bytes (not JSON, or

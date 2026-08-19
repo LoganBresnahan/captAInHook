@@ -89,6 +89,10 @@ export interface MailDto {
   presence: MailPresenceDto[];
   deliveries: MailDeliveryDto[];
   deliveriesComplete: boolean;
+  closedBy: {
+    [k: string]: string;
+  };
+  hopBudget: number;
 }
 export interface MailChainDto {
   ok: boolean;
@@ -119,6 +123,7 @@ export interface MailLineDto {
     topic: string;
     priority: string;
     inReplyTo: string | null;
+    hops: number;
     replyTo: string | null;
     forwardedFrom: {
       id: string;

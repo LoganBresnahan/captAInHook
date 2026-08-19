@@ -287,6 +287,21 @@ public sealed class MailStore(string dir)
                 ["topic"] = MailEnvelope.ClampField(envelope.Topic),
                 ["priority"] = Wire(envelope.Priority),
             };
+            // The thread's two columns (ADR-0017 d8, slice `thread-fields`).
+            // `inReplyTo` rides the trail because the LIVE picture has to be
+            // able to close a request the moment its answer lands — the canvas
+            // folds arrivals from these rows and re-snapshots only rarely, so a
+            // correlation visible on disk and invisible on the stream would
+            // draw an open thread that was answered minutes ago. Clamped by the
+            // same spelling the id uses, since it IS an id and a sender
+            // controls it. `hops` follows the stored line exactly: present when
+            // the link is, absent when it is not, so a reader of the trail and
+            // a reader of the store count the same depth.
+            if (envelope.InReplyTo is { } irt)
+            {
+                data["inReplyTo"] = MailEnvelope.ClampField(irt);
+                data["hops"] = envelope.Hops;
+            }
             // Omitted for a unicast envelope, exactly as on the stored line —
             // one spelling of "no ttl" across the ledger and the trail, so the
             // observation surface reads the same fact the store holds. The
@@ -429,6 +444,15 @@ public sealed class MailStore(string dir)
             // a future reader whose default has moved.
             w.WriteString("priority", Wire(e.Priority));
             if (e.InReplyTo is not null) w.WriteString("inReplyTo", e.InReplyTo);
+            // The thread's DEPTH beside the link it counts (ADR-0017 d8),
+            // written whenever the link exists — including at 0, which is a
+            // real state (a reply whose parent has rotated away) and not an
+            // absence. The condition is `link OR non-zero` rather than plain
+            // `link` so a depth with no link cannot be silently DROPPED here:
+            // it renders, the parser refuses it, and `Append`'s re-parse guard
+            // turns an impossible envelope into a loud failure instead of a
+            // line that reads back as a fresh thread.
+            if (e.InReplyTo is not null || e.Hops != 0) w.WriteNumber("hops", e.Hops);
             // The thread's routing half beside its correlation half (ADR-0018
             // d4, `answer-by-address`); omitted when absent, like everything
             // optional on this line.

@@ -268,7 +268,9 @@ public sealed class ApiReadModel
             fold.Records.Select(r => new MailDeliveryDto(
                 r.Role, r.SessionId, r.DispatchId, r.HookEvent, r.Seam, r.Vehicle,
                 r.EnvelopeIds, r.RenderHash, r.BytesInjected, r.Ts)).ToList(),
-            fold.Complete);
+            fold.Complete,
+            ClosedBy(complete),
+            MailEnvelope.HopBudget);
     }
 
     /// The trail's current end — the same stat `TrailSubscription` takes when a
@@ -346,10 +348,31 @@ public sealed class ApiReadModel
             .ToList();
     }
 
+    /// The thread index: request id → the id of the first `answer` that names
+    /// it in `inReplyTo`. Built over EVERY complete line (not the `?since=`
+    /// window), because a request and its answer routinely sit on opposite
+    /// sides of that window and a join the client could do would be a join over
+    /// what it happens to hold.
+    ///
+    /// FIRST wins, in ledger order, and only `kind: answer` closes — the two
+    /// rules `MailDto` states. Nothing here reads a clock, resolves an id
+    /// against a mailbox, or decides anything about delivery: an envelope is
+    /// closed when another envelope on this chain says it answers it, which is
+    /// a fact about the ledger and survives every cursor on the machine being
+    /// deleted.
+    private static IReadOnlyDictionary<string, string> ClosedBy(IReadOnlyList<MailLine> complete)
+    {
+        var closed = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var l in complete)
+            if (l.Envelope is { Kind: MailKind.Answer, InReplyTo: { } request } answer)
+                closed.TryAdd(request, answer.Id);
+        return closed;
+    }
+
     private static MailEnvelopeDto Envelope(MailEnvelope e) => new(
         e.Id, e.Ts, new MailSenderDto(e.From.Agent, e.From.Harness, e.From.Session),
         e.To, Camel(e.Kind.ToString()), e.Topic, Camel(e.Priority.ToString()),
-        e.InReplyTo, e.ReplyTo,
+        e.InReplyTo, e.Hops, e.ReplyTo,
         e.ForwardedFrom is { } f ? new MailForwardedFromDto(f.Id, f.Address) : null,
         e.TtlDeliveries, e.Body, e.Prev);
 

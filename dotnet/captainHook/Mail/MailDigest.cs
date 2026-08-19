@@ -499,7 +499,18 @@ public static class MailDigest
             : "new";
         var head = $"{ordinal}. from {Clamp(e.From.Agent)} ({Clamp(e.From.Harness)}) · "
             + $"{Wire(e.Kind)}/{Wire(e.Priority)} · id {Clamp(e.Id)} · topic: {Clamp(e.Topic)} · {age}"
-            + (e.ReplyTo is not null ? $" · reply to {e.ReplyTo}" : "");
+            + (e.ReplyTo is not null ? $" · reply to {e.ReplyTo}" : "")
+            // The thread, when there is one (ADR-0017 d8). `answers <id>` is
+            // the correlation half — clamped like every other sender-controlled
+            // id in this head — and `hop n/N` is the depth against the budget,
+            // rendered as the envelope's ORDINAL IN THE THREAD (the head is
+            // 1/N) so that N/N reads as what it is: full, and a further reply
+            // is refused by `mail send`. A reader deciding whether to answer is
+            // usually a model, and "5/6" is the difference between one more
+            // exchange and a refusal it has already spent a turn earning.
+            + (e.InReplyTo is not null
+                ? $" · answers {Clamp(e.InReplyTo)} · hop {e.Hops + 1}/{MailEnvelope.HopBudget}"
+                : "");
         if (e.Body.Length == 0) return (head, "");
         var body = string.Join('\n', e.Body.Split('\n').Select(l => "   " + l));
         return (head, "\n" + body);

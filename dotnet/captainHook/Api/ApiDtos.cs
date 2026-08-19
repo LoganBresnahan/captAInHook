@@ -126,6 +126,23 @@ public sealed record HandlerDto(
 /// lets the view distinguish "nobody read it" from "further back than I can
 /// see". Records carry NO ledger offsets: placing an id on the ledger is the
 /// reducer's arithmetic, and a second implementation of it here is N8 again.
+///
+/// `ClosedBy` is the THREAD INDEX (ADR-0017 d8, slice `thread-fields`): the id
+/// of a request → the id of the first `answer` whose `inReplyTo` names it. It
+/// is computed server-side over the WHOLE ledger and not left to the client for
+/// one reason — `Lines` starts at `since`, so a request and the answer that
+/// closes it routinely sit on opposite sides of the window, and a client
+/// joining only what it can see would draw an open thread that was answered
+/// before the page loaded. FIRST answer wins: a second one is a LATE answer,
+/// which is a thing to TAG (`thread-aware-delivery`) rather than a second
+/// closure. Only `kind: answer` closes — a status that happens to quote a
+/// request is a comment on it, not a reply to it.
+///
+/// `HopBudget` is d8's N — how many envelopes one thread may carry — served so
+/// the picture can say `hop n/N` without a second spelling of the engine's
+/// constant living in the browser. It is a POLICY the write verb enforces, not
+/// a property of any line, which is why it rides the snapshot rather than the
+/// envelope: a stored line keeps its depth even if the bound moves.
 public sealed record MailDto(
     string Dir, MailChainDto Chain, long Since, bool SinceAligned, long Frontier,
     string? TrailEventId,
@@ -133,7 +150,9 @@ public sealed record MailDto(
     IReadOnlyList<MailCursorDto> Cursors,
     IReadOnlyList<MailPresenceDto> Presence,
     IReadOnlyList<MailDeliveryDto> Deliveries,
-    bool DeliveriesComplete);
+    bool DeliveriesComplete,
+    IReadOnlyDictionary<string, string> ClosedBy,
+    int HopBudget);
 
 /// One `mail.deliver` ledger line as the trail stated it — the columns d10
 /// gives it, and nothing derived. `Session` is the recipient session (absent
@@ -175,9 +194,15 @@ public sealed record MailLineDto(
 /// reads the archival store itself for the operator's own authenticated GUI,
 /// which is the one surface entitled to it — unlike the trail, which is
 /// payload-readable and therefore carries provenance only (d14).
+/// `Hops` is the thread's stored depth (ADR-0017 d8): 0 for the head of a
+/// thread and for any envelope that answers nothing, `parent + 1` for a reply
+/// whose parent was resident when it was sent. It is the number as STORED,
+/// never a walk — see `MailEnvelope` for why the walk is the option that
+/// breaks — so a reply whose head has rotated away reports what its own bytes
+/// say and the viewer is not shown a count that quietly restarted.
 public sealed record MailEnvelopeDto(
     string Id, string Ts, MailSenderDto From, string To, string Kind, string Topic,
-    string Priority, string? InReplyTo, string? ReplyTo, MailForwardedFromDto? ForwardedFrom,
+    string Priority, string? InReplyTo, int Hops, string? ReplyTo, MailForwardedFromDto? ForwardedFrom,
     int? TtlDeliveries, string Body, string? Prev);
 
 public sealed record MailSenderDto(string Agent, string Harness, string? Session);

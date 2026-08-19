@@ -27,7 +27,9 @@
         "cursors": [],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-01\",\"to\":\"main\",\"offset\":0,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -69,6 +71,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -95,6 +98,7 @@
               "topic": "build",
               "priority": "urgent",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -121,6 +125,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -133,7 +138,206 @@
         "cursors": [],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
+      }
+    },
+    {
+      "name": "thread-closed",
+      "doc": "A request, an unrelated line, and the ANSWER that closes the request (ADR-0017 d8) — then a digest. The reducer must fold the thread columns off `mail.append` (`inReplyTo` + `hops` ride the trail, unlike `ts`/`body`/`prev`) and reach the same closed-by index the snapshot builds over the whole ledger, including the depth on each envelope.",
+      "since": 0,
+      "exact": true,
+      "expectUncertain": [],
+      "before": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "58d33f5a098f9d3c32a48f2c997aa29ea5b67f2579721acfb53a51d067028c6e",
+          "gen": 1,
+          "lines": 1,
+          "bytes": 303,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 303,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 302,
+            "terminated": true,
+            "hash": "58d33f5a098f9d3c32a48f2c997aa29ea5b67f2579721acfb53a51d067028c6e",
+            "envelope": {
+              "id": "req-1",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [],
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
+      },
+      "trail": [
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-02\",\"to\":\"main\",\"offset\":303,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"ans-1\",\"to\":\"main\",\"offset\":605,\"bytes\":331,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"answer\",\"topic\":\"build\",\"priority\":\"ambient\",\"inReplyTo\":\"req-1\",\"hops\":1,\"ttlDeliveries\":3}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":937,\"delivered\":3,\"deliveredOffsets\":[0,303,605],\"held\":0,\"expired\":0,\"deliveries\":1}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.deliver\",\"dispatchId\":\"d-1\",\"sessionId\":\"s-1\",\"hookEvent\":\"UserPromptSubmit\",\"msg\":\"mail delivered into the recipient\\u0027s context\",\"data\":{\"role\":\"main\",\"seam\":\"ambient\",\"vehicle\":\"inject\",\"envelopeIds\":[\"req-1\",\"m-02\",\"ans-1\"],\"renderHash\":\"b3856de5977587aea874c9f4aa3a05fdf82867e6f889fc9effd5f18bf9984147\",\"bytesInjected\":391}}"
+      ],
+      "after": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "58d33f5a098f9d3c32a48f2c997aa29ea5b67f2579721acfb53a51d067028c6e",
+          "gen": 1,
+          "lines": 3,
+          "bytes": 937,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 937,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 302,
+            "terminated": true,
+            "hash": "58d33f5a098f9d3c32a48f2c997aa29ea5b67f2579721acfb53a51d067028c6e",
+            "envelope": {
+              "id": "req-1",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          },
+          {
+            "offset": 303,
+            "bytes": 301,
+            "terminated": true,
+            "hash": "6c955d2f4d1845aaa2c495c0e1fc596d8c2db54732f341ec80b03577ba8ad36c",
+            "envelope": {
+              "id": "m-02",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "58d33f5a098f9d3c32a48f2c997aa29ea5b67f2579721acfb53a51d067028c6e"
+            },
+            "errors": []
+          },
+          {
+            "offset": 605,
+            "bytes": 331,
+            "terminated": true,
+            "hash": "6640c5d6b89435a337040cd9771d33750418822cf7867acf90f47b63e06c5948",
+            "envelope": {
+              "id": "ans-1",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "answer",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": "req-1",
+              "hops": 1,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "6c955d2f4d1845aaa2c495c0e1fc596d8c2db54732f341ec80b03577ba8ad36c"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [
+          {
+            "role": "main",
+            "session": "s-1",
+            "gen": 1,
+            "head": "58d33f5a098f9d3c32a48f2c997aa29ea5b67f2579721acfb53a51d067028c6e",
+            "offset": 937,
+            "frontier": 937,
+            "deliveries": 1,
+            "lastDeliveredId": "ans-1",
+            "reanchored": false,
+            "reanchorReason": null,
+            "pending": [],
+            "expired": [],
+            "skippedMalformed": 0
+          }
+        ],
+        "presence": [
+          {
+            "session": "s-1",
+            "roles": [
+              "main"
+            ],
+            "lastDispatchAgeMs": null
+          }
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {
+          "req-1": "ans-1"
+        },
+        "hopBudget": 6
       }
     },
     {
@@ -177,6 +381,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -203,6 +408,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -229,6 +435,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -241,7 +448,9 @@
         "cursors": [],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":910,\"delivered\":2,\"deliveredOffsets\":[0,608],\"held\":0,\"expired\":0,\"deliveries\":1}}",
@@ -282,6 +491,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -308,6 +518,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -334,6 +545,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -370,7 +582,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -414,6 +628,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 2,
@@ -440,6 +655,7 @@
               "topic": "build",
               "priority": "urgent",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -485,7 +701,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"urg-2\",\"to\":\"main\",\"offset\":605,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"urgent\",\"ttlDeliveries\":3}}",
@@ -531,6 +749,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 2,
@@ -557,6 +776,7 @@
               "topic": "build",
               "priority": "urgent",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -583,6 +803,7 @@
               "topic": "build",
               "priority": "urgent",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -609,6 +830,7 @@
               "topic": "build",
               "priority": "urgent",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -645,7 +867,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -689,6 +913,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -715,6 +940,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -751,7 +977,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-03\",\"to\":\"main\",\"offset\":604,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -795,6 +1023,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -821,6 +1050,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -847,6 +1077,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -905,7 +1136,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -949,6 +1182,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -975,6 +1209,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1011,7 +1246,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-03\",\"to\":\"main\",\"offset\":604,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -1054,6 +1291,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1080,6 +1318,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1106,6 +1345,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1142,7 +1382,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -1192,6 +1434,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1238,7 +1481,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.torn\",\"msg\":\"terminated a torn final line rather than repairing it\",\"data\":{\"path\":\"<mail>/mail.jsonl\",\"offset\":302}}",
@@ -1285,6 +1530,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1321,6 +1567,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1366,7 +1613,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -1410,6 +1659,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 5,
@@ -1463,7 +1713,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-04\",\"to\":\"main\",\"offset\":908,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -1505,6 +1757,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 5,
@@ -1531,6 +1784,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1567,7 +1821,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -1613,6 +1869,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 5,
@@ -1666,7 +1923,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.cursorReanchor\",\"sessionId\":\"s-1\",\"msg\":\"cursor re-anchored at 0 \\u2014 retained mail for this role is pending again\",\"data\":{\"role\":\"main\",\"path\":\"<mail>/cursor.main.s-1.json\",\"reason\":\"cursor gen 4, store gen 1 \\u2014 rotated\",\"cause\":\"cursor\",\"deliveries\":1}}",
@@ -1708,6 +1967,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 5,
@@ -1744,7 +2004,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -1788,6 +2050,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1814,6 +2077,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1850,7 +2114,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"m-03\",\"to\":\"main\",\"offset\":604,\"bytes\":301,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"ttlDeliveries\":3}}",
@@ -1892,6 +2158,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1918,6 +2185,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1944,6 +2212,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -1980,7 +2249,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -2024,6 +2295,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2050,6 +2322,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2087,7 +2360,9 @@
         ],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"data\":{\"role\":\"main\",\"offset\":604,\"delivered\":1,\"deliveredOffsets\":[302],\"held\":0,\"expired\":0,\"deliveries\":2}}",
@@ -2128,6 +2403,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2154,6 +2430,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2182,7 +2459,9 @@
         ],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -2226,6 +2505,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2252,6 +2532,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2264,7 +2545,9 @@
         "cursors": [],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":604,\"delivered\":0,\"deliveredOffsets\":[],\"held\":2,\"expired\":0,\"deliveries\":1}}"
@@ -2304,6 +2587,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2330,6 +2614,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2383,7 +2668,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -2427,6 +2714,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2453,6 +2741,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2465,7 +2754,9 @@
         "cursors": [],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":604,\"delivered\":1,\"deliveredOffsets\":[0],\"held\":1,\"expired\":0,\"deliveries\":1}}",
@@ -2506,6 +2797,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2532,6 +2824,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2577,7 +2870,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -2621,6 +2916,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2647,6 +2943,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2692,7 +2989,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.cursorVanished\",\"sessionId\":\"s-1\",\"msg\":\"the cursor this view was read from no longer exists \\u2014 advancing starts a fresh lineage\",\"data\":{\"role\":\"main\",\"path\":\"<mail>/cursor.main.s-1.json\",\"viewDeliveries\":1}}",
@@ -2733,6 +3032,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2759,6 +3059,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2795,7 +3096,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -2841,6 +3144,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2867,6 +3171,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2893,6 +3198,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -2929,7 +3235,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"warn\",\"src\":\"mail\",\"evt\":\"mail.cursorReanchor\",\"sessionId\":\"s-1\",\"msg\":\"cursor re-anchored at 0 \\u2014 retained mail for this role is pending again\",\"data\":{\"role\":\"main\",\"path\":\"<mail>/cursor.main.s-1.json\",\"reason\":\"cursor offset 906 past the frontier 302 \\u2014 store truncated\",\"cause\":\"store\",\"deliveries\":1}}",
@@ -2971,6 +3279,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -3007,7 +3316,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     },
     {
@@ -3051,6 +3362,7 @@
               "topic": "build",
               "priority": "reconcile",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -3077,6 +3389,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -3089,7 +3402,9 @@
         "cursors": [],
         "presence": [],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       },
       "trail": [
         "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":608,\"delivered\":2,\"deliveredOffsets\":[0,305],\"held\":0,\"expired\":0,\"deliveries\":1}}",
@@ -3130,6 +3445,7 @@
               "topic": "build",
               "priority": "reconcile",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -3156,6 +3472,7 @@
               "topic": "build",
               "priority": "ambient",
               "inReplyTo": null,
+              "hops": 0,
               "replyTo": null,
               "forwardedFrom": null,
               "ttlDeliveries": 3,
@@ -3192,7 +3509,9 @@
           }
         ],
         "deliveries": [],
-        "deliveriesComplete": false
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
       }
     }
   ]

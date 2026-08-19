@@ -323,7 +323,9 @@ public static class WatcherBrain
     public const string ReplyHow =
         "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — "
         + "\"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address "
-        + "in that message's head (else the sender's role).";
+        + "in that message's head (else the sender's role). Do NOT write \"hops\" — the store stamps the "
+        + "thread's depth from the ledger, and a thread that reads `hop N/N` in the head is full: a "
+        + "further reply is refused, so say what you have to say in the one you send.";
 
     /// What a woken reaper is asked to do instead — d6's three dispositions and
     /// the verb that removes the standing. A `mail-nudge` payload therefore needs

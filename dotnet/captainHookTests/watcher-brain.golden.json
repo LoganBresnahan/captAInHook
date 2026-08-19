@@ -14,7 +14,7 @@
             ],
             "reason": "1 unread past quiet (12m+) · no live session · budget envelope 1/1 · role 1/4 this hour",
             "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id m-01 · topic: build · new\n   opaque prose",
-            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
+            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role). Do NOT write \"hops\" — the store stamps the thread's depth from the ledger, and a thread that reads `hop N/N` in the head is full: a further reply is refused, so say what you have to say in the one you send.",
             "workspace": null,
             "address": null,
             "budget": {
@@ -75,7 +75,7 @@
             ],
             "reason": "1 unread past quiet (12m+) · no live session · budget envelope 1/1 · role 1/4 this hour",
             "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id m-02 · topic: build · new\n   opaque prose",
-            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
+            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role). Do NOT write \"hops\" — the store stamps the thread's depth from the ledger, and a thread that reads `hop N/N` in the head is full: a further reply is refused, so say what you have to say in the one you send.",
             "workspace": null,
             "address": null,
             "budget": {
@@ -197,7 +197,7 @@
             ],
             "reason": "1 unread past quiet (30m+) · no live session · budget envelope 1/1 · role 1/4 this hour",
             "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id u-01 · topic: build · new\n   opaque prose",
-            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
+            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role). Do NOT write \"hops\" — the store stamps the thread's depth from the ledger, and a thread that reads `hop N/N` in the head is full: a further reply is refused, so say what you have to say in the one you send.",
             "workspace": null,
             "address": null,
             "budget": {
@@ -391,7 +391,7 @@
             ],
             "reason": "1 unread past quiet (1h+) · no live session · budget envelope 1/1 · role 1/4 this hour",
             "digest": "[captAInHook mail] 1 message(s) for 'reviewer':\n\n1. from intent-watcher (claude-code) · status/urgent · id u-01 · topic: build · new\n   opaque prose",
-            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
+            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role). Do NOT write \"hops\" — the store stamps the thread's depth from the ledger, and a thread that reads `hop N/N` in the head is full: a further reply is refused, so say what you have to say in the one you send.",
             "workspace": null,
             "address": null,
             "budget": {
@@ -456,7 +456,7 @@
             ],
             "reason": "2 unread past quiet (5m+) · no live session · budget envelope 1/2 · role 1/4 this hour",
             "digest": "[captAInHook mail] 2 message(s) for 'ops':\n\n1. from intent-watcher (claude-code) · status/urgent · id m-02 · topic: build · new\n   opaque prose\n\n2. from intent-watcher (claude-code) · status/ambient · id m-03 · topic: build · new\n   opaque prose",
-            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role).",
+            "replyHow": "Answer on the bus, not on stdout: pipe one JSON envelope to `captainHook mail send` — \"kind\": \"answer\", \"inReplyTo\": the id you are answering, \"to\": the `reply to` address in that message's head (else the sender's role). Do NOT write \"hops\" — the store stamps the thread's depth from the ledger, and a thread that reads `hop N/N` in the head is full: a further reply is refused, so say what you have to say in the one you send.",
             "workspace": null,
             "address": null,
             "budget": {

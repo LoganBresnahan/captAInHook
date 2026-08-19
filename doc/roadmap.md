@@ -1531,6 +1531,52 @@ run live*. The framework underneath is what exists today.
   maintainer's own session kept the daemon warm), presence false negatives on a
   `mixed` role, recurrence against `perRoleHour`, and whether `mail ask --wait`
   is actually wanted.
+  Slices landed: `thread-fields` (2026-08-19; phase 1, thread lane — the lane's
+  first slice, and the one whose blocking question was answered BY the thing this
+  item builds: the 2026-08-19 robot turn decided stored-vs-derived `hops` on the
+  bus, and this is that decision as code. **STORED**, because a derived walk hits
+  a rotated-away `inReplyTo` — ADR-0016 d13 starts a new chain per generation —
+  and then has to guess: call the dangling link the head and the count silently
+  resets on the longest-lived threads, or refuse a legitimate reply for a reason
+  no reader can see. The cost of storing is named rather than found later: a
+  reaper forward re-enters at depth 0 and launders the budget, which needs a
+  mailbox to actually die and so is not a cycle two agents can drive.
+  `inReplyTo` stops being reserved-and-unread (ADR-0016 d9's whole point — the
+  ask/reply design landed with no version bump and no envelope on any chain had
+  to change). The depth is established by `mail send` FROM THE LEDGER, on the
+  `ts`-stamping precedent: a resident parent gives `parent + 1`, a sender that
+  stated a different number is REFUSED rather than corrected (a model must not be
+  able to name its own thread position, and a silent correction would hide the
+  attempt on a chain nobody can amend), an absent parent leaves the sender's
+  number alone, and a depth that reaches `MailEnvelope.HopBudget` is refused with
+  nothing written — d8's ping-pong bound. The budget is POLICY, never a parse
+  rule, so the line it refuses still parses and lowering it can never make an
+  archive unreadable; the parse rule itself is the `ttlDeliveries`-on-a-unicast
+  shape (optional, ≥ 0, default 0, refused without a link). Two rules keep the
+  chain honest: there is deliberately NO hop fault kind — a rotated-away parent
+  must never read as tampering, and a retroactive edit is already a
+  `PrevMismatch` since the number rides the hashed bytes — and the only
+  child-vs-parent cross-check happens at write time, where the parent is resident
+  or provably gone. On the observation side, `mail.append` grows `inReplyTo` and
+  `hops` TOGETHER (a row with one and not the other is refused by the reducer as
+  a row the store could not have written) so a live canvas closes a thread when
+  its answer lands, and `MailDto.closedBy` is the id→first-`answer` index built
+  over the WHOLE ledger, because `?since=` routinely splits a request from the
+  answer that closes it — the one join a client cannot make from what it holds.
+  `hopBudget` rides the snapshot so the browser renders `hop n/N` without a second
+  spelling of the engine's constant; the digest head renders the same fraction as
+  an ORDINAL (`hop 3/6`), so `6/6` reads as full to the model deciding whether to
+  answer, and `ReplyHow` now tells a woken turn not to write the field at all.
+  Deferred with a reason rather than skipped: the asker-side reading of a thread
+  (urgent-class for the asker's cursor, the `late` tag, "answered by …") is
+  `thread-aware-delivery`'s. `MailThreadFieldsTests` (26) including the answer's
+  own `AReplyWhoseParentHasRotatedAway_StillCountsItsHops` — the test every
+  derived implementation fails; suite 1419 → 1445 green twice, web units 255 →
+  259, plus a `thread-closed` golden scenario. Goldens regenerated serially, one
+  regen each: the API schema, the reducer corpus, and `watcher-brain` (for
+  `ReplyHow`). Docs: ADR-0017 d8 carries the decision and its stated cost, row 1
+  ✅, a Ground truth row; `doc/flow/mailbox-bus.md` gains § *The thread* and its
+  own row.)
   Slices landed: `e2e-stub-runner-loop` (2026-08-19; phase 6 — the whole chain,
   zero tokens, and the first time the six parts of the robot channel are joined in
   one line. A human asks a role nobody is sitting in; the daemon's own watcher

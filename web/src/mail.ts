@@ -68,6 +68,14 @@ export type MailEnvelopeView = {
   topic: string;
   priority: string;
   inReplyTo: string | null;
+  /** The thread's DEPTH as the line STORES it (ADR-0017 d8): 0 for a head and
+   * for anything that answers nothing, `parent + 1` for a reply stamped against
+   * a resident parent. Never walked here — the walk is the implementation that
+   * silently resets the count when a head has rotated away, which is why the
+   * engine stores it. Present on a trail arrival too (the `mail.append` row
+   * carries `inReplyTo` and `hops` together), so a live picture counts the same
+   * depth a snapshot does. */
+  hops: number;
   /** Where an answer to THIS envelope should go (ADR-0018 d4) — an address
    * in `to`'s grammar. The thread's routing half beside `inReplyTo`'s
    * correlation half. Snapshot-only, like `inReplyTo`. */
@@ -260,6 +268,19 @@ export type MailState = {
    * record may simply predate what can still be proven. Unseeded state is
    * false — it has read nothing and may not claim otherwise. */
   deliveriesComplete: boolean;
+  /** The thread index (ADR-0017 d8): a request's id → the id of the FIRST
+   * `answer` that names it in `inReplyTo`. Seeded from the snapshot, which
+   * builds it over the WHOLE ledger — a request and its answer routinely sit on
+   * opposite sides of the `?since=` window, so this is the one join the client
+   * cannot make from what it holds — and extended live, since a `mail.append`
+   * carrying an answer's link closes its request in the picture the moment it
+   * lands. First wins here too: a later answer is a LATE answer, not a second
+   * closure. */
+  closedBy: Record<string, string>;
+  /** d8's N — how many envelopes one thread may carry, served by the snapshot
+   * so `hop n/N` is the engine's own number and not a second spelling of it in
+   * the browser. Null until seeded: an unseeded picture knows no policy. */
+  hopBudget: number | null;
   notes: MailNote[];
   notesDropped: number;
   /** Non-null = the picture may be behind or wrong; the choreography should
@@ -341,6 +362,8 @@ export function emptyMailState(): MailState {
     presence: [],
     deliveries: [],
     deliveriesComplete: false,
+    closedBy: {},
+    hopBudget: null,
     notes: [],
     notesDropped: 0,
     resnapshot: null,
@@ -361,7 +384,7 @@ function lineFromDto(l: MailLineDto): MailLedgerLine {
       id: e.id, ts: e.ts,
       from: { agent: e.from.agent, harness: e.from.harness, session: e.from.session },
       to: e.to, kind: e.kind, topic: e.topic, priority: e.priority,
-      inReplyTo: e.inReplyTo, replyTo: e.replyTo, forwardedFrom: e.forwardedFrom,
+      inReplyTo: e.inReplyTo, hops: e.hops, replyTo: e.replyTo, forwardedFrom: e.forwardedFrom,
       ttlDeliveries: e.ttlDeliveries, body: e.body, prev: e.prev,
     },
     errors: [...l.errors],
@@ -480,6 +503,10 @@ export function seedMail(dto: MailDto, atMs: number, prev?: MailState): MailStat
     presence,
     deliveries: preloadDeliveries(dto, lines, cursors, atMs, prev),
     deliveriesComplete: dto.deliveriesComplete,
+    // The snapshot's index REPLACES whatever was folded live: it is built over
+    // the whole ledger, so it can only be a superset of what a stream taught us.
+    closedBy: { ...dto.closedBy },
+    hopBudget: dto.hopBudget,
     notes: prev?.notes ?? [],
     notesDropped: prev?.notesDropped ?? 0,
     // A misaligned `since` means the bytes this client last read are gone:
@@ -553,10 +580,35 @@ function reduceLine(state: MailState, line: TrailLine, atMs: number): MailState 
 
 // ---- mail.append -------------------------------------------------------------------
 
+/** Fold one COMPLETE line into the thread index: an `answer` that names a
+ * request closes it, first one wins (a later answer is LATE, which is a tag and
+ * not a second closure). Returns the same object when nothing changes, so an
+ * ordinary append allocates nothing.
+ *
+ * Ids learned from the trail are CLAMPED and ids learned from a snapshot are
+ * not — which is harmless here because both halves of any one lookup come from
+ * the same place: a trail-learned key is compared against a trail-learned
+ * envelope id, and the next snapshot replaces the whole map with the full-length
+ * one built over the ledger. */
+function closeThread(closedBy: Record<string, string>, line: MailLedgerLine): Record<string, string> {
+  const e = line.envelope;
+  if (e === null || e.kind !== "answer" || e.inReplyTo === null) return closedBy;
+  if (closedBy[e.inReplyTo] !== undefined) return closedBy;
+  return { ...closedBy, [e.inReplyTo]: e.id };
+}
+
 function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailState {
   const id = str(d.id), to = str(d.to), offset = nonNeg(d.offset), bytes = nonNeg(d.bytes);
   const kind = str(d.kind), topic = str(d.topic), priority = str(d.priority), ttl = num(d.ttlDeliveries);
   const from = isRecord(d.from) ? d.from : null;
+  // The thread's two columns ride the row TOGETHER or not at all (the engine
+  // writes `hops` only inside the `inReplyTo` branch), so a row carrying one
+  // without the other is a row the store could not have written — refused
+  // rather than half-read, exactly like the ttl/address pair below.
+  const inReplyTo = d.inReplyTo === undefined ? null : str(d.inReplyTo);
+  const hops = d.hops === undefined ? null : nonNeg(d.hops);
+  const threadOk = (d.inReplyTo === undefined && d.hops === undefined)
+    || (inReplyTo !== null && hops !== null);
   const agent = from ? str(from.agent) : null, harness = from ? str(from.harness) : null;
   const fromSession = from && from.session !== undefined ? str(from.session) : null;
   // A unicast address carries NO ttl and a role address MUST carry one
@@ -572,13 +624,16 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
     : d.ttlDeliveries === undefined;
   if (id === null || to === null || offset === null || bytes === null || kind === null || topic === null
       || priority === null || !ttlOk || agent === null || harness === null
-      || (from !== null && from.session !== undefined && fromSession === null)) {
-    return refuse(s, "mail.append", "id/to/offset/bytes/from/kind/topic/priority/ttlDeliveries", atMs, null, null, offset);
+      || (from !== null && from.session !== undefined && fromSession === null) || !threadOk) {
+    return refuse(s, "mail.append", "id/to/offset/bytes/from/kind/topic/priority/ttlDeliveries/inReplyTo+hops", atMs, null, null, offset);
   }
   const line: MailLedgerLine = {
     offset, bytes, terminated: true, hash: null,
     envelope: { id, ts: null, from: { agent, harness, session: fromSession }, to, kind, topic, priority,
-      inReplyTo: null, replyTo: null, forwardedFrom: null,
+      // `inReplyTo`/`hops` DO ride the trail (unlike `ts`, `body`, `prev`),
+      // because the live picture has to be able to close a thread the moment
+      // its answer lands rather than at the next snapshot.
+      inReplyTo, hops: hops ?? 0, replyTo: null, forwardedFrom: null,
       ttlDeliveries: ttlApplies ? ttl : null, body: null, prev: null },
     errors: [], source: "trail",
   };
@@ -598,7 +653,8 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
     const lines = s.lines.slice(0, -1);
     lines.push(whole);
     const cursors = s.cursors.map((c) => absorbCompleteLine(c, whole));
-    return { ...s, lines, cursors, torn: null, pendingTorn: null, frontier: offset + bytes + 1 };
+    return { ...s, lines, cursors, closedBy: closeThread(s.closedBy, whole),
+      torn: null, pendingTorn: null, frontier: offset + bytes + 1 };
   }
 
   if (offset < expected) {
@@ -658,7 +714,8 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
 
   const lines = [...next.lines, line];
   cursors = cursors.map((c) => absorbCompleteLine(c, line));
-  return { ...next, lines, cursors, frontier: offset + bytes + 1, torn: null };
+  return { ...next, lines, cursors, closedBy: closeThread(next.closedBy, line),
+    frontier: offset + bytes + 1, torn: null };
 }
 
 /** A complete line became visible at or beyond a cursor's offset: fresh if it

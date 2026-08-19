@@ -82,9 +82,11 @@ public class MailReducerGoldenTests
         }
 
         public long Append(string id, string to = "main",
-            MailPriority priority = MailPriority.Ambient, int ttl = 3, string? session = "s-77") =>
+            MailPriority priority = MailPriority.Ambient, int ttl = 3, string? session = "s-77",
+            string? inReplyTo = null, int hops = 0, MailKind kind = MailKind.Status) =>
             MailFixtures.AppendOk(Tmp.Store(),
-                MailFixtures.Envelope(id: id, to: to, priority: priority, ttl: ttl, session: session)).Offset;
+                MailFixtures.Envelope(id: id, to: to, priority: priority, ttl: ttl, session: session,
+                    inReplyTo: inReplyTo, hops: hops) with { Kind = kind }).Offset;
 
         /// The real verb, exactly as a registered digest member runs it: one
         /// exec-wire request in, one answer out. Asserts the run did not fail
@@ -166,6 +168,16 @@ public class MailReducerGoldenTests
                 w.Append("m-01");
                 w.Append("m-02", to: "reviewer", priority: MailPriority.Urgent);
                 w.Append("m-03");
+            }),
+
+        new("thread-closed",
+            "A request, an unrelated line, and the ANSWER that closes the request (ADR-0017 d8) — then a digest. The reducer must fold the thread columns off `mail.append` (`inReplyTo` + `hops` ride the trail, unlike `ts`/`body`/`prev`) and reach the same closed-by index the snapshot builds over the whole ledger, including the depth on each envelope.",
+            Setup: w => w.Append("req-1"),
+            Act: w =>
+            {
+                w.Append("m-02");
+                w.Append("ans-1", inReplyTo: "req-1", hops: 1, kind: MailKind.Answer);
+                w.Digest("main", "s-1", dispatchId: "d-1");
             }),
 
         new("first-delivery",
