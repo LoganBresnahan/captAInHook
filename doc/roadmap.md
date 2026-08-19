@@ -1508,6 +1508,29 @@ run live*. The framework underneath is what exists today.
   the bus. Slices via `/adr-plan`. Depends on: item 21 slices 6a/7 landing
   first is *not* required; item 15 (capability policy) bounds the runners
   when it lands.
+  **2026-08-19 (dogfood): the channel ran for real, and named its own next
+  work.** `doc/dogfood/2026-08-19-the-robot-channel.md` — `watch.json` written
+  (one rule: `reviewer`, `>=urgent`, `quietFor 10min`, `noLiveSession`, budget
+  1/2), `turn-claude` registered, and one urgent request woke a real `claude -p`
+  that answered on the bus. Nudge latency 600.76s against a 600s threshold (the
+  760ms is the 1s tail poll); turn wall time 239.5s inside a 600000ms budget;
+  zero `watch.*` faults; the loop stopped by itself (the turn's own rows
+  re-triggered evaluation and raised nothing). The answer was WORK, not a demo:
+  it decided the thread lane's blocking question — store `hops`, because a
+  derived walk hits a rotated-away `inReplyTo` and silently resets the count,
+  and "a bound whose failure direction is unbounded-and-silent is not a bound" —
+  which is the input `thread-fields` was waiting on. Six findings; four became
+  ADR-0017 **phase 8** slices (`nudge-workspace` — nothing can populate
+  `MailNudge.Workspace`, so d5's project-scoped-robot-consent claim is currently
+  FALSE and a `project` rule mis-scopes in silence; `turn-provenance` — the
+  answer's `from` is model prose, N6's "payload-stamped" is optimistic;
+  `turn-pickup-bound` — the nudge named 1 envelope and the turn was handed 3;
+  `nudge-accounting` — no cost column anywhere, and `dispatch.start` advertises
+  the wrong budget), and one is ADR-0018's (`reaper-payloads` now has a live
+  corpse to tend). Still unobserved and deliberately so: N2 idle-exit (the
+  maintainer's own session kept the daemon warm), presence false negatives on a
+  `mixed` role, recurrence against `perRoleHour`, and whether `mail ask --wait`
+  is actually wanted.
   Slices landed: `e2e-stub-runner-loop` (2026-08-19; phase 6 — the whole chain,
   zero tokens, and the first time the six parts of the robot channel are joined in
   one line. A human asks a role nobody is sitting in; the daemon's own watcher
@@ -1942,6 +1965,13 @@ run live*. The framework underneath is what exists today.
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
   disappears). Reaper authority left open until its slice. Slices via
   `/adr-plan`.
+  **2026-08-19 (dogfood): detection has a live subject and no hands.** The first
+  robot turn left the role's sessionless `cursor.reviewer..json` beside
+  `cursor.reviewer.84abfc7c-…json` — an unregistered instance mailbox, window
+  closed days ago, session not live: d6's dead mailbox on the maintainer's own
+  tree. With no `reaper` payload installed a `reaper` rule can only log
+  `unserved`, so `reaper-payloads` is what makes the rule that already ships
+  mean anything (`doc/dogfood/2026-08-19-the-robot-channel.md`).
   Slices landed: `watcher-dead-mailbox-rule` (2026-08-18; phase 3 — the OTHER
   half of d6, and the half that decides nothing: detection. The ADR-0017 brain
   grows a second pass, and it exists because the first one deliberately looks
