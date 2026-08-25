@@ -1531,6 +1531,27 @@ run live*. The framework underneath is what exists today.
   maintainer's own session kept the daemon warm), presence false negatives on a
   `mixed` role, recurrence against `perRoleHour`, and whether `mail ask --wait`
   is actually wanted.
+  **2026-08-20 — SCOPE NARROWED, and the item's remaining shape changed with
+  it.** [ADR-0017 § Scope amendment](adr/0017-watcher-nudge-and-ask.md): the
+  WATCHER half of this item is now a *reference integration* — the worked
+  example of ADR-0001/0002's thesis, taken all the way to a real model call —
+  and not the product. It is frozen: inert by default (no `watch.json`, no
+  nudges, ever), honesty fixes only, no new capability. What stays the product
+  is the passive bus at hook time: `mail status`, the digest, and ask/reply.
+  Reason, in the maintainer's words: *"we don't need to re-invent agent
+  orchestration like langgraph etc. We stick to what we do, a passive mailbox
+  that runs during 'hook' times"* — participation is already declarative (a
+  harness spec + a `mail digest` registration + `dispatch.json`), and the
+  watcher existed to compensate for captAInHook not being the orchestrator.
+  Consequences for what is left here: `nudge-workspace` is **withdrawn** (d5's
+  project-scoping claim is retracted rather than made true; only the LOUDNESS
+  half survives — a `project` rule that can never match a nudge must say so);
+  role→harness routing, a member directory, spawn-on-request and member
+  retirement are **rejected** (rows in the ADR); `turn-provenance` and
+  `nudge-accounting`'s budget column stay as honesty fixes; `turn-pickup-bound`
+  is deferred until the reference integration is run in earnest. The thread lane
+  (`thread-aware-delivery` → `thread-canvas`) and phase 7's docs sweep are
+  unaffected — they are bus work, not watcher work.
   Slices landed: `mail-ask-wait` (2026-08-19; phase 2, thread lane — d8's verb,
   and the first thing that ever fills `replyTo`. `captainHook mail ask --to
   <address> --topic <t> [--wait <s>]` composes a `request` (depth 0, the address
@@ -2043,8 +2064,13 @@ run live*. The framework underneath is what exists today.
   `forwardedFrom` / drop / hold, then a logged `mail reap` — never deleted
   automatically. `address-grammar` + `instance-registration` precede ADR-0017
   phase 2 (answers go `to: asker's role@instance`; 0017 d8's preference hack
-  disappears). Reaper authority left open until its slice. Slices via
-  `/adr-plan`.
+  disappears). ~~Reaper authority left open until its slice.~~ **Reaper authority
+  SETTLED 2026-08-20 from [ADR-0017 § Scope amendment](adr/0017-watcher-nudge-and-ask.md):
+  DETERMINISTIC — `forward-all-to-role` / `drop-all` as data an operator writes,
+  and no LLM reaper, which would be another autonomous agent. Detection is
+  unaffected and stays: mailbox hygiene is a BUS problem, not a watcher one (4 of
+  7 cursors on the live bus held mail forever on 2026-08-17, before the watcher
+  existed).** Slices via `/adr-plan`.
   **2026-08-19 (dogfood): detection has a live subject and no hands.** The first
   robot turn left the role's sessionless `cursor.reviewer..json` beside
   `cursor.reviewer.84abfc7c-…json` — an unregistered instance mailbox, window

@@ -270,3 +270,163 @@ reads), the read model + `web/src/mail.ts` + the canvas (a lane per role with
 per-instance sub-lanes, or lanes per address), and `handlers.json` registration
 args. The wire is versioned by nothing — `to` is a bare string today, so the
 syntax choice in (2) is effectively permanent once mail is written with it.
+
+## The member model — and the scope pullback that answers it (2026-08-20)
+
+*Thinking-out-loud from a design conversation, recorded so it is not lost.
+NON-AUTHORITATIVE (this whole file is). **The pullback at the end WAS decided,
+2026-08-20, and is recorded where decisions live: ADR-0017 § Scope amendment.**
+Read that, not this, for what was settled; this file keeps the exploration —
+including the parts deliberately not built.*
+
+### What "a session" is, per scenario
+
+**A — one workspace, one sit-down, several sessions.**
+
+- *several terminals, each `claude`* — **works today.** Distinct `session_id` per
+  window ⇒ distinct mailbox (`cursor.<role>.<session>.json`). Role is decided by
+  cwd through `dispatch.json` (the live install does this: cwd `/profile` ⇒
+  `reviewer`, elsewhere ⇒ `maintainer`).
+- *Task subagents inside one session* — **not a bus member.** A subagent shares
+  its parent's `session_id` (claude-code.json declares `SubagentStop` as a hook
+  of the same session), so it has no address, no cursor, no mailbox. Verify
+  against the CLI before designing on it.
+- *agent-spawned `claude -p`* — the turn payload's shape, but woken BY the
+  watcher (absence) rather than requested BY a session, and it dies at the end of
+  the turn.
+
+**B — several harnesses, several sessions each.** Attended goose windows need
+only `harnesses/goose.json` + a `mail digest` registration — no engine change,
+that is the harness registry's whole job. A goose *turn* would need
+`turn-goose.sh` AND role→harness routing, which does not exist: fan-out is by
+event, so two turn payloads both spawn, both attempt the pickup, one wins the
+cursor race and spends a model call, the other exits having spent nothing.
+Exactly one model call, but WHICH harness serves the role is a race, not a
+choice.
+
+**The gap scenario A points at:** nothing lets a session say *"give me a
+reviewer."* Mail to an empty role waits for the watcher's absence rule.
+
+### Attended vs headless — a member class the system does not record
+
+|  | attended (human at the wheel) | headless (spawned, unwatched) |
+|---|---|---|
+| notified by | PULL — `mail status`, looked at when the human chooses | PUSH — the nudge; the mail IS the prompt |
+| reads mail when | it next acts (a seam) | immediately, as its first act |
+| costs | the injected characters | a model call on the owner's bill |
+| needs consent | no — it interrupts nothing | yes — `watch.json` + `dispatch.json` + budgets |
+| ends by | the human closing it | finishing, or being retired (NOT BUILT) |
+
+Today `RoleKinds` classifies a ROLE (`Unserved`/`HumanHeld`/`RobotServable`/
+`Mixed`) but nothing records a MEMBER's class. That absence is why ADR-0018 d6's
+dead-mailbox rule has to reconstruct "was anybody ever really here?" from cursor
+files and dispatch ages.
+
+**Attended notification is per-harness and should be DATA.** `mail status` is
+generic (a pull any process can run); *where you wire it* is not — `statusLine`
+is a claude-code config key, and the 2026-08-17 dogfood found the count renders
+in the TUI and NOT in the VS Code extension. A `"display"` block in the harness
+spec beside `events`/`install`, with `"kind": "none"` a legal and honest answer,
+would say so out loud instead of leaving an operator to discover it by watching
+a status bar that never changes.
+
+### Discoverability: the fork
+
+Today membership is INFERRED (cursor files ∪ recently-dispatched sessions; "no
+registry and no heartbeat"; a stale entry means unknown, never gone). The
+alternative is DECLARED: a member announces `{address, harness, class,
+capabilities}` on connect, and anyone can list the directory.
+
+- inference: costs nothing, cannot lie about the past, no lifecycle to get
+  wrong — but nobody is discoverable and dead mailboxes accumulate.
+- declaration: discoverable, routing becomes a choice rather than a race — but
+  needs heartbeats, staleness rules, and a crash leaves a lie in the file.
+
+**The reaper is the price of inference.** A declared directory makes reaping the
+exception rather than the main path — but it still needs one, for members that
+die without saying so.
+
+### Two jobs currently spelled the same
+
+- **reap a MAILBOX** — built (`mail reap`): removes one cursor under its own
+  flock, writes `mail.reap`. Standing only; no process is signalled.
+- **retire a MEMBER** — not built. Ending a headless member is process lifecycle
+  (bosun / ProcessGroup, ADR-0014), not a mailbox act. A long-lived spawned agent
+  nobody can retire is a leak with a token budget.
+
+### The decisions this would have needed
+
+1. Directory: declared or inferred? (Half-measure: inference stays the floor,
+   declaration is an optional upgrade.)
+2. May a session REQUEST a member? "Spawn me a reviewer" is an agent spending the
+   owner's money — same consent shape as a nudge, plus a cap on live members.
+3. Is a headless member one-shot (bounded, contextless) or long-lived (continuity,
+   but needs retirement and idle timeouts)?
+4. Attended notification as declared harness data (`display`).
+5. Role → harness routing (payload self-scopes via `TURN_ROLES`, or the rule
+   names the harness).
+6. Reap semantics: does `reap` grow a second meaning, or does member lifetime get
+   its own verb? (Own verb — "remove standing" and "end a process" failing the
+   same way would be bad.)
+
+### THE PULLBACK — and why it settles most of the above
+
+The maintainer's reframe, 2026-08-20, and it is the right one:
+
+> This is all too much. It ruins the hook nature of the application. We may not
+> even need a watcher and/or reaper. Identity between session / workspace /
+> project is still important. We don't re-invent agent orchestration (langgraph
+> etc.) — we stick to what we do: a **passive mailbox that runs during hook
+> times**. Orchestration comes from the higher level; if a user wants two agents
+> in the mail system as part of their langgraph setup, they set up the harness
+> json and the policy json to participate.
+
+What this keeps, because it is hook-shaped by construction:
+
+- the bus (ledger, cursors, TTL counted in delivery opportunities, hash chain)
+- `mail status` — a pull, ruleless, interrupts nothing
+- `mail ask --wait` — the synchronous shape, and note it needed **no watcher at
+  all**: a bounded read of the ledger by the asking process
+- identity and addressing (`role`, `role@instance`, cwd/project scoping, named
+  mailboxes) — the part the maintainer explicitly wants kept
+- the thread fields (`inReplyTo` read, stored `hops`, the closed-by index)
+
+What it puts in question:
+
+- the WATCHER — the one component that acts on its own. It is a timer in a
+  daemon, and it needed monotonic deadlines, persistence across restarts,
+  budgets, consent, a self-feed guard and an idle-exit interaction: ~7 slices of
+  machinery for "when nobody is home, wake somebody". **It exists to compensate
+  for captAInHook not being the orchestrator.** Accept that it is not the
+  orchestrator and the job mostly evaporates.
+- the LLM REAPER (`reaper-payloads`' second half) — another autonomous agent,
+  the exact thing being pulled back from.
+
+What survives the pullback that might look like it should not:
+
+- **mailbox hygiene is a real bus problem, independent of the watcher.** Closed
+  human windows left 4 of 7 cursors holding mail forever on the live bus
+  (2026-08-17), *before* the watcher existed. So: keep the deterministic reaper
+  (forward-all / drop-all is data, not judgement); drop the LLM one.
+- the thesis still demos without a daemon-side timer: an LLM-backed HANDLER at a
+  seam (`starter-llm.sh`) is "splice an LLM-backed subsystem into an agent's loop
+  at a guaranteed seam" in full, with no autonomy anywhere.
+
+Consequences that fall straight out, if the pullback holds:
+
+- `nudge-workspace` ⇒ **WITHDRAW** the claim (ADR-0017 d5's Ground truth sentence
+  is deleted, `project` rules are documented as not applying to nudges, and a
+  `project` rule that can never match a nudge is made LOUD). Growing `watch.json`
+  a field is adding config surface to a component being demoted.
+- `turn-role-routing` ⇒ don't build; the orchestrator picks the harness.
+- a member DIRECTORY (decisions 1–3) ⇒ don't build. Presence-by-inference is the
+  hook-shaped answer.
+- the watcher ⇒ **freeze, don't rip.** It is already inert by default (absent
+  `watch.json` ⇒ zero nudges), it is the best existing proof of the ADR-0001/0002
+  thesis, and removing it costs more than parking it. Reframe it in the docs from
+  "the product" to "the reference integration", and stop extending it past the
+  honesty fixes (`nudge-accounting`'s wrong budget column, `turn-provenance`).
+- what "participation is declarative" already means, today, with no new
+  mechanism: a harness spec json + a `mail digest` registration in handlers.json
+  + `dispatch.json` rules. Any process that can run `captainHook mail send` is
+  already a member.

@@ -1,9 +1,15 @@
 # ADR-0017 — The watcher: a human nudge that is always on, a robot nudge that sometimes fires, and ask/reply over the bus
 
-**Status:** Proposed *(2026-08-17; drafted from the owner's design session of
-2026-08-16 — the day the bus carried its first real exchange, a two-window
-review of commit 1ee7218 — and the brainstorm that followed. Nothing here is
-implemented. Build order via `/adr-plan`, below.)*
+**Status:** **Accepted, and NARROWED 2026-08-20** — see
+[§ Scope amendment](#scope-amendment-2026-08-20--the-watcher-is-a-reference-integration-not-the-product),
+which is the first thing to read: it changes what this ADR is *for*. Phases 1-6
+are built and running (`mail status`, the rules, the internal event, the brain,
+its memory, the turn payload, the in-daemon actor, the zero-token e2e); the
+thread lane is built through `mail-ask-wait`. *(Drafted 2026-08-17 from the
+owner's design session of 2026-08-16 — the day the bus carried its first real
+exchange, a two-window review of commit 1ee7218 — and the brainstorm that
+followed. Build order via `/adr-plan`, below; phase 7's ground-truth sweep is
+still owed.)*
 **Date:** 2026-08-17
 **Builds on:** [ADR-0016](0016-mailbox-bus.md) (the bus; this ADR is the
 answer to its decision 9's revisit trigger and resolves its N5/N6),
@@ -61,6 +67,100 @@ ledger's own events as trail lines (`mail.append`, `mail.cursorAdvance`) —
 so a watcher is a *rule with a trigger attached to state that exists*, not a
 new subsystem.
 
+## Scope amendment (2026-08-20) — the watcher is a reference integration, not the product
+
+*Accepted by the maintainer in the design session of 2026-08-20. Recorded here
+rather than in a new ADR because it does not reverse a decision below — it
+changes what this ADR is FOR, and every decision has to be read through it.
+**Nothing built is removed.** The thinking that produced it, verbatim and
+non-authoritative, is in `doc/scratch.md` § The member model.*
+
+**What prompted it.** A session that began at "how would I actually use this?"
+escalated, in one sitting, to: a member DIRECTORY (harnesses announce
+themselves, everyone is discoverable), a member CLASS the system does not record
+(attended vs headless), spawn-on-request ("my session decides to send mail to a
+reviewer, which means we need to spawn one"), member RETIREMENT as a lifecycle
+act distinct from reaping a mailbox, `--resume`-a-dormant-session turns so a
+woken agent has continuity, and a proposed ADR-0019 to hold it all. The
+maintainer stopped it:
+
+> "This is all too much. I'm ruining the idea behind the hook nature of the
+> application. We may not even need a watcher and/or reaper. Though I still
+> think identity between session / workspaces / and projects is important to
+> have. Reason being is we don't need to re-invent agent orchestration like
+> langgraph etc. We stick to what we do, a passive mailbox that runs during
+> 'hook' times. Agent orchestration comes from the higher level. If a user wants
+> two agents in the mail system as part of the langgraph setup then they need to
+> set up the harness json and policy json to participate."
+
+**The reasoning, as decided.**
+
+1. **The seam is the moat, not the mailbox.** A general orchestrator owns the
+   inside of a graph it defines; it cannot reach into a Claude Code session a
+   human is driving. captAInHook can, because it lives at points the harness
+   guarantees. Every part of the system that follows from that is cheap and
+   durable; every part that does not, is not.
+2. **A cost asymmetry that reads as a tell.** This ADR's watcher needed
+   monotonic deadlines, state that survives a restart as ages, two budget
+   counters, a consent surface, a self-feed filter and an idle-exit interaction
+   — roughly seven slices — to do one thing: *when nobody is home, wake
+   somebody*. `mail ask --wait` — the SYNCHRONOUS feature, the one that sounds
+   like it needs infrastructure — needed none of it: a bounded read of the
+   ledger by the asking process (d8). When the design's grain is followed the
+   same class of problem costs an order of magnitude less.
+3. **The watcher exists to compensate for not being the orchestrator.** Accept
+   that captAInHook is not one, and most of its job evaporates: whatever
+   spawned an agent knows it spawned it and can hand it a prompt.
+4. **Participation is already declarative, and needs no new mechanism.** A
+   harness spec, a `mail digest` registration in `handlers.json`, and
+   `dispatch.json` rules — that is the whole contract. Any process that can run
+   `captainHook mail send` is already a member. A directory would be a second,
+   drift-prone statement of what those files already say.
+
+**What this ADR still is, unchanged.** d2 (`mail status` — a pull, ruleless,
+enters no loop), d8 (`inReplyTo` read, stored `hops`, the closed-by index,
+`mail ask --wait`), d9's seam analysis, and the identity work the maintainer
+explicitly kept: role, `role@instance`, cwd/project scoping, named mailboxes.
+All of it is hook-time or human-typed; none of it acts on its own.
+
+**What is narrowed.** d1 presents "digest / runner / watcher" as three things
+this ADR builds. The **watcher half (d4, d5, d6, d7, d10) is now a REFERENCE
+INTEGRATION, not the product** — the worked example of this project's own
+thesis (ADR-0001/0002: splice a deterministic *or* LLM-backed subsystem into an
+agent's loop at guaranteed seams), taken all the way to a real model call. It
+is frozen: honesty fixes yes, new capability no.
+
+Three reasons it is frozen rather than removed: it is **inert by default** (no
+`~/.captainHook/watch.json` ⇒ zero robot nudges, ever — d7's own default), it is
+the best working demonstration of the thesis this repo has (one real turn woke,
+read its mail, and answered on the bus — `doc/dogfood/2026-08-19-the-robot-
+channel.md`), and reverting seven landed slices costs more than parking them.
+
+**Withdrawn — decided against, not merely unscheduled.**
+
+| withdrawn | why |
+|---|---|
+| `nudge-workspace` growing `watch.json` an optional `workspace` | d5's Ground truth claim that `dispatch.json`'s `project` criterion scopes robot turns per repository is FALSE as built, and it is now **retracted rather than made true**: adding config surface to a component being demoted is backwards. `MailNudge.Workspace` stays null, `project` rules do not apply to nudges, and the remaining work is to make that VISIBLE rather than silent (see the plan's phase 8 row). |
+| role → harness routing for turn payloads | Which harness serves a role is the orchestrator's choice. Today two installed turn payloads race on the pickup and exactly one spends a model call, which is bounded and honest; making it a *choice* is a feature of a thing we are not building. |
+| a member DIRECTORY, an attended/headless member CLASS, spawn-on-request, member RETIREMENT (the would-be ADR-0019) | All four are agent orchestration. Presence stays INFERRED (cursor files ∪ recent dispatch ages, "a stale entry means unknown, never gone") because inference is the hook-shaped answer: it costs nothing, cannot lie about the past, and has no lifecycle to get wrong. |
+| `--resume` a dormant session so a turn has continuity | Considered seriously — it is the only way a woken turn gets context, and the mailbox key already IS the session id. Rejected here because it needs a liveness guard stronger than inferred presence (two processes on one transcript), and because it reverses N7's reentrancy bound from "a turn fires no hooks" to "budgets plus a self-feed filter". Both are orchestration-shaped problems. Reopen only under the trigger below. |
+| an LLM reaper (ADR-0018's `reaper-payloads`, second half) | Another autonomous agent — the thing being pulled back from. **Its deterministic half stays**: mailbox hygiene is a real BUS problem independent of the watcher, evidenced before the watcher existed (4 of 7 cursors on the live bus held mail forever, 2026-08-17). Forward-all / drop-all is data, not judgement. ADR-0018 carries its own row. |
+
+**Kept from phase 8, as honesty rather than capability:** `turn-provenance`
+(the answer's `from` is model prose; a record that misdescribes who spoke is a
+defect at any scope) and `nudge-accounting`'s budget column (`dispatch.start`
+advertises the wrong number to anyone diagnosing a killed turn).
+`turn-pickup-bound` is DEFERRED — it is a real bound on real money, but it only
+bites when the reference integration is run in earnest.
+
+**The cost, accepted with open eyes.** Mail addressed to a role nobody attends
+waits indefinitely. The mitigations are the ones the bus already has: the
+attended pull (`mail status`), TTL counted in delivery opportunities so an
+unread ledger cannot grow unbounded in meaning, and `mail ask --wait` for the
+case where an answer is actually needed now. That is the email model, and email
+has survived a while on it.
+
+
 ## Decision
 
 1. **Three kinds of thing on the bus, kept distinct.** A **digest** carries
@@ -69,7 +169,10 @@ new subsystem.
    A **watcher** carries no mail and does no work: it looks at ledger +
    cursors + presence, decides "someone is falling behind", and pokes.
    This ADR builds the watcher and the smallest honest runner shape; it does
-   not build a swarm orchestrator.
+   not build a swarm orchestrator. **Narrowed 2026-08-20 (§ Scope amendment):
+   the watcher and runner halves are a REFERENCE INTEGRATION — frozen, inert
+   without `watch.json`, honesty fixes only. The digest, `mail status` and
+   ask/reply are the product.**
 
 2. **The human channel is always on and has no rules.** A new read-only verb,
    `captainHook mail status`, prints one line per role the caller may read —
@@ -252,6 +355,9 @@ new subsystem.
 | **A new spawner / orchestrator for runners** | Rejected — `MailNudge` through the ordinary dispatcher reuses registration, budgets, bosun, policy, capability policy and the trail. A second spawn path is a second kill discipline to get wrong. |
 | **Session-id addressing for replies** | Rejected (ADR-0016) — still roles. Thread-aware *delivery preference* via `inReplyTo` gets the answer to the asker without stranding it if that session is gone. |
 | **A `turn` HarnessSpec capability from day one** | Deferred — one harness's argv is not a pattern. Payload first; promote at three (d6's trigger). |
+| **A member directory (harnesses announce themselves; everyone discoverable)** | Rejected 2026-08-20 (§ Scope amendment) — presence stays INFERRED. A directory is a second statement of what `handlers.json` + `dispatch.json` already say, and it needs heartbeats, staleness rules and a cleanup path for members that die without saying so. |
+| **Spawn-on-request ("my session needs a reviewer, make one")** | Rejected 2026-08-20 — that is agent orchestration, and the higher level already owns it. A session that wants a helper can spawn one itself; if it registers a `mail digest`, it is a member with no new mechanism. |
+| **Retiring a member as a lifecycle act** | Rejected 2026-08-20 — `mail reap` removes a MAILBOX's standing; ending a PROCESS is bosun's world (ADR-0014) and belongs to whoever started it. Two different failures must not share one verb. |
 | **A fourth seam class `drive`** | Deferred — considered as a way to distinguish "read your mail" from "do this now" in the reconcile block; not needed for the watcher or ask/reply. Reopen with the `turn` capability if runners need policy defaults distinct from reconcile. |
 
 ## Consequences
@@ -348,10 +454,10 @@ anything else lands.** It is the one slice that pays off by itself.
 | 5 | `thread-canvas` — awaiting cards, request→answer links across lanes, `late` tag, nudge marks on the lane from `mail.nudge`, `vehicle: payload` drawn differently (N6) | thread | opus | medium | `/ui-loop`: golden/skeptic fold harness + READ the screenshots, both themes; runs in parallel with the actor. |
 | 6 ✅ | `e2e-stub-runner-loop` **(landed 2026-08-19)** — the whole chain, zero tokens: append → rule → `MailNudge` → the shipped turn payload → its sessionless pickup → an answer on the bus → the asker's next digest | both | opus | medium | A wrong test fails loudly. This is the flaky-guard exposure point: generous timeouts, sandbox env only (never `~/.captainHook`). **As built, and the plan's own shape is superseded by its phase 4.** The row says the stub payload "fires `captainShim hook user-prompt-submit` with its own session id"; `turn-claude-payload` resolved reentrancy the other way, so guard 1 (`--setting-sources ""`) is kept verbatim, a woken turn fires NO hooks at all, and the payload does the pickup — a turn firing hooks here would test a shape that ships nowhere. What runs instead is what ships: `examples/payloads/turn-claude.sh` verbatim as an exec handler on `mail-nudge`, the real `mail send` / `mail digest` verbs as child processes, the real dispatcher and the real watcher inside a real `DaemonHost`. The ONE stub is `claude` on the turn's PATH — it enforces the guard by exiting nonzero without it, reads the envelope id out of its prompt, and writes one `kind: answer` envelope. **The daemon is poked by nobody:** the only thing that reaches the watcher is the `mail.append` row a CLI in another process wrote to the trail it tails, which is exactly the live path. Three claims no unit reaches: the ledger's join (the turn's `mail.deliver` carries the NUDGE's `dispatchId`, `hookEvent: UserPromptSubmit`, no `sessionId`, and leaves `cursor.reviewer..json`), `inReplyTo` surviving nudge → prompt → answer → the asker's inject exactly once, and **the loop stops** — the turn's own rows re-trigger an evaluation (the self-feed guard is a filter on WHICH rows, not a claim that none do) and one nudge is still the whole bill (N1), asserted after waiting for that evaluation rather than at the instant the answer lands. `mail ask --wait` is NOT in the picture and its absence is not a gap in the loop: it is the thread lane's, and the asker closes the loop the way every live window does. `FakeClock` + sandbox `HOME` + throwaway rendezvous; the flaky guard cost no retry cycle (3 consecutive greens on the filter, ~0.7s each). `WatcherLoopE2ETests` (1); suite 1418 → 1419 green twice. |
 | 7 | `docs-and-ground-truth` — flow doc § *The watcher* (diagram from this ADR's context, ground-truth rows), statusLine wiring, `watch.json` + `mail.nudge` schema, this ADR's Ground truth + Status flip, roadmap 22 tick, a dated dogfood note | — | opus | low | `/shipshape`; every symbol named exists. Ground-truth rows and roadmap ticks accrue in EACH landing commit — this phase is a sweep, not a rewrite. |
-| 8 | `nudge-workspace` — **decide, then build or withdraw**: either `watch.json`'s rule grows an optional `workspace` (the watcher fills `MailNudge.Workspace`, the dispatch cwd becomes the turn's repo, and d5's project-scoping claim becomes true), or d5's Ground truth sentence is withdrawn and `dispatch.json` project rules are documented as not applying to nudges. From the 2026-08-19 field pass, where a `project` rule would have matched the daemon's cwd and mis-scoped in silence | watcher | opus | medium | The failure is SILENT consent: a rule that looks like it scopes robot turns to one repo and actually reads `~/.captainHook`. Whichever way it goes, a test must pin what a `project` rule does to a nudge. Do this BEFORE anyone writes robot consent into an installation guide. |
-| 8 | `turn-provenance` — the answer's `from` stops being model prose: the payload composes it (role, harness, a payload-stamped instance) or `mail send` learns to stamp it, so `vehicle: payload` on the canvas has something true to draw. N6's amendment | watcher | opus | medium | Pin the envelope a woken turn actually writes, as a real process — `TurnPayloadTests`' shape. The model must not be able to name itself somebody else, and an answer whose `from.session` joins to nothing is what makes the canvas's presence inference guess. |
-| 8 | `turn-pickup-bound` — a first pickup on a role's new sessionless mailbox delivers the whole retained backlog, not the nudged envelope: the 2026-08-19 nudge named 1 and the turn was handed 3, two of them settled threads from three days earlier. Bound it (anchor a fresh turn mailbox at the nudged envelopes, or cap what a nudge-driven pickup hands one turn) | watcher | opus | medium | **verify:** the bound must not LOSE mail — mail the turn is not shown must stay pending for the next reader, which is the whole difference between a cap and a drop. Cheapest correct answer may be to anchor rather than to trim. |
-| 8 | `nudge-accounting` — what the trail says a nudge COST: the model's output is one ~2KB-capped `exec.stderr` row and there is no token/cost column at all (N1's amendment), while `dispatch.start` advertises the dispatcher's fan-out `budgetMs: 2000` for a handler that actually runs under its entry's 600000 — a maintainer diagnosing a killed turn reads the wrong number | watcher | opus or sonnet | low–medium | Two separate honesty bugs in one row because both are "the record misdescribes the turn". The budget half is a one-line fix with a golden; the cost half is a design question (what CAN the engine know about a child's spend?) and may end as a recorded limit rather than a column. |
+| 8 ⊘ | `nudge-workspace` **(WITHDRAWN 2026-08-20 — the claim is retracted, not built; see § Scope amendment. What survives is the loudness half: a `project` rule that can never match a `MailNudge` must be refused or logged, never silently ignored.)** — ~~**decide, then build or withdraw**: either `watch.json`'s rule grows an optional `workspace` (the watcher fills `MailNudge.Workspace`, the dispatch cwd becomes the turn's repo, and d5's project-scoping claim becomes true), or d5's Ground truth sentence is withdrawn and `dispatch.json` project rules are documented as not applying to nudges. From the 2026-08-19 field pass~~ | watcher | opus | low | The failure is SILENT consent: a rule that looks like it scopes robot turns to one repo and actually reads `~/.captainHook`. Whichever way it goes, a test must pin what a `project` rule does to a nudge. Do this BEFORE anyone writes robot consent into an installation guide. |
+| 8 | `turn-provenance` **(KEPT after the 2026-08-20 narrowing — honesty, not capability: a record that misdescribes who spoke is a defect at any scope)** — the answer's `from` stops being model prose: the payload composes it (role, harness, a payload-stamped instance) or `mail send` learns to stamp it, so `vehicle: payload` on the canvas has something true to draw. N6's amendment | watcher | opus | medium | Pin the envelope a woken turn actually writes, as a real process — `TurnPayloadTests`' shape. The model must not be able to name itself somebody else, and an answer whose `from.session` joins to nothing is what makes the canvas's presence inference guess. |
+| 8 | `turn-pickup-bound` **(DEFERRED 2026-08-20 — a real bound on real money, but it bites only when the reference integration is run in earnest)** — a first pickup on a role's new sessionless mailbox delivers the whole retained backlog, not the nudged envelope: the 2026-08-19 nudge named 1 and the turn was handed 3, two of them settled threads from three days earlier. Bound it (anchor a fresh turn mailbox at the nudged envelopes, or cap what a nudge-driven pickup hands one turn) | watcher | opus | medium | **verify:** the bound must not LOSE mail — mail the turn is not shown must stay pending for the next reader, which is the whole difference between a cap and a drop. Cheapest correct answer may be to anchor rather than to trim. |
+| 8 | `nudge-accounting` **(KEPT after the 2026-08-20 narrowing — the budget half is one line of honesty; the cost half may still end as a recorded limit rather than a column)** — what the trail says a nudge COST: the model's output is one ~2KB-capped `exec.stderr` row and there is no token/cost column at all (N1's amendment), while `dispatch.start` advertises the dispatcher's fan-out `budgetMs: 2000` for a handler that actually runs under its entry's 600000 — a maintainer diagnosing a killed turn reads the wrong number | watcher | opus or sonnet | low–medium | Two separate honesty bugs in one row because both are "the record misdescribes the turn". The budget half is a one-line fix with a golden; the cost half is a design question (what CAN the engine know about a child's spend?) and may end as a recorded limit rather than a column. |
 
 **Phases:** (1) the four leaves in one parallel sweep — disjoint files
 (`MailSend`/`Program.cs`; `MailEnvelope`/`MailStore`/read model;
@@ -393,7 +499,7 @@ dirs, never the live `~/.captainHook/`; ship bar suite green twice;
 | d8 — `inReplyTo` is READ, and a thread's depth is STORED (slice `thread-fields`) | `MailEnvelope.Hops` with its parse rule, and `MailEnvelope.HopBudget` (the policy N — 6, head plus five replies) in `dotnet/captainHook/Mail/MailEnvelope.cs`; the durable line in `MailStore.Render` (`"inReplyTo":…,"hops":…` between the link and `replyTo`) and the `inReplyTo`/`hops` columns on `mail.append`; `MailSend.WithThreadDepth` + `HopsStated` (the ledger stamps the depth, a disagreeing claim is refused, the budget refuses with nothing written); `MailDigest`'s item head (`· answers <id> · hop n/N`, the ORDINAL so `N/N` reads as full) and `WatcherBrain.ReplyHow` (a woken turn is told not to write the field); `ApiReadModel.ClosedBy` + `MailDto.ClosedBy`/`HopBudget`; `web/src/mail.ts` (`MailEnvelopeView.hops`, `MailState.closedBy`/`hopBudget`, `closeThread` folding the live rows, a snapshot's index replacing what a stream taught) and the detail card's `answers` / `answered by` rows. **Deliberately NOT here:** no read-time cross-check and no hop `MailChainFaultKind` — the only child-vs-parent comparison is at write time, where the parent is resident or provably gone. Tests: `MailThreadFieldsTests.cs` (26), four `mail.test.ts` thread cases, the `thread-closed` golden scenario |
 | d8 — ask/reply is a VERB, and `--wait` is a bounded read (slice `mail-ask-wait`) | `MailAsk` (`Run`, `Deadline`, `TryParseArgs`, `MaxWaitSeconds` = 600, `PollMs` = 500, `ToolTimeoutEnv`) + `MailAskBound` in `dotnet/captainHook/Mail/MailAsk.cs`, routed as `mail ask` from `Program.cs`; the return address is inferred through `MailStatus.ReadableMailboxes` (lifted to `internal` — the status line's lookup, shared not forked) and the harness through `MailDigest.TryParseArgs` over the caller's own registration. NO new trail event: the `mail.append` the request already writes IS the record, and a poll that found nothing is not a fact worth a line. NO cursor is touched — the answer this verb prints is still pending for the asker's digest. Tests: `MailAskTests.cs` (30), clock and sleeper injected so nothing waits |
 | d7 — rules are data, exist only for the robot channel, and are its consent (slice `watch-rules`) | `WatchRules` (`TryParse`, `ResolvePath`) + `WatchRule`/`WatchWhen`/`WatchBudget`/`WatchPriority` and the file tri-state `WatchResolution` (`Absent`/`Malformed`/`Loaded`, `Resolve`, `Effective`) in `dotnet/captainHook/Core/WatchRules.cs`, beside `DispatchPolicy` whose idiom it copies (strict walk, every violation in one pass, all-or-nothing accept, never throws on bad DATA, the injectable path — here `CAPTAINHOOK_WATCH_FILE`, else `~/.captainHook/watch.json`). **What DIFFERS from its twin, and is the reason it is a separate document:** the direction of the default. `dispatch.json` absent means allow everything; `watch.json` absent means ZERO robot nudges and malformed means the same thing plus a warn — `Effective()` is where that is stated once, so there is no fail-open asymmetry for a reader to reason about. Hence NO `default` field: a baseline of "nudge" would be a document whose absence and presence differ in the direction that costs money. **As-built decisions this slice had to make.** `when` is REQUIRED and must name at least one of `priority`/`quietFor` — `noLiveSession` defaults true and states no threshold on its own, so a `when` holding only it describes a rule that wakes a model the instant mail lands; somebody who wants that writes `"quietFor": "0s"`, which is legal, and can be held to having meant it. `budget` is REQUIRED with both counters, each ≥ 1, because every candidate default is a number of model calls this code would spend without being told (N1). A duration is `<whole number><unit>` over the CLOSED set ms/s/min/h, yielding MILLISECONDS (one side of a monotonic subtraction, house invariant 2) — no fractions, no bare numbers (`600` is ambiguous by a factor of a thousand and guessing wrong is ten minutes vs. one second), no negatives, and an overflowing value is refused rather than wrapped. A priority is `urgent` or `>=urgent`, matched by NAME (never `Enum.TryParse`, which takes "2" and comma lists) and case-INSENSITIVELY, the deliberate divergence from an address (ADR-0018 d2): a closed set can correct a casing slip, an open universe of mailboxes cannot. `role` goes through `MailAddress.IsRole` — the envelope parser's own predicate — and a `role@instance` address is REFUSED for now, a judgement rather than a grammar check: a rule decides whether a ROLE may be woken while the mailbox a nudge names is an instance the watcher FOUND, and refusing an unbuilt spelling is the reversible direction. Rule ORDER is preserved and duplicates are kept; which rule wins is `watcher-brain`'s. Tests: `WatchRulesTests.cs` (68 — the ADR's own document, the duration and priority tables, the required halves, the strict walk, one-pass violations, the lone-surrogate guard, and the tri-state including the absent-≡-malformed theory) |
-| d5 — the robot nudge is an ordinary hook event, not a new spawner (slice `mail-nudge-event`) | `MailNudge` (the envelope + `ToPayloadJson`), `MailNudgeEvent` (`EventType` = `MailNudge`, `HarnessName` = `internal`, `DispatchAsync`) and `MailNudgeOutcome` in `dotnet/captainHook/Core/MailNudgeEvent.cs`; the embedded spec `dotnet/captainHook/harnesses/internal.json`. The slice BUILDS almost nothing, which is the decision: `handlers.json` registers turn payloads on `"events": ["mail-nudge"]`, `dispatch.json` is the consent, and bosun / budgets / the kill discipline / the exec-wire envelope / the `dispatch.start → exec.spawn → exec.exit` trail all apply unchanged. **N3's four ways an internal event is not a hook, each as-built.** (i) NO STDOUT: the closed adapter set gains `none` (`NoWireAdapter`) so the spec can state the absence of a wire format in data rather than borrow a real adapter and leave a serializer one refactor from the sacred channel; reaching it writes nothing and warns `harness.noWireSerialize`. `HarnessSpec.AnswersHooks` (keyed on the ADAPTER, so a second internal harness inherits it) makes BOTH hook wire sites refuse `--harness internal` the way they refuse an unknown name — clear stderr, zero stdout bytes — which is the reachable version of "internal never reaches a stdout-serialize path", since nothing in the nudge path serializes but two words are easy to type. (ii) NO EFFECTS: `internal.json` declares `MailNudge` with `"effects": []`, so the SHIPPED capability gate downgrades whatever a payload returns and warns `harness.effectUnsupported` — log-and-ignore expressed in the existing language rather than as a new rule. (iii) NO PRESENCE: a nudge carries no session, so the daemon's `presence.Seen(evt.SessionId)` stamp has nothing to record even in principle, and this path never calls it; a dispatch that counted as presence would let the watcher's own action answer the watcher's "is anybody live?" question. (iv) A DENIAL IS LOGGED, NOT ANSWERED: `HookRun.PolicyGateFor` was split into `HookRun.DecidePolicy` (the ruling + the one emitter of `policy.skip`/`policy.malformed`/`policy.exclude`, returning `PolicyRuling`) and the stdout half, because the gate's short-circuit IS a serialized Noop — the one thing an internal event must never produce — and copying the three trail lines into the nudge path would put the consent surface's record in two places. The nudge path adds `nudge.denied` / `nudge.dispatch` (src `nudge`, no `sessionId`, dispatchId minted here since there is no shim); `mail.nudge` proper is `nudge-state-and-trail`'s. `workspace` is the ingest's `cwd`, so `dispatch.json`'s `project` criterion scopes robot turns per repository — **and as built nothing can populate it, so that sentence is currently FALSE** (field, 2026-08-19): `MailNudge.Workspace` is null because `watch.json` has no workspace field, so a nudge dispatch's cwd is the DAEMON's and a `project` rule written against the turn's real workspace mis-scopes silently. Either `watch.json` grows the field or the claim is withdrawn — slice `nudge-workspace`. Consequence accepted: the GUI's Harnesses panel now lists `internal` (one event, no verbs), which is honest and useful to somebody writing a turn payload. Tests: `MailNudgeEventTests.cs` (11) |
+| d5 — the robot nudge is an ordinary hook event, not a new spawner (slice `mail-nudge-event`) | `MailNudge` (the envelope + `ToPayloadJson`), `MailNudgeEvent` (`EventType` = `MailNudge`, `HarnessName` = `internal`, `DispatchAsync`) and `MailNudgeOutcome` in `dotnet/captainHook/Core/MailNudgeEvent.cs`; the embedded spec `dotnet/captainHook/harnesses/internal.json`. The slice BUILDS almost nothing, which is the decision: `handlers.json` registers turn payloads on `"events": ["mail-nudge"]`, `dispatch.json` is the consent, and bosun / budgets / the kill discipline / the exec-wire envelope / the `dispatch.start → exec.spawn → exec.exit` trail all apply unchanged. **N3's four ways an internal event is not a hook, each as-built.** (i) NO STDOUT: the closed adapter set gains `none` (`NoWireAdapter`) so the spec can state the absence of a wire format in data rather than borrow a real adapter and leave a serializer one refactor from the sacred channel; reaching it writes nothing and warns `harness.noWireSerialize`. `HarnessSpec.AnswersHooks` (keyed on the ADAPTER, so a second internal harness inherits it) makes BOTH hook wire sites refuse `--harness internal` the way they refuse an unknown name — clear stderr, zero stdout bytes — which is the reachable version of "internal never reaches a stdout-serialize path", since nothing in the nudge path serializes but two words are easy to type. (ii) NO EFFECTS: `internal.json` declares `MailNudge` with `"effects": []`, so the SHIPPED capability gate downgrades whatever a payload returns and warns `harness.effectUnsupported` — log-and-ignore expressed in the existing language rather than as a new rule. (iii) NO PRESENCE: a nudge carries no session, so the daemon's `presence.Seen(evt.SessionId)` stamp has nothing to record even in principle, and this path never calls it; a dispatch that counted as presence would let the watcher's own action answer the watcher's "is anybody live?" question. (iv) A DENIAL IS LOGGED, NOT ANSWERED: `HookRun.PolicyGateFor` was split into `HookRun.DecidePolicy` (the ruling + the one emitter of `policy.skip`/`policy.malformed`/`policy.exclude`, returning `PolicyRuling`) and the stdout half, because the gate's short-circuit IS a serialized Noop — the one thing an internal event must never produce — and copying the three trail lines into the nudge path would put the consent surface's record in two places. The nudge path adds `nudge.denied` / `nudge.dispatch` (src `nudge`, no `sessionId`, dispatchId minted here since there is no shim); `mail.nudge` proper is `nudge-state-and-trail`'s. ~~`workspace` is the ingest's `cwd`, so `dispatch.json`'s `project` criterion scopes robot turns per repository~~ — **RETRACTED 2026-08-20 (§ Scope amendment).** As built nothing can populate it: `MailNudge.Workspace` is null because `watch.json` has no workspace field, so `HookEvent.Cwd` is null and `DispatchPolicy`'s `ProjectContains(project, null)` is FALSE — a `project` rule therefore never matches a nudge *at all* (it does not, as the 2026-08-19 field note first said, match the daemon's cwd; `~/.captainHook` is where `ExecHandler.ResolveCwd` starts the CHILD, which is a different half, and the model itself runs wherever `TURN_WORKSPACE` says). The failure is silent in both directions and one of them is dangerous: `default: allow` plus a project-scoped DENY means the deny never fires and turns run where the operator forbade them; `default: deny` plus a project-scoped ALLOW means nothing ever runs. The claim is withdrawn rather than made true — `project` rules do not apply to robot nudges, and robot consent is scoped by event, by handler, and by `watch.json`'s role. What remains to build is only the LOUDNESS: a `project` rule that can never affect a nudge must say so, at parse or at the gate, because a consent surface whose failure direction is silently *wider* than written is the one thing this ADR exists to prevent. Consequence accepted: the GUI's Harnesses panel now lists `internal` (one event, no verbs), which is honest and useful to somebody writing a turn payload. Tests: `MailNudgeEventTests.cs` (11) |
 | d2 — the human channel, always on and ruleless | `MailStatus` (`Run`, `Line`) in `dotnet/captainHook/Mail/MailStatus.cs`, routed from `Program.cs`'s `mail` switch; `MailStatusTests.cs` (30). **As-built**: the role is NAMED in the line only when the window may read more than one (`📬 maintainer 2 · 1 urgent`), since the ADR's bare `📬 2 · 1 urgent` cannot say which of two roles it means; a role with two seam registrations is still one cursor and one line. Silence is a state — no readable role, nothing pending, absent or malformed `handlers.json` all print nothing at exit 0. Recognition of a digest registration is `MailDigest.TryParseArgs` itself, never a second spelling. Wiring + the uncached whole-store read it costs: [doc/flow/mailbox-bus.md](../flow/mailbox-bus.md) § The human channel |
 
 ## Revisit triggers
@@ -406,3 +512,15 @@ dirs, never the live `~/.captainHook/`; ship bar suite green twice;
   class.
 - A role left unserved across daemon idle-exits often enough to matter ⇒ a
   resident watcher (N2).
+
+**Triggers that would REOPEN the 2026-08-20 narrowing** (§ Scope amendment) —
+each is a fact about daily use, not an argument:
+
+- Mail piling up unread on roles nobody attends, often enough that `mail status`
+  and TTL are not enough to notice or bound it ⇒ the watcher earns its way back
+  from reference integration to product.
+- A role that is robot-only by construction *and* that the higher-level
+  orchestrator provably cannot spawn (no scheduler, no CI, no human) ⇒ the same.
+- A woken turn's lack of context proving to be the binding limit on the answers
+  it gives — measured, on real turns, not assumed ⇒ reopen `--resume`-a-dormant-
+  session, with the liveness guard the amendment names as its price of entry.
