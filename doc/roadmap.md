@@ -1552,6 +1552,54 @@ run live*. The framework underneath is what exists today.
   is deferred until the reference integration is run in earnest. The thread lane
   (`thread-aware-delivery` → `thread-canvas`) and phase 7's docs sweep are
   unaffected — they are bus work, not watcher work.
+  Slices landed: `thread-aware-delivery` (2026-08-20; phase 2, thread lane —
+  the ASKER-SIDE reading of a thread, and the last engine behaviour in the
+  ask/reply arc. `thread-fields` rendered what an envelope says about itself;
+  this adds the two facts about the mailbox READING it, both joins onto the
+  ledger and neither answerable from an envelope alone: which requests THIS
+  mailbox asked, and which answer closed each. The join is on `replyTo` and
+  never on `from` — a return address is the one field naming a MAILBOX, while
+  `from` names an agent and a harness and, for a `mail ask` caller, no window at
+  all — and the predicate is `MailAddress.Accepts`, the SAME one routing uses,
+  so "is this mine" and "may I read this" can never come apart. **The class is
+  the recipient's consent outranking the sender's assertion**: the mid-turn seam
+  is d5's strict-budget class and until now only a SENDER could qualify mail for
+  it, so an answer to a request you sent is admitted there at `priority:
+  ambient` and sorts above declared urgent — the other half of `mail ask`'s
+  ambient default, since the asking is what buys the mid-turn seam and it buys
+  it on the answer's arrival in the asker's own mailbox rather than by taxing
+  the member being asked. The head says why it came now (`· answers your request
+  <id>`), and a second answer on a closed thread renders `· late — already
+  answered by <id>` withheld from nothing (two members answering one question is
+  a normal race on a bus with no locking, and the second may be the better one).
+  **The plan's "answered by … for ONE more turn" is WITHDRAWN with a concrete
+  reason** rather than deferred: the only state that already outlives a delivery
+  is `MailCursor.LastDeliveredId`, which holds the id at the HIGHEST delivered
+  offset — one id, not the delivery — so the annotation would fire on whichever
+  offsets happened to sort last; every other spelling is new state surviving an
+  advance, and ADR-0016 N3 rests ENTIRELY on cursor-advance (the harness enforces
+  nothing — `stop_hook_active` is passed to hooks, never checked), which makes
+  state that can render a Stop block while the cursor says nothing is pending
+  exactly the failure the slice's verify column named. Two costs stated rather
+  than engineered around: a BROADCAST reply address (what an unnamed window
+  gets) is accepted by every mailbox of the role, so two reviewer windows both
+  read the answer as theirs — true of the ROLE, and `mail digest --as` is what
+  makes it exact; and a forged `inReplyTo` buys salience it did not earn, which
+  is not worth defending against since `priority: urgent` buys strictly more for
+  less and both stop at the same trust boundary. `ApiReadModel`'s closed-by index
+  MOVED to `MailThreads.Closures` rather than being copied — the digest now asks
+  the canvas's question at delivery time, and two spellings of "which answer
+  closed this request" is ADR-0016 N8 with a thread for a hat. Nothing here
+  remembers: every fact is re-derived from the append-only ledger per read, no
+  new state, no trail event, and **no golden regenerated** — a property and not
+  luck, since `MailThreads.None` renders byte for byte what `thread-fields`
+  pinned, which is also why the watcher's nudge digest passes none of it and a
+  woken turn's own pickup does the real reading. One `Store.Read()` feeds both
+  the view and the index, so a dispatch costs no extra read.
+  `MailThreadAwareDeliveryTests.cs` (19) including
+  `TheClassChangesSalienceNeverConsumption` — promotion buys an earlier seam and
+  a higher rank and NOTHING else — plus a mutation pass that fails exactly the
+  six cases depending on it; suite 1475 → 1494 green twice.)
   Slices landed: `mail-ask-wait` (2026-08-19; phase 2, thread lane — d8's verb,
   and the first thing that ever fills `replyTo`. `captainHook mail ask --to
   <address> --topic <t> [--wait <s>]` composes a `request` (depth 0, the address

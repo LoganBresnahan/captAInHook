@@ -269,7 +269,7 @@ public sealed class ApiReadModel
                 r.Role, r.SessionId, r.DispatchId, r.HookEvent, r.Seam, r.Vehicle,
                 r.EnvelopeIds, r.RenderHash, r.BytesInjected, r.Ts)).ToList(),
             fold.Complete,
-            ClosedBy(complete),
+            MailThreads.Closures(complete),
             MailEnvelope.HopBudget);
     }
 
@@ -354,20 +354,12 @@ public sealed class ApiReadModel
     /// sides of that window and a join the client could do would be a join over
     /// what it happens to hold.
     ///
-    /// FIRST wins, in ledger order, and only `kind: answer` closes — the two
-    /// rules `MailDto` states. Nothing here reads a clock, resolves an id
-    /// against a mailbox, or decides anything about delivery: an envelope is
-    /// closed when another envelope on this chain says it answers it, which is
-    /// a fact about the ledger and survives every cursor on the machine being
-    /// deleted.
-    private static IReadOnlyDictionary<string, string> ClosedBy(IReadOnlyList<MailLine> complete)
-    {
-        var closed = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var l in complete)
-            if (l.Envelope is { Kind: MailKind.Answer, InReplyTo: { } request } answer)
-                closed.TryAdd(request, answer.Id);
-        return closed;
-    }
+    /// The rules — first wins, only `kind: answer` closes — and the arithmetic
+    /// are `MailThreads.Closures`'s, called rather than copied: the digest asks
+    /// this same question at delivery time (ADR-0017 d8), and two spellings of
+    /// "which answer closed this request" would be ADR-0016 N8 with a thread
+    /// for a hat — the canvas and the digest disagreeing about a closed thread,
+    /// with nothing to say which was right.
 
     private static MailEnvelopeDto Envelope(MailEnvelope e) => new(
         e.Id, e.Ts, new MailSenderDto(e.From.Agent, e.From.Harness, e.From.Session),

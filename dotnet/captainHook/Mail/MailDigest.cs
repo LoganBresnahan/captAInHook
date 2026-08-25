@@ -350,24 +350,44 @@ public static class MailDigest
     /// declare the event at all, which delivers NOTHING (see the header: the
     /// gate is permissive there, but it noops after the advance, and that
     /// direction loses mail).
+    /// `threads` is the asker-side reading (ADR-0017 d8, `thread-aware-delivery`):
+    /// the answer to a question THIS mailbox asked is urgent-class here whatever
+    /// its sender declared. Omitting it means "no thread knowledge" and plans
+    /// exactly as this file planned before that slice — see `MailThreads.None`
+    /// for why that omission is safe.
+    ///
+    /// THE RECIPIENT'S CONSENT OUTRANKS THE SENDER'S ASSERTION. An urgent-class
+    /// seam is the strict-budget one (d5: most mail must never qualify), and
+    /// what qualifies mail there has until now been the sender saying so. An
+    /// answer to your own request is the one piece of mail whose salience YOU
+    /// established — you spent a turn asking — so it is admitted at that seam
+    /// and it sorts above `priority: urgent`. This is also why `mail ask`
+    /// defaults its request to AMBIENT: the asking is what buys the mid-turn
+    /// seam, and it buys it on the answer's arrival, in the asker's own
+    /// mailbox, rather than by taxing the person being asked.
     public static MailPlan Plan(
-        IReadOnlyList<PendingMail> pending, MailSeam seam, IReadOnlyList<string>? verbs)
+        IReadOnlyList<PendingMail> pending, MailSeam seam, IReadOnlyList<string>? verbs,
+        MailThreads? threads = null)
     {
         var vehicle = VehicleFor(seam, verbs);
         if (vehicle == MailVehicle.None || pending.Count == 0)
             return new MailPlan([], MailVehicle.None, pending.Count);
 
+        var thread = threads ?? MailThreads.None;
+
         var eligible = seam == MailSeam.Urgent
-            ? pending.Where(p => p.Envelope.Priority == MailPriority.Urgent).ToList()
+            ? pending.Where(p => p.Envelope.Priority == MailPriority.Urgent
+                || thread.AnswersMe(p.Envelope)).ToList()
             : pending.ToList();
 
-        // Priority rank first (urgent > reconcile > ambient — the sender's
-        // requested class is also its salience), then ARRIVAL order (offset
-        // ascending): mail reads chronologically within a class, and held
-        // items — which sit before the frontier by construction — surface
-        // ahead of fresh ones, closest-to-expiry first.
+        // Rank first (my answer > urgent > reconcile > ambient — the sender's
+        // requested class is its salience, and the recipient's own request
+        // outranks it), then ARRIVAL order (offset ascending): mail reads
+        // chronologically within a class, and held items — which sit before the
+        // frontier by construction — surface ahead of fresh ones,
+        // closest-to-expiry first.
         var deliver = eligible
-            .OrderByDescending(p => Rank(p.Envelope.Priority))
+            .OrderByDescending(p => Rank(p.Envelope, thread))
             .ThenBy(p => p.Offset)
             .ToList();
 
@@ -376,12 +396,13 @@ public static class MailDigest
             : new MailPlan(deliver, vehicle, pending.Count - deliver.Count);
     }
 
-    private static int Rank(MailPriority p) => p switch
-    {
-        MailPriority.Urgent => 2,
-        MailPriority.Reconcile => 1,
-        _ => 0,
-    };
+    private static int Rank(MailEnvelope e, MailThreads threads) =>
+        threads.AnswersMe(e) ? 3 : e.Priority switch
+        {
+            MailPriority.Urgent => 2,
+            MailPriority.Reconcile => 1,
+            _ => 0,
+        };
 
     private static MailVehicle VehicleFor(MailSeam seam, IReadOnlyList<string>? verbs)
     {
@@ -426,8 +447,10 @@ public static class MailDigest
     ///     most three clamped ids, never the whole list. The cap may
     ///     therefore be exceeded only by a bounded constant, never by data.
     public static MailRender Render(
-        MailPendingView view, MailPlan plan, int maxChars)
+        MailPendingView view, MailPlan plan, int maxChars, MailThreads? threads = null)
     {
+        var thread = threads ?? MailThreads.None;
+
         const string marker = "\n   [truncated to fit the delivery budget — full text is durable in the mail store]";
 
         var sb = new StringBuilder();
@@ -436,7 +459,7 @@ public static class MailDigest
 
         foreach (var (item, index) in plan.Deliver.Select((p, i) => (p, i)))
         {
-            var (head, bodyPart) = ItemBlock(item, index + 1, view.Deliveries);
+            var (head, bodyPart) = ItemBlock(item, index + 1, view.Deliveries, thread);
             var block = head + bodyPart;
             if (used + block.Length > maxChars)
             {
@@ -491,7 +514,7 @@ public static class MailDigest
     /// the whole-item budget in `Render` (an item that cannot fit is cut with
     /// a marker), so an absurd address costs its own delivery, not the digest.
     private static (string Head, string BodyPart) ItemBlock(
-        PendingMail item, int ordinal, long deliveries)
+        PendingMail item, int ordinal, long deliveries, MailThreads threads)
     {
         var e = item.Envelope;
         var age = item.SeenAt is { } seen
@@ -508,8 +531,20 @@ public static class MailDigest
             // is refused by `mail send`. A reader deciding whether to answer is
             // usually a model, and "5/6" is the difference between one more
             // exchange and a refusal it has already spent a turn earning.
+            // The asker-side reading (ADR-0017 d8, `thread-aware-delivery`).
+            // `your request` is the whole point of the class this envelope was
+            // delivered under, said in the one place the reader is already
+            // looking — a model handed an answer mid-turn must be able to see
+            // WHY it arrived now, or the mid-turn seam reads as noise. `late`
+            // says this thread already had an answer and names it, so a second
+            // opinion is read as a second opinion; it is a fact about the
+            // ledger, not a defect, and nothing is withheld for it.
             + (e.InReplyTo is not null
-                ? $" · answers {Clamp(e.InReplyTo)} · hop {e.Hops + 1}/{MailEnvelope.HopBudget}"
+                ? $" · answers {(threads.AnswersMe(e) ? "your request " : "")}{Clamp(e.InReplyTo)}"
+                    + $" · hop {e.Hops + 1}/{MailEnvelope.HopBudget}"
+                    + (threads.LateAfter(e) is { } first
+                        ? $" · late — already answered by {Clamp(first)}"
+                        : "")
                 : "");
         if (e.Body.Length == 0) return (head, "");
         var body = string.Join('\n', e.Body.Split('\n').Select(l => "   " + l));
@@ -626,11 +661,20 @@ public static class MailDigest
         }
 
         var verbs = spec.Events.TryGetValue(req.EventType, out var declared) ? declared : null;
+        // ONE read of the store feeds BOTH readings of it: what is pending for
+        // this mailbox, and what its own threads look like (ADR-0017 d8). The
+        // three-argument overload exists for exactly this — a second
+        // `Store.Read()` here would double the cost of every dispatch and, worse,
+        // let the two readings disagree about a line that landed between them.
+        var lines = cursors.Store.Read();
         // The cursor keys on the INSTANCE; the trail keeps the real session;
         // and the ADDRESS decides what this registration is entitled to read —
         // its role's broadcast, plus its own unicast when it is named (d4).
-        var view = cursors.Pending(opts.Mailbox, req.SessionId);
-        var plan = Plan(view.Pending, opts.Seam, verbs);
+        var view = cursors.Pending(opts.Mailbox, req.SessionId, lines);
+        // The RESOLVED mailbox, taken off the view rather than re-derived: one
+        // answer to "who am I" for entitlement and for the thread join alike.
+        var threads = MailThreads.Of(new MailAddress(view.Role, view.Session), lines);
+        var plan = Plan(view.Pending, opts.Seam, verbs, threads);
 
         if (plan.Vehicle == MailVehicle.None || plan.Deliver.Count == 0)
         {
@@ -640,7 +684,7 @@ public static class MailDigest
             return 0;
         }
 
-        var render = Render(view, plan, opts.MaxChars);
+        var render = Render(view, plan, opts.MaxChars, threads);
 
         switch (cursors.Advance(view, render.Delivered.Select(p => p.Offset).ToList()))
         {
