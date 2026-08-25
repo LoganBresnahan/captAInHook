@@ -270,7 +270,64 @@ export function seedMail(daemon) {
     kind: "request", priority: "reconcile", ttlDeliveries: 4, topic: "deploy window",
     body: "Ship after the suite is green twice — the flaky guard, not a formality.",
   });
+
+  // A THREAD, and it crosses lanes on purpose (ADR-0017 d8): the request went
+  // to `reviewer`, and its answers come back to the asker's own lane. That is
+  // the shape the canvas's link exists to draw — inside one lane the ledger's
+  // left-to-right order would already tell you.
+  send("api-review-answer-10", "builder", {
+    kind: "answer", priority: "ambient", ttlDeliveries: 3, topic: "re: review the read port",
+    inReplyTo: "api-review-02", hops: 1,
+    body: "Read it: the write half is unreachable — no append handle, no non-GET route.",
+  });
+  // And a SECOND answer to the same request. N5's race: two members both
+  // answered one ask, which is normal on a bus with no locking. The first
+  // closes the thread; this one is drawn `late` and hidden from nothing,
+  // because it may well be the better answer.
+  send("api-review-answer-11", "builder", {
+    kind: "answer", priority: "ambient", ttlDeliveries: 3, topic: "re: review the read port",
+    inReplyTo: "api-review-02", hops: 1,
+    body: "Also checked the reducer: it interpolates between snapshots and stores nothing.",
+  });
+  // `plan-slice-04` and `deploy-window-09` stay unanswered — the canvas's
+  // `awaiting` tag needs an open question to point at.
   return { sessions: MAIL_SESSIONS, roles: ["reviewer", "builder", "archivist"] };
+}
+
+/** The ROBOT NUDGES (ADR-0017 d10), appended with a live page already
+ * subscribed — for the same reason `seedTrail` is: a nudge is a TRAIL LINE and
+ * never an envelope, so it reaches the canvas on the mail stream and not in the
+ * snapshot, and a line written before the tab connected would never arrive.
+ *
+ * The rows are spelled by hand here, and the shape is pinned elsewhere rather
+ * than trusted here: `NudgeStore.LogNudge` is the one emitter, and the
+ * `nudged-and-late-answer` golden carries a REAL row from it, so a column that
+ * moves fails `MailReducerGoldenTests` + the reducer suite rather than quietly
+ * making this seed a lie.
+ *
+ * Two pokes about ONE envelope, because that is the fact worth drawing: the
+ * second one means the first did not work.
+ */
+export function seedMailNudges(daemon) {
+  const rows = [
+    { role: "reviewer", envelopeIds: ["build-broken-03"], dispatchId: "n0a1b2c3",
+      reason: "urgent mail unread for 10m and no live session",
+      budget: { envelope: 1, perEnvelope: 2, roleHour: 1, perRoleHour: 4 } },
+    { role: "reviewer", envelopeIds: ["build-broken-03"], dispatchId: "n0d4e5f6",
+      reason: "still unread after the first nudge; quiet for 20m",
+      budget: { envelope: 2, perEnvelope: 2, roleHour: 2, perRoleHour: 4 } },
+    { role: "archivist", envelopeIds: ["archive-06"], dispatchId: "n0778899",
+      reason: "no cursor has ever read this role",
+      budget: { envelope: 1, perEnvelope: 2, roleHour: 1, perRoleHour: 4 } },
+  ];
+  for (const { role, envelopeIds, reason, budget, dispatchId } of rows) {
+    daemon.appendTrail({
+      ts: new Date().toISOString(), lvl: "info", src: "mail", evt: "mail.nudge", dispatchId,
+      msg: "robot nudge raised: a turn was woken for mail this role had not read",
+      data: { role, envelopeIds, reason, budget },
+    });
+  }
+  return rows.length;
 }
 
 /** Append the varied synthetic trail — call it with a live page already

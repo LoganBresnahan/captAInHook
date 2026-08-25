@@ -1,6 +1,6 @@
 import { truncateSync } from "node:fs";
 import { test, expect, gotoView } from "./fixtures.ts";
-import { seedFiles, seedMail, mailEnvelope } from "../scripts/seed.mjs";
+import { seedFiles, seedMail, seedMailNudges, mailEnvelope } from "../scripts/seed.mjs";
 
 // The Mail view (ADR-0016 d14, roadmap item 21 slice 4) — the bus, end to end
 // against a real daemon reading a real store. Everything below is seeded
@@ -330,5 +330,48 @@ test.describe("mail", () => {
       topic: "after the reset", body: "The stream was re-anchored to a fresh snapshot.",
     }));
     await expect(mail.locator('[data-lane="builder"] [data-arrival="trail"]')).toHaveCount(1);
+  });
+
+  test("a thread crosses lanes and a poke lands on one, against a real bus", async ({ page, daemon }) => {
+    // The two joins `thread-canvas` draws, driven end to end. Everything the
+    // unit tests check is arithmetic over a state; this asserts the browser
+    // renders it from a REAL snapshot and a REAL stream — the seeded request
+    // and its two answers went through `mail send`, and the pokes are trail
+    // lines the daemon served.
+    const mail = page.locator('[data-island="mail"]');
+
+    // The request is on `reviewer`, its answers on `builder`: the link is
+    // between two lanes, which is the case it exists for.
+    await expect(mail.locator('[data-lane="reviewer"] [data-thread="answered"]')).toHaveCount(1);
+    await expect(mail.locator('[data-lane="builder"] [data-thread="answered"]')).toHaveCount(1);
+    // The FIRST answer closed it; the second is late, and is drawn, not hidden.
+    await expect(mail.locator('[data-lane="builder"] [data-thread="late"]')).toHaveCount(1);
+    await expect(mail.locator("[data-thread-tag]").first()).toBeVisible();
+    // Two open questions nobody has answered.
+    await expect(mail.locator('[data-thread="awaiting"]')).toHaveCount(2);
+    const links = mail.locator("[data-thread^='']").filter({ has: page.locator("path.thread-path") });
+    await expect(links).toHaveCount(2);
+    await expect(mail.locator('[data-late="true"]')).toHaveCount(1);
+
+    // A poke is a TRAIL LINE and reaches the canvas on the stream, so it is
+    // written now, with the view already subscribed — a nudge appended before
+    // the page opened would arrive nowhere, which is the live-only limit the
+    // flow doc names.
+    await expect(page.locator("[data-mail-stream]")).toHaveAttribute("data-mail-stream", "live");
+    await expect(mail.locator("[data-nudge]")).toHaveCount(0);
+    seedMailNudges(daemon);
+
+    // It lands on the ROLE's lane — never on a track, which belongs to a cursor
+    // that read something. Two pokes about one envelope are ONE counted mark.
+    await expect(mail.locator('[data-lane="reviewer"] [data-nudge]')).toHaveCount(1);
+    await expect(mail.locator('[data-lane="reviewer"] [data-nudge]')).toHaveAttribute("data-nudge-count", "2");
+    await expect(mail.locator('[data-lane="archivist"] [data-nudge]')).toHaveCount(1);
+    await expect(mail.locator('[data-lane="builder"] [data-nudge]')).toHaveCount(0);
+
+    // And being poked about mail is not having read it: the nudged envelope's
+    // own standing is untouched, and its detail card says what the poke cost.
+    await mail.locator('[data-lane="reviewer"] [data-nudged]').first().click();
+    await expect(page.locator("[data-mail-nudges]")).toHaveAttribute("data-mail-nudges", "2");
+    await expect(page.locator("[data-mail-nudges] li").first()).toContainText("budget envelope");
   });
 });

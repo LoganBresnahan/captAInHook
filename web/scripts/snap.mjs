@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { build, stageUi, startDaemon, webDir } from "../e2e/daemon.ts";
-import { seedFiles, seedMail, seedTrail } from "./seed.mjs";
+import { seedFiles, seedMail, seedMailNudges, seedTrail } from "./seed.mjs";
 
 // snap — the eyes of the GUI loop (ADR-0015 d5). Starts a seeded, isolated
 // daemon exactly like the preview, drives a headless browser over every view ×
@@ -94,6 +94,11 @@ try {
     for (const view of views) {
       if (navs.includes(view)) {
         await page.locator(`[data-nav="${view}"]`).click();
+        // A nudge is a TRAIL LINE, so it reaches the canvas on the mail stream
+        // and never in the snapshot — and that stream is subscribed when the
+        // Mail view MOUNTS. Written any earlier, the pokes are appended to a
+        // file nobody is reading yet and the shot shows a bus with no nudges.
+        if (view.startsWith("mail")) { seedMailNudges(daemon); await page.waitForTimeout(400); }
         await page.waitForTimeout(150);   // let the island paint before the shutter
       }
       const shoot = async (suffix) => {

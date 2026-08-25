@@ -103,6 +103,20 @@ public class MailReducerGoldenTests
             return stdout.ToString();
         }
 
+        /// One ROBOT NUDGE, exactly as the watcher raises it (ADR-0017 d10):
+        /// `NudgeStore.Record` is the one spelling of "a nudge really happened",
+        /// so the golden's `mail.nudge` row is the engine's own and not a
+        /// hand-written JSON object the canvas could agree with while the
+        /// engine wrote something else.
+        public void Nudge(string role, string[] envelopeIds, string reason,
+            string dispatchId = "n-1", MailNudgeBudget? budget = null) =>
+            NudgeStore.Record(
+                NudgeState.Empty,
+                new MailNudge(role, envelopeIds, reason,
+                    Digest: "1 message(s) waiting", ReplyHow: "captainHook mail send",
+                    Budget: budget ?? new MailNudgeBudget(1, 2, 1, 4)),
+                ran: true, dispatchId: dispatchId, nowMs: 1_000);
+
         public string CursorPath(string role, string? session) => Cursors.CursorPath(role, session);
 
         public JsonNode Snapshot(long since)
@@ -177,6 +191,18 @@ public class MailReducerGoldenTests
             {
                 w.Append("m-02");
                 w.Append("ans-1", inReplyTo: "req-1", hops: 1, kind: MailKind.Answer);
+                w.Digest("main", "s-1", dispatchId: "d-1");
+            }),
+
+        new("nudged-and-late-answer",
+            "The thread lane's picture, end to end (ADR-0017 d8/d10, slice `thread-canvas`). A REQUEST to `reviewer` that nobody reads; a real `mail.nudge` raised about it (the row `NudgeStore.Record` writes, budget as numbers); then TWO answers to it, both addressed to the asker's lane `main` — the first closes the thread, the SECOND is N5's late answer, which is a normal race on a bus with no locking and must be tagged rather than hidden. The reducer must fold the nudge as a record on the role (never a cursor move and never presence — being nudged is the opposite of having read), place its envelope id on the ledger, and reach a `closedBy` index where the FIRST answer won.",
+            Setup: w => w.Append("req-1", to: "reviewer", kind: MailKind.Request,
+                priority: MailPriority.Urgent),
+            Act: w =>
+            {
+                w.Nudge("reviewer", ["req-1"], "urgent mail unread for 10m and no live session");
+                w.Append("ans-1", inReplyTo: "req-1", hops: 1, kind: MailKind.Answer);
+                w.Append("ans-2", inReplyTo: "req-1", hops: 1, kind: MailKind.Answer);
                 w.Digest("main", "s-1", dispatchId: "d-1");
             }),
 

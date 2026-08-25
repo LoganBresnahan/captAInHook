@@ -341,6 +341,204 @@
       }
     },
     {
+      "name": "nudged-and-late-answer",
+      "doc": "The thread lane's picture, end to end (ADR-0017 d8/d10, slice `thread-canvas`). A REQUEST to `reviewer` that nobody reads; a real `mail.nudge` raised about it (the row `NudgeStore.Record` writes, budget as numbers); then TWO answers to it, both addressed to the asker's lane `main` — the first closes the thread, the SECOND is N5's late answer, which is a normal race on a bus with no locking and must be tagged rather than hidden. The reducer must fold the nudge as a record on the role (never a cursor move and never presence — being nudged is the opposite of having read), place its envelope id on the ledger, and reach a `closedBy` index where the FIRST answer won.",
+      "since": 0,
+      "exact": true,
+      "expectUncertain": [],
+      "before": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "74741ad441eb905cfcd4024fc87e3735ea2758ba2b1117b8cdcf2cec12f0d673",
+          "gen": 1,
+          "lines": 1,
+          "bytes": 307,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 307,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 306,
+            "terminated": true,
+            "hash": "74741ad441eb905cfcd4024fc87e3735ea2758ba2b1117b8cdcf2cec12f0d673",
+            "envelope": {
+              "id": "req-1",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "reviewer",
+              "kind": "request",
+              "topic": "build",
+              "priority": "urgent",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [],
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
+      },
+      "trail": [
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.nudge\",\"dispatchId\":\"n-1\",\"msg\":\"robot nudge raised: a turn was woken for mail this role had not read\",\"data\":{\"role\":\"reviewer\",\"envelopeIds\":[\"req-1\"],\"reason\":\"urgent mail unread for 10m and no live session\",\"budget\":{\"envelope\":1,\"perEnvelope\":2,\"roleHour\":1,\"perRoleHour\":4}}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"ans-1\",\"to\":\"main\",\"offset\":307,\"bytes\":331,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"answer\",\"topic\":\"build\",\"priority\":\"ambient\",\"inReplyTo\":\"req-1\",\"hops\":1,\"ttlDeliveries\":3}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"ans-2\",\"to\":\"main\",\"offset\":639,\"bytes\":331,\"from\":{\"agent\":\"intent-watcher\",\"harness\":\"claude-code\",\"session\":\"s-77\"},\"kind\":\"answer\",\"topic\":\"build\",\"priority\":\"ambient\",\"inReplyTo\":\"req-1\",\"hops\":1,\"ttlDeliveries\":3}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":971,\"delivered\":2,\"deliveredOffsets\":[307,639],\"held\":0,\"expired\":0,\"deliveries\":1}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.deliver\",\"dispatchId\":\"d-1\",\"sessionId\":\"s-1\",\"hookEvent\":\"UserPromptSubmit\",\"msg\":\"mail delivered into the recipient\\u0027s context\",\"data\":{\"role\":\"main\",\"seam\":\"ambient\",\"vehicle\":\"inject\",\"envelopeIds\":[\"ans-1\",\"ans-2\"],\"renderHash\":\"36bad778bb6e5a4cbf29b19207aa499d1f4e4c366bbcb8cafd5ca5206a73b8bc\",\"bytesInjected\":351}}"
+      ],
+      "after": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "74741ad441eb905cfcd4024fc87e3735ea2758ba2b1117b8cdcf2cec12f0d673",
+          "gen": 1,
+          "lines": 3,
+          "bytes": 971,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 971,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 306,
+            "terminated": true,
+            "hash": "74741ad441eb905cfcd4024fc87e3735ea2758ba2b1117b8cdcf2cec12f0d673",
+            "envelope": {
+              "id": "req-1",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "reviewer",
+              "kind": "request",
+              "topic": "build",
+              "priority": "urgent",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          },
+          {
+            "offset": 307,
+            "bytes": 331,
+            "terminated": true,
+            "hash": "80631707ec11996e0e650b2dacdc13c3783e9d8113563c67e6c9cca9056bbab9",
+            "envelope": {
+              "id": "ans-1",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "answer",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": "req-1",
+              "hops": 1,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "74741ad441eb905cfcd4024fc87e3735ea2758ba2b1117b8cdcf2cec12f0d673"
+            },
+            "errors": []
+          },
+          {
+            "offset": 639,
+            "bytes": 331,
+            "terminated": true,
+            "hash": "3d2be33b1d8bf461d492b411246c816f01d0d44cfb8d42b9c409868c35e49823",
+            "envelope": {
+              "id": "ans-2",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "answer",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": "req-1",
+              "hops": 1,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "80631707ec11996e0e650b2dacdc13c3783e9d8113563c67e6c9cca9056bbab9"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [
+          {
+            "role": "main",
+            "session": "s-1",
+            "gen": 1,
+            "head": "74741ad441eb905cfcd4024fc87e3735ea2758ba2b1117b8cdcf2cec12f0d673",
+            "offset": 971,
+            "frontier": 971,
+            "deliveries": 1,
+            "lastDeliveredId": "ans-2",
+            "reanchored": false,
+            "reanchorReason": null,
+            "pending": [],
+            "expired": [],
+            "skippedMalformed": 0
+          }
+        ],
+        "presence": [
+          {
+            "session": "s-1",
+            "roles": [
+              "main"
+            ],
+            "lastDispatchAgeMs": null
+          }
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {
+          "req-1": "ans-1"
+        },
+        "hopBudget": 6
+      }
+    },
+    {
       "name": "first-delivery",
       "doc": "Two lines for main and one for reviewer, no cursor; then main/s-1's first digest at an ambient seam delivers both of main's. A cursor the reducer never saw appears with deliveries 1 — first contact anchors at 0, so its pending set is reconstructible from the ledger and the held set must come out empty.",
       "since": 0,

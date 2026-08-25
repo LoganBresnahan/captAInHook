@@ -1,8 +1,10 @@
 import type {
   MailState, MailCursorEventKind, MailCursorState, MailLedgerLine, MailLineStatus,
-  MailPresenceTier, MailSession,
+  MailNudgeRecord, MailPresenceTier, MailSession, MailThreadView,
 } from "./mail.ts";
-import { lineStatus, projectCursor, rolesOf, presenceTier, sameSession, clampField } from "./mail.ts";
+import {
+  lineStatus, projectCursor, rolesOf, presenceTier, sameSession, clampField, threadOf, nudgesFor,
+} from "./mail.ts";
 
 // mail-canvas, the geometry half (ADR-0016 decision 14, roadmap item 21 slice
 // 4). `buildScene(state)` turns the reducer's model into coordinates; the
@@ -45,7 +47,14 @@ export const PAD_TOP = 16;
 export const SPINE_H = 20;
 export const LANE_GAP = 22;
 export const LANE_HEAD_H = 26;
-export const GLYPH_H = 68;
+// 82, not 68: the near tier's card grew a FIFTH line with `thread-canvas`, and
+// at the old height the five-line card printed its last line through the
+// glyph's own bottom border — the exact overflow ADR-0015 d5 opens with, and
+// the one a green test suite will happily ship. The alternative was tightening
+// the step until five lines fit inside 58px, which buys back the pixels by
+// making every card harder to read. 14 more pixels per lane is the cheaper side
+// of that trade.
+export const GLYPH_H = 82;
 export const TRACK_H = 28;
 export const LANE_HEAD_W = 168;      // the fixed left gutter the role labels sit in
 export const PAD_X = 16;             // a little air before the first slot
@@ -148,6 +157,57 @@ export type MailGlyph = {
    * how recent "recent" is, and a re-seed (whose lines are all `snapshot`
    * again) correctly replays no arrivals at all. */
   arrival: "snapshot" | "trail";
+  /** Where this envelope stands in its thread (ADR-0017 d8), or null when it is
+   * in none. READ off the reducer's one index — the canvas joins nothing of its
+   * own. `awaiting` and `late` are the two the picture exists to show: a
+   * request nobody has answered, and an answer that lost a race it did not
+   * know it was in (N5). */
+  thread: MailThreadView | null;
+  /** The `mail.nudge` rows that named this envelope (d10). A poke is about
+   * mail that has NOT been read, so this is drawn on the envelope and never on
+   * a track: no cursor moved, which is the whole reason the poke happened. */
+  nudges: MailNudgeRecord[];
+};
+
+/** One request→answer join, drawn as a link between two glyphs that are
+ * usually in DIFFERENT lanes — which is the point of drawing it at all. A
+ * thread is the one relation on this bus that crosses roles, and the ledger's
+ * left-to-right order already shows that the answer came after; the link shows
+ * WHICH ask it came after, across a lane boundary that otherwise hides it.
+ *
+ * Built from the ANSWER end, so an answer whose request is off this picture's
+ * ledger simply draws no link (and keeps its own tag) rather than anchoring one
+ * at a made-up position. */
+export type MailThreadLink = {
+  requestOffset: number;
+  answerOffset: number;
+  x1: number; x2: number;
+  /** The two ends' LANE tops (`MailLane.glyphY`), not their glyph tops: a
+   * glyph's height is the TIER's, which is a fact about the view and not about
+   * the scene. The renderer offsets these by the tier's glyph height so the
+   * curve leaves the top EDGE of each card — anchored at the centre it ran
+   * straight through the card's own text, which the first screenshot of this
+   * slice showed and no test would have. */
+  y1: number; y2: number;
+  /** N5: this answer named a request another answer had already closed. Drawn
+   * differently, never hidden — the second answer may be the better one. */
+  late: boolean;
+};
+
+/** A poke on a role's lane, aligned with the envelope it named (d10). Its own
+ * position on the x axis is the ENVELOPE's, not a time: the ledger axis is the
+ * ledger, and a nudge has no offset of its own to occupy. A nudge whose
+ * envelope this picture cannot place draws nothing — the lane says so in its
+ * count instead of pointing at the wrong line. */
+export type MailNudgeMark = {
+  offset: number;
+  x: number;
+  w: number;
+  /** How many pokes have named this envelope: the second one is the fact worth
+   * seeing, because it means the first did not work. */
+  count: number;
+  /** The most recent poke's own row, for the mark's title and the detail card. */
+  last: MailNudgeRecord;
 };
 
 /** One held/expired item under a cursor track, aligned with its envelope. */
@@ -190,6 +250,18 @@ export type MailTrack = {
    * over. Animating that as a slide would draw a cursor reading backwards,
    * which never happens on this bus. Null before anything has moved it. */
   motion: MailCursorEventKind | null;
+  /** WHO the last pickup was for (ADR-0017 N6, as built). N6 asks the canvas to
+   * show the difference between a human reading their mail and a woken turn
+   * reading it, and names `vehicle: payload` as the signal. There is no such
+   * vehicle: a turn payload does its own pickup through the ordinary hooks, so
+   * its `mail.deliver` says `inject` like anyone's. The difference the trail
+   * really carries is the DISPATCH: a nudge's `dispatchId` is what joins the
+   * poke to the turn it woke (d10), and a pickup under that same dispatch id is
+   * by construction the woken turn's own. So `robot` means "this advance
+   * happened under a dispatch a nudge raised", which is a join and not an
+   * inference; `human` means the picture has a pickup and no such join; null
+   * means nothing has been picked up here yet. */
+  pickup: "human" | "robot" | null;
 };
 
 export type MailLane = {
@@ -201,6 +273,11 @@ export type MailLane = {
   tracks: MailTrack[];
   counts: { pending: number; held: number; expired: number; fresh: number; envelopes: number };
   hasReader: boolean;
+  /** The pokes raised about this lane's mail, one mark per envelope named. */
+  nudges: MailNudgeMark[];
+  /** Pokes this lane's rows named that the picture cannot place — counted so
+   * the lane can SAY there were more, rather than drawing them at a guess. */
+  nudgesUnplaced: number;
 };
 
 export type MailScene = {
@@ -214,6 +291,11 @@ export type MailScene = {
   /** Ledger lines the spine holds that belong to no lane: malformed ones (no
    * role to file them under) and the unterminated tail. */
   spineOnly: { offset: number; x: number; w: number; kind: "unreadable" | "torn" }[];
+  /** Request→answer joins, both ends placed. Scene-level rather than
+   * lane-level because a thread's two ends are usually in two lanes: the link
+   * belongs to neither, and drawing it inside one would clip it against that
+   * lane's own bounds. */
+  threads: MailThreadLink[];
   empty: boolean;
 };
 
@@ -267,6 +349,8 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
         perCursor,
         torn: !line.terminated,
         arrival: line.source,
+        thread: threadOf(state, e),
+        nudges: nudgesFor(state, line.offset),
       });
     }
 
@@ -307,6 +391,7 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
         uncertain: c.uncertain,
         atFrontier: c.offset !== null && c.offset >= state.frontier,
         motion: c.lastEventKind,
+        pickup: pickupKind(state, c),
       };
     });
 
@@ -318,8 +403,35 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
       pending: glyphs.filter((g) => g.status === "fresh" || g.status === "held").length,
     };
 
+    // A nudge names a role's mail, so its marks belong to that role's lane —
+    // grouped by ENVELOPE, because two pokes about one envelope is the fact the
+    // picture should make loud (the first one did not work). A poke whose
+    // envelope this picture cannot place is counted, never drawn: the lane can
+    // honestly say "and one more the picture cannot place", and cannot honestly
+    // point at a line.
+    const laneNudges = new Map<number, MailNudgeRecord[]>();
+    let nudgesUnplaced = 0;
+    for (const n of state.nudges) {
+      if (n.role !== role) continue;
+      let placed = false;
+      for (const o of n.offsets) {
+        if (o === null) continue;
+        if (!glyphs.some((g) => g.offset === o)) continue;
+        placed = true;
+        laneNudges.set(o, [...(laneNudges.get(o) ?? []), n]);
+      }
+      if (!placed) nudgesUnplaced++;
+    }
+    const nudgeMarks: MailNudgeMark[] = [...laneNudges.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([offset, rows]) => {
+        const g = glyphs.find((x) => x.offset === offset)!;
+        return { offset, x: g.x, w: g.w, count: rows.length, last: rows[rows.length - 1] };
+      });
+
     const h = LANE_HEAD_H + GLYPH_H + Math.max(tracks.length, 1) * TRACK_H;
-    lanes.push({ role, y, h, glyphY, glyphs, tracks, counts, hasReader: cursors.length > 0 });
+    lanes.push({ role, y, h, glyphY, glyphs, tracks, counts, hasReader: cursors.length > 0,
+      nudges: nudgeMarks, nudgesUnplaced });
     y += h + LANE_GAP;
   }
 
@@ -341,8 +453,58 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
     laneTop,
     frontierX: xForOffsetIn(slots, state.frontier),
     spineOnly,
+    threads: buildThreads(lanes),
     empty: slots.length === 0 && lanes.length === 0,
   };
+}
+
+/** Join every placed answer to its request. Built from the ANSWER end for two
+ * reasons: an answer names its request directly (`counterpart` is `inReplyTo`,
+ * a field on the envelope), where a request only learns its closer through the
+ * index; and it is the end that can be LATE, which is a property of the link
+ * and not of either envelope alone.
+ *
+ * Both ends must be glyphs in this scene. A thread whose request has rotated
+ * away, or sits below a `?since=` window, draws no link at all — the answer
+ * keeps its own tag and the picture declines to anchor a line at a position it
+ * would have to invent. That is the same refusal `buildSlots` makes about a
+ * hole in the ledger, applied to a relation instead of a region. */
+function buildThreads(lanes: MailLane[]): MailThreadLink[] {
+  const byId = new Map<string, { g: MailGlyph; lane: MailLane }>();
+  for (const lane of lanes) for (const g of lane.glyphs) byId.set(clampField(g.id), { g, lane });
+
+  const links: MailThreadLink[] = [];
+  for (const lane of lanes) {
+    for (const g of lane.glyphs) {
+      const t = g.thread;
+      if (t === null || t.end !== "answer" || t.counterpart === null) continue;
+      const req = byId.get(clampField(t.counterpart));
+      if (req === undefined) continue;
+      links.push({
+        requestOffset: req.g.offset,
+        answerOffset: g.offset,
+        x1: req.g.x + req.g.w / 2,
+        y1: req.lane.glyphY,
+        x2: g.x + g.w / 2,
+        y2: lane.glyphY,
+        late: t.standing === "late",
+      });
+    }
+  }
+  return links.sort((a, b) => a.answerOffset - b.answerOffset);
+}
+
+/** N6, as built: was the last pickup on this cursor a human reading their mail
+ * or a woken turn reading it? See `MailTrack.pickup` for why the signal is the
+ * dispatch id and not a vehicle. Answered only from a pickup the picture has
+ * actually seen — an advance whose dispatch id it never learned is `human`
+ * rather than "probably robot", because the failure direction that matters is
+ * never claiming a robot read something a person did. */
+function pickupKind(state: MailState, c: MailCursorState): "human" | "robot" | null {
+  const id = c.lastAdvance?.dispatchId ?? null;
+  if (c.lastAdvance === null) return null;
+  if (id !== null && state.nudges.some((n) => n.dispatchId === id)) return "robot";
+  return "human";
 }
 
 /** The spine's slots: every line the picture holds, plus an explicit `unknown`
@@ -429,7 +591,41 @@ export function cardLines(g: MailGlyph, maxChars: number): string[] {
     cut(g.topic),
     cut(g.from),
     cut(`${clampField(g.id)} · ttl ${g.ttlDeliveries}`),
+    ...(threadLine(g) === null ? [] : [cut(threadLine(g)!)]),
   ];
+}
+
+/** Where a card's lines sit inside the glyph, for the count it actually has:
+ * the block is CENTRED in the glyph's own height at a constant step.
+ *
+ * Card text is laid out HERE, beside the truncation, for the same reason — a
+ * glyph is a fixed height and text that does not fit prints through its border,
+ * which is the one failure a screenshot shows and a test does not. Deriving the
+ * top from `GLYPH_H` rather than pinning it is what makes that a fact the code
+ * keeps: the four-line card and the five-line card (an envelope in a thread)
+ * both sit inside their glyph, and a sixth line one day would move the block
+ * rather than silently overflowing it. */
+export function cardMetrics(lines: number): { top: number; step: number } {
+  const step = 13;
+  const inner = GLYPH_H - 10;   // the glyph's own height at the near tier
+  return { top: Math.max(13, Math.round((inner - (lines - 1) * step) / 2) + 4), step };
+}
+
+/** The card's thread line, when there is a thread — the one sentence that says
+ * what an envelope is WAITING on or what it ANSWERED, which nothing else on the
+ * card can say (the topic is prose and `kind` is a word, but neither names the
+ * other end). Null when the envelope is in no thread, so the card keeps its
+ * four lines and nothing shifts. */
+export function threadLine(g: MailGlyph): string | null {
+  const t = g.thread;
+  if (t === null) return null;
+  const hop = `hop ${t.hops + 1}`;
+  if (t.end === "request")
+    return t.standing === "awaiting"
+      ? `awaiting an answer · ${hop}`
+      : `answered by ${clampField(t.counterpart ?? "")} · ${hop}`;
+  const to = t.counterpart === null ? "" : ` ${clampField(t.counterpart)}`;
+  return t.standing === "late" ? `late answer to${to} · ${hop}` : `answers${to} · ${hop}`;
 }
 
 /** A one-line description of the whole picture, for the canvas's aria-label —
@@ -439,8 +635,24 @@ export function sceneSummary(scene: MailScene, state: MailState): string {
   const envelopes = scene.lanes.reduce((n, l) => n + l.counts.envelopes, 0);
   const cursors = scene.lanes.reduce((n, l) => n + l.tracks.length, 0);
   const pending = scene.lanes.reduce((n, l) => n + l.counts.pending, 0);
+  // The thread and the poke belong in the spoken summary for the same reason
+  // they are drawn: a request nobody answered and a role somebody had to be
+  // poked about are the two things on this bus that are WAITING on a person,
+  // and a screen reader that only ever hears counts would never hear them.
+  const awaiting = scene.lanes.reduce((n, l) =>
+    n + l.glyphs.filter((g) => g.thread?.standing === "awaiting").length, 0);
+  const late = scene.lanes.reduce((n, l) =>
+    n + l.glyphs.filter((g) => g.thread?.standing === "late").length, 0);
+  const nudges = scene.lanes.reduce((n, l) => n + l.nudges.reduce((m, k) => m + k.count, 0), 0);
+  const extra = [
+    awaiting > 0 ? `${awaiting} request(s) awaiting an answer` : null,
+    late > 0 ? `${late} late answer(s)` : null,
+    nudges > 0 ? `${nudges} nudge(s) raised` : null,
+  ].filter((x) => x !== null);
   return `The mail bus: ${envelopes} envelope(s) on the ledger across ${scene.lanes.length} role(s), `
-    + `${cursors} cursor(s) reading, ${pending} pending. The ledger ends at byte ${state.frontier}.`;
+    + `${cursors} cursor(s) reading, ${pending} pending.`
+    + (extra.length > 0 ? ` ${extra.join(", ")}.` : "")
+    + ` The ledger ends at byte ${state.frontier}.`;
 }
 
 // ---- the view: one axis moves ----------------------------------------------

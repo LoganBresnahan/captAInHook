@@ -695,6 +695,62 @@ snapshot (`MailDto.deliveries`), and `deliveriesComplete` says whether the fold
 saw the whole file — which is what lets the detail card distinguish "nobody read
 it" from "further back than I can see". The rule did not move; only the reach.
 
+### What the canvas draws that no cursor can (slice `thread-canvas`)
+
+Two things on this bus are not properties of an envelope or of a cursor, and
+neither can be read off a lane on its own. The canvas is where they become
+visible, and both are drawn from indexes the engine already keeps rather than
+from arithmetic the browser invents (N8's rule, worn as a thread).
+
+```
+  reviewer lane   ──── req-1 ────────────────────────────────
+                    ▲    │  ▲                     the LINK leaves each card's
+     nudge bar ─────┘    │  └── ◇ awaiting        TOP EDGE, so it crosses no text
+   (mail.nudge,          │
+    two pokes = ×2)      │  closedBy: req-1 → ans-1     ← the ONE index, seeded
+                         ▼                                over the whole ledger
+  builder lane    ──── ans-1 ─────── ans-2 ──────────
+                         └─ answers   └─ ◆ late (N5)
+```
+
+**A thread is the one relation that crosses lanes**, which is exactly why it is
+drawn. Inside one lane the ledger's left-to-right order already says the answer
+came after; across roles nothing does. Links are built from the ANSWER end
+(`inReplyTo` names the request directly, and only an answer can be *late*), and
+an answer whose request has rotated away or sits below the `?since=` window
+draws **no link at all** — the same refusal the spine makes about a ledger hole,
+applied to a relation. The envelope keeps its own tag either way.
+
+**`late` is a tag, never a fault.** Two members answering one ask is a normal
+race on a bus with no locking (ADR-0017 N5): the first answer closes the thread
+and the second is drawn dashed-and-amber, hidden from nothing, because it may be
+the better answer. The reading is a join onto `closedBy` and ids are compared
+CLAMPED on both sides — the trail clamps at the emitter and a snapshot does not,
+and comparing the two raw would read every long-id winner as late.
+
+**A nudge is a bar above the envelope, and never a track mark.** `mail.nudge`
+(d10) belongs to a ROLE and carries no session, so it draws on the LANE: a track
+mark is a cursor's arithmetic about mail it passed over, and a poke is the
+opposite fact — that no cursor came. Two pokes about one envelope collapse to one
+mark that counts them, because the second one means the first did not work. A
+poke naming mail the picture cannot place is COUNTED and not drawn, so the lane
+can say there were more without pointing at the wrong line.
+
+**Who picked the mail up** (N6, as built). N6 asks the canvas to tell a woken
+turn's pickup from a person's and names `vehicle: payload` as the signal. There
+is no such vehicle: a turn payload does its own pickup through the ordinary
+hooks, so its `mail.deliver` says `inject` like anybody's. What the trail really
+carries is the DISPATCH — a nudge's `dispatchId` is what joins the poke to the
+turn it woke (d10) — so an advance under that same id is by construction the
+woken turn's, and the cursor is drawn hollow. It is a join, not an inference.
+
+**A poke is live-only, and says so by absence.** `mail.nudge` is a trail line, so
+it reaches the canvas on the stream and never in the snapshot: a page opened
+after the poke shows no mark for it. That is the same gap slice 6a closed for
+delivery records, and the same fix would close it (fold `mail.nudge` beside
+`mail.deliver` in `MailDeliveryFold`, which already reads the file); it is NOT built here, and the picture
+under-claims rather than guessing.
+
 **Deliberately not built:** a scrub bar (slice 6b, declined 2026-08-17 — the
 trail is queryable JSONL and reading it answers the debugging case; ADR-0016's
 addendum records the reasoning and the revisit trigger), and sending from the
@@ -1343,7 +1399,8 @@ prose, not ground truth.
 | starter members (write-only observer; on-demand LLM watcher) | `examples/payloads/starter-mail-observer.sh`, `starter-mail-watcher.sh`, `examples/payloads/handlers.json` |
 | trail events | `mail.append` (+ `bytes`, provenance, never `body`, and since ADR-0017 d8 the thread pair `inReplyTo` + `hops` — written together or not at all), `mail.torn`, `mail.lockBusy`, `mail.expire` (+ `offset`), `mail.deliver`, `mail.cursorAdvance` (+ `deliveredOffsets`), `mail.cursorReanchor` (+ `cause` cursor|store, `deliveries`), `mail.cursorRefuse`, `mail.cursorVanished`, `mail.reap` (ADR-0018 d6: `role` + `instance` + `pendingIds` + `by`, and the one cursor-family event with NO `sessionId` — a reap has no window) — every other cursor-family event carries the `sessionId` column (ADR-0016 d14 as-built: the observation surface's join keys) |
 | the read ENDPOINT (d14, slice 1) — one read-only snapshot: chain status, the ledger from `since`, every cursor's pending view, inferred presence; `since` absent ⇒ 0, off-boundary ⇒ `sinceAligned: false` (never a spliced prefix), malformed ⇒ 400 | `ApiReadModel.Mail` + the `/api/v1/mail` route (`dotnet/captainHook/Api/ApiReadModel.cs`, `Api/ApiHost.cs`); DTOs in `Api/ApiDtos.cs`; the write half unreachable by construction via `MailReadPort` (`dotnet/captainHook/Mail/MailReadPort.cs`); presence from `SessionPresence` ∪ cursor files. `MailApiTests.cs` (31) — reflection walk, `Api/` source pin, non-GET route theory asserting nothing is written |
-| the CANVAS (d14, slice 4) — ledger spine, a lane per role, a track per session, marks with the cursor's own arithmetic; semantic zoom in px-per-slot (far < 40 ≤ mid < 132 ≤ near); pan/zoom on ONE axis, every vertical measure a CSS pixel | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`; `data-lane`, `data-glyph`, `data-track`, `data-mark`, `data-tier`, `data-arrival`, `data-motion`) over `web/src/mailCanvas.ts` (`buildScene`, `MailView`); every status is `lineStatus`/`projectCursor`, never the canvas's own. `web/src/mailCanvas.test.ts` (39) against all 16 goldens; `web/e2e/mail.spec.ts` |
+| the CANVAS (d14, slice 4) — ledger spine, a lane per role, a track per session, marks with the cursor's own arithmetic; semantic zoom in px-per-slot (far < 40 ≤ mid < 132 ≤ near); pan/zoom on ONE axis, every vertical measure a CSS pixel | `web/src/MailPanel.tsx` (`MailPanel`, `Spine`, `Lane`, `Glyph`, `Track`, `LaneHeads`, `Detail`; `data-lane`, `data-glyph`, `data-track`, `data-mark`, `data-tier`, `data-arrival`, `data-motion`) over `web/src/mailCanvas.ts` (`buildScene`, `MailView`); every status is `lineStatus`/`projectCursor`, never the canvas's own. `web/src/mailCanvas.test.ts` (48) against all 17 goldens; `web/e2e/mail.spec.ts` |
+| THREADS AND POKES ON THE CANVAS (ADR-0017 d8/d10, slice `thread-canvas`) — the two facts no lane can show alone. A request→answer LINK, built from the answer end and drawn only when BOTH ends are on this picture's ledger; `awaiting` / `late` marks (two distinct glyphs, never one glyph in two colours) with the words in the card, the `<title>` and the detail card; a `mail.nudge` BAR above the envelope on the ROLE's lane, collapsing repeat pokes to one counted mark and counting-not-drawing an unplaceable one; and the woken-turn pickup, joined by the nudge's own `dispatchId` (N6 as built — there is no `vehicle: payload`). Every reading is a join onto the ONE `closedBy` index, ids compared CLAMPED on both sides so a snapshot-whole key and a trail-clamped one are one thread. A poke is live-only: `mail.nudge` rides the trail, so a page opened after it shows no mark — the gap 6a closed for deliveries, named and not built | `onNudge`/`placeById`/`nudgesFor`/`threadOf`/`MailNudgeRecord`/`MailState.nudges` (`web/src/mail.ts`); `buildThreads`/`pickupKind`/`threadLine`/`cardMetrics` + `MailThreadLink`/`MailNudgeMark`/`MailGlyph.thread`/`MailLane.nudges`/`MailTrack.pickup` (`web/src/mailCanvas.ts`); `Threads`/`ThreadLink`/`Nudges`/`NudgeMark`/`threadWords`/`nudgeWords`/`THREAD_MARK` + `data-thread`, `data-thread-tag`, `data-nudge`, `data-nudge-count`, `data-pickup`, `data-detail-thread` (`web/src/MailPanel.tsx`); `--accent-2` + the thread/nudge block in `web/src/styles.css`. `GLYPH_H` 68 → 82 because the card grew a fifth line and the old height printed it through the glyph's border. Pinned by 3 cases in `web/src/mail.test.ts`, 7 in `mail.skeptic.test.ts` (the mixed-provenance id join, the partial budget, the refusals, replay, unplaceable, re-seed re-placement, never-delivered), 7 in `mailCanvas.test.ts` (cross-lane geometry, the absent link, lane marks, the counted mark, the pickup join, the five-line card fitting its glyph, the spoken summary), the ENGINE-generated `nudged-and-late-answer` golden scenario, and `web/e2e/mail.spec.ts` |
 | the observation surface's reducer (d14, slice 3) | `web/src/mail.ts` — pure `(state, trailLine) → state` seeded from `MailDto`; golden corpus `web/src/mail.golden.json` GENERATED by `dotnet/captainHookTests/MailReducerGoldenTests.cs` (2), replayed + attacked by `web/src/mail.test.ts` / `mail.skeptic.test.ts` (`npm test`) |
 | snapshot ⇄ stream alignment (d14 as-built): `MailDto.TrailEventId` is the trail's end STAMPED BEFORE the store is read, so a client subscribing at `Last-Event-ID: <it>` gets zero loss and zero duplicate. A STRING, because the id is opaque (ADR-0009 d2) and because `"0"` (replay everything) must never collapse into absent under a falsy test; null = no trail served ⇒ the picture is real and frozen | `MailDto` in `dotnet/captainHook/Api/ApiDtos.cs`; `ApiReadModel.Mail`/`TrailLength` (`_trailPath`, bound from `sseOptions.TrailPath` in `Core/DaemonHost.cs`); `MailState.trailEventId` in `web/src/mail.ts`; pinned by `MailApiTests` (resume-exactness end to end, null/"0" contracts, the source pin on read order) |
 | the observation surface, LIVE (d14, slice 5) — snapshot → seed → stream at the stamp → resync when the reducer distrusts the picture | `web/src/mailStream.ts` (`runMailStream`, `startMailStream`), started lazily on the Mail view's first visit from `web/src/main.tsx`; folds through `foldMail` in `web/src/store.ts`; a SECOND subscription, never a filter over the trace's — see [management-gui.md](management-gui.md). Pinned by `web/src/mailStream.test.ts` (10) and, end to end against a real daemon, `web/e2e/mail.spec.ts` (arrival, delivery-by-record, no-poll, reset⇒resync) |

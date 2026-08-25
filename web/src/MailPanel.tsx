@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore, type MailStreamState } from "./store.ts";
-import { deliveriesFor, label as cursorLabel, opportunities } from "./mail.ts";
+import { deliveriesFor, label as cursorLabel, nudgesFor, opportunities, threadOf } from "./mail.ts";
 import {
-  buildScene, canvasHeight, cardLines, clampView, cursorKey, fitView, mapX, sceneSummary,
+  buildScene, canvasHeight, cardLines, cardMetrics, clampView, cursorKey, fitView, mapX, sceneSummary,
   sessionLabel, slotPixels, tierFor, zoomView,
   GLYPH_H, LANE_HEAD_W, LEDGER_LEFT, SPINE_H, ZOOM_STEP,
 } from "./mailCanvas.ts";
-import type { MailGlyph, MailLane, MailScene, MailTier, MailTrack, MailView } from "./mailCanvas.ts";
-import type { MailState } from "./mail.ts";
+import type {
+  MailGlyph, MailLane, MailNudgeMark, MailScene, MailThreadLink, MailTier, MailTrack, MailView,
+} from "./mailCanvas.ts";
+import type { MailNudgeRecord, MailState, MailThreadView } from "./mail.ts";
 
 // The Mail island (ADR-0016 decision 14, roadmap item 21 slices 4–5) — the bus,
 // watched, and since slice 5 watched LIVE. The whole view is one sentence made
@@ -270,6 +272,7 @@ export function MailPanel() {
                 />
               ))}
             </g>
+            <Threads scene={scene} canvas={canvas} tier={tier} width={width} />
             <Spine scene={scene} state={mail} canvas={canvas} tier={tier} width={width} />
             <LaneHeads scene={scene} tier={tier} />
           </svg>
@@ -412,6 +415,100 @@ function shortSession(s: string): string {
 
 // ---- a lane -----------------------------------------------------------------
 
+/** The request→answer joins, drawn as one layer ABOVE the lanes and below the
+ * spine. They live outside any lane on purpose: a thread's two ends are usually
+ * two roles, so a link drawn inside a lane would be clipped by that lane's own
+ * bounds exactly where it becomes interesting.
+ *
+ * The shape is a curve with its control points pushed VERTICALLY, so the link
+ * leaves the request and enters the answer at the top and bottom of each glyph
+ * rather than crossing the ledger sideways through everything between them.
+ * At the FAR tier they are suppressed: at four pixels a slot the whole picture
+ * is a pulse, and a mesh of curves over it reads as noise rather than as
+ * threads. */
+function Threads(
+  { scene, canvas, tier, width }: { scene: MailScene; canvas: MailView; tier: MailTier; width: number },
+) {
+  if (tier === "far" || scene.threads.length === 0) return null;
+  // The scene hands over LANE tops; the glyph's height is the tier's, so this
+  // is where a link learns where its cards' top edges actually are.
+  const lift = (GLYPH_H - 10 - glyphHeight(tier)) / 2;
+  return (
+    <g className="mail-threads" clipPath="url(#mailLedgerClip)" aria-hidden="true">
+      {scene.threads.map((t) => (
+        <ThreadLink key={`${t.requestOffset}-${t.answerOffset}`} t={t} canvas={canvas} width={width} top={lift} />
+      ))}
+    </g>
+  );
+}
+
+function ThreadLink(
+  { t, canvas, width, top }: { t: MailThreadLink; canvas: MailView; width: number; top: number },
+) {
+  const x1 = mapX(canvas, t.x1), x2 = mapX(canvas, t.x2);
+  const y1 = t.y1 + top, y2 = t.y2 + top;
+  // Both ends off-screen on the same side: nothing to draw. One end off-screen
+  // still draws — a link running off the edge is how you learn the thread
+  // continues past what you are looking at.
+  if ((x1 < LEDGER_LEFT && x2 < LEDGER_LEFT) || (x1 > width && x2 > width)) return null;
+  const arc = Math.max(18, Math.min(64, Math.abs(y2 - y1) / 2 + 18));
+  const d = `M ${x1} ${y1} C ${x1} ${y1 - arc}, ${x2} ${y2 - arc}, ${x2} ${y2}`;
+  return (
+    <g className={`thread-link${t.late ? " is-late" : ""}`} data-thread={`${t.requestOffset}->${t.answerOffset}`}
+      data-late={t.late ? "true" : undefined}>
+      <path className="thread-path" d={d} fill="none" />
+      <circle className="thread-end" cx={x2} cy={y2} r={3} />
+    </g>
+  );
+}
+
+/** The pokes about this lane's mail (ADR-0017 d10), aligned with the envelope
+ * each one named — above the glyph, where a mark cannot be confused with the
+ * held/expired marks that live under a TRACK. The distinction is the point: a
+ * held mark is a cursor's arithmetic about mail it passed over, and a nudge is
+ * the daemon saying nobody's cursor came at all. */
+function Nudges(
+  { lane, canvas, tier, width }: { lane: MailLane; canvas: MailView; tier: MailTier; width: number },
+) {
+  if (lane.nudges.length === 0) return null;
+  return (
+    <g className="lane-nudges" data-lane-nudges={lane.role}>
+      {lane.nudges.map((n) => (
+        <NudgeMark key={n.offset} n={n} lane={lane} canvas={canvas} tier={tier} width={width} />
+      ))}
+    </g>
+  );
+}
+
+function NudgeMark(
+  { n, lane, canvas, tier, width }: {
+    n: MailNudgeMark; lane: MailLane; canvas: MailView; tier: MailTier; width: number;
+  },
+) {
+  const x = mapX(canvas, n.x), w = Math.max(n.w * canvas.z, 3);
+  if (x + w < LEDGER_LEFT || x > width) return null;
+  // Just above the GLYPH, not above the lane: a glyph is centred in its row and
+  // its height is the tier's, so a bar pinned to the row's top floats free of
+  // the envelope it is about — which is the one thing this mark must not do.
+  const y = lane.glyphY + (GLYPH_H - 10 - glyphHeight(tier)) / 2 - 6;
+  const budget = n.last.budget;
+  return (
+    <g className="nudge-mark" data-nudge={n.offset} data-nudge-count={n.count}>
+      <title>
+        {`${n.count} nudge(s) raised about this envelope · ${n.last.reason}`
+          + (budget === null ? ""
+            : ` · budget envelope ${budget.envelope}/${budget.perEnvelope} · role ${budget.roleHour}/${budget.perRoleHour} this hour`)}
+      </title>
+      <line className="nudge-bar" x1={x + 1} y1={y} x2={x + w - 1} y2={y} />
+      {tier !== "far" && w > 22 && (
+        <text className="nudge-count" x={x + w / 2} y={y - 3} textAnchor="middle" style={{ fontSize: 9 }}>
+          {n.count > 1 ? `nudged ×${n.count}` : "nudged"}
+        </text>
+      )}
+    </g>
+  );
+}
+
 function Lane(
   { lane, canvas, tier, width, selected, onSelect }: {
     lane: MailLane; canvas: MailView; tier: MailTier; width: number;
@@ -423,6 +520,16 @@ function Lane(
       <rect className="lane-bg" x={LEDGER_LEFT - 6} y={lane.y - 4}
         width={Math.max(width - LEDGER_LEFT - 2, 1)} height={lane.h + 8} rx={6} />
       <g clipPath="url(#mailLedgerClip)">
+        {/* The drop lines are the LANE's, not the envelopes'. They were inside
+            the glyph group until `thread-canvas` grew the glyph and the bug
+            surfaced: a drop line runs from the lane's top edge DOWN to a body
+            that is centred in the row, so it stretched the group's bounding box
+            upward until the button's own clickable centre sat above the
+            envelope, in empty lane. A control whose centre is not on the thing
+            it controls is broken however good it looks — and it looked fine. */}
+        {lane.glyphs.map((g) => (
+          <Drop key={g.offset} g={g} lane={lane} canvas={canvas} tier={tier} width={width} />
+        ))}
         {lane.glyphs.map((g) => (
           <Glyph key={g.offset} g={g} lane={lane} canvas={canvas} tier={tier} width={width}
             selected={selected === g.offset} onSelect={onSelect} />
@@ -430,8 +537,27 @@ function Lane(
         {lane.tracks.map((t) => (
           <Track key={t.key} track={t} lane={lane} canvas={canvas} tier={tier} width={width} />
         ))}
+        <Nudges lane={lane} canvas={canvas} tier={tier} width={width} />
       </g>
     </g>
+  );
+}
+
+/** The line joining an envelope to the spine: this envelope's place on the
+ * ledger. Drawn per glyph but OWNED by the lane — see the note in `Lane` — and
+ * carrying its own `data-arrival` so the arrival animation keys on the line
+ * itself rather than on an ancestor it no longer has. */
+function Drop(
+  { g, lane, canvas, tier, width }: {
+    g: MailGlyph; lane: MailLane; canvas: MailView; tier: MailTier; width: number;
+  },
+) {
+  const x = mapX(canvas, g.x), w = Math.max(g.w * canvas.z, 3);
+  if (x + w < LEDGER_LEFT || x > width) return null;
+  const y = lane.glyphY + (GLYPH_H - 10 - glyphHeight(tier)) / 2;
+  return (
+    <line className="glyph-drop" data-arrival={g.arrival} aria-hidden="true"
+      x1={x + w / 2} y1={lane.y - 4} x2={x + w / 2} y2={y} />
   );
 }
 
@@ -446,15 +572,25 @@ function Glyph(
 ) {
   const x = mapX(canvas, g.x), w = Math.max(g.w * canvas.z, 3);
   if (x + w < LEDGER_LEFT || x > width) return null;
-  const h = tier === "far" ? 12 : tier === "mid" ? 26 : GLYPH_H - 10;
+  const h = glyphHeight(tier);
   const y = lane.glyphY + (GLYPH_H - 10 - h) / 2;
   const pick = () => onSelect(selected ? null : g.offset);
+  // Only the two standings that mean something is OUTSTANDING get a mark: an
+  // open question, and an answer that arrived after the race was over (N5). A
+  // closed request and the answer that won it are already drawn — by the link
+  // between them — and marking every threaded envelope would be marking none.
+  const threadMark = THREAD_MARK[g.thread?.standing ?? ""] ?? null;
   return (
     <g
-      className={`mail-glyph glyph-${g.status} prio-${g.priority}${selected ? " is-selected" : ""}`}
+      className={`mail-glyph glyph-${g.status} prio-${g.priority}`
+        + (g.thread === null ? "" : ` thread-${g.thread.standing}`)
+        + (g.nudges.length > 0 ? " is-nudged" : "")
+        + (selected ? " is-selected" : "")}
       data-glyph={g.offset}
       data-status={g.status}
       data-priority={g.priority}
+      data-thread={g.thread?.standing}
+      data-nudged={g.nudges.length > 0 ? g.nudges.length : undefined}
       // The arrival animation runs on INSERTION — a CSS animation on an element
       // that has just entered the DOM, which is what an envelope landing on the
       // bus actually is. Nothing schedules it and nothing has to decide when it
@@ -466,27 +602,47 @@ function Glyph(
       onClick={pick}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }}
     >
-      <title>{`${g.id} · ${g.priority} ${g.kind} · ${g.topic} · ${statusWords(g.status)}`}</title>
-      {/* the drop line to the spine: this envelope's place on the ledger */}
-      <line className="glyph-drop" x1={x + w / 2} y1={lane.y - 4} x2={x + w / 2} y2={y} />
+      <title>
+        {`${g.id} · ${g.priority} ${g.kind} · ${g.topic} · ${statusWords(g.status)}`
+          + (g.thread === null ? "" : ` · ${threadWords(g.thread)}`)}
+      </title>
       <rect className="glyph-body" x={x} y={y} width={w} height={h} rx={4} />
       <rect className="glyph-prio" x={x} y={y} width={4} height={h} />
+      {/* At the MID tier the glyph is one 26px row with a topic on the left and
+          a status glyph on the right, and a thread tag is a THIRD thing wanting
+          the same row. Spelled as a word it printed straight through the topic
+          — so it is a mark before the topic instead, sized in the space the
+          topic then gives up. The word itself lives at the near tier, in the
+          card, and in the <title> at every tier. Two DIFFERENT marks, never one
+          mark in two colours: colour is not a channel this canvas relies on. */}
       {tier === "mid" && w > 44 && (
-        <text className="glyph-topic" x={x + 9} y={y + h / 2 + 4} style={{ fontSize: 11 }}>
-          {truncate(g.topic, (w - 20) / 6.6)}
-        </text>
+        <>
+          {threadMark !== null && (
+            <text className={`glyph-thread thread-${g.thread!.standing}`} x={x + 9} y={y + h / 2 + 4}
+              style={{ fontSize: 10 }} data-thread-tag={g.thread!.standing} aria-hidden="true">
+              {threadMark}
+            </text>
+          )}
+          <text className="glyph-topic" x={x + (threadMark === null ? 9 : 21)} y={y + h / 2 + 4} style={{ fontSize: 11 }}>
+            {truncate(g.topic, (w - 20 - (threadMark === null ? 0 : 12)) / 6.6)}
+          </text>
+        </>
       )}
       {tier === "near" && (
         <g data-envelope-card={g.offset}>
           {/* Budgeted against the card's OWN width, not the slot's: the glyph
               is the slot minus its padding, and a line measured against the
               wider number is a line that touches the border. */}
-          {cardLines(g, (w - 20) / 6.7).map((line, i) => (
-            <text key={i} className={`card-line card-line-${i}`} x={x + 9} y={y + 15 + i * 13}
-              style={{ fontSize: i === 1 ? 12 : 10.5 }}>
-              {line}
-            </text>
-          ))}
+          {(() => {
+            const lines = cardLines(g, (w - 20) / 6.7);
+            const { top, step } = cardMetrics(lines.length);
+            return lines.map((line, i) => (
+              <text key={i} className={`card-line card-line-${i}`} x={x + 9} y={y + top + i * step}
+                style={{ fontSize: i === 1 ? 12 : 10.5 }}>
+                {line}
+              </text>
+            ));
+          })()}
         </g>
       )}
       {tier !== "far" && w > 26 && (
@@ -494,14 +650,39 @@ function Glyph(
           {STATUS_GLYPH[g.status]}
         </text>
       )}
+
     </g>
   );
 }
+
+/** How tall a glyph is at each tier — one spelling, because the nudge bar
+ * hangs off the glyph's top edge and a second copy of this arithmetic would
+ * drift the mark away from the envelope it is about. */
+function glyphHeight(tier: MailTier): number {
+  return tier === "far" ? 12 : tier === "mid" ? 26 : GLYPH_H - 10;
+}
+
+/** Two DISTINCT marks, so the tag survives a colourblind reader and a
+ * greyscale print: an open diamond is a question still open, a filled one is an
+ * answer that landed after the thread had closed. `answered` is deliberately
+ * absent — see `threadMark`. */
+const THREAD_MARK: Record<string, string> = { awaiting: "◇", late: "◆" };
 
 const STATUS_GLYPH: Record<string, string> = {
   fresh: "●", held: "◐", expired: "○", delivered: "✓", passed: "·",
   "no-reader": "–", unreadable: "✗", torn: "⋯", unknown: "?", foreign: "",
 };
+
+/** The thread standing, spoken. The `<title>` is what a screen reader and a
+ * hover both get, and "awaiting" alone would not say awaiting WHAT. */
+function threadWords(t: MailThreadView): string {
+  switch (t.standing) {
+    case "awaiting": return "a request no answer has closed yet";
+    case "answered": return t.end === "request"
+      ? `answered by ${t.counterpart}` : `answers ${t.counterpart}`;
+    case "late": return `a late answer to ${t.counterpart} — another answer closed it first`;
+  }
+}
 
 function statusWords(status: string): string {
   switch (status) {
@@ -529,7 +710,7 @@ function Track(
   const cx = track.x === null ? null : mapX(canvas, track.x);
   return (
     <g className={`mail-track presence-${track.presence}${track.uncertain !== null ? " is-uncertain" : ""}`}
-      data-track={track.key} data-presence={track.presence}
+      data-track={track.key} data-presence={track.presence} data-pickup={track.pickup ?? undefined}
       data-motion={track.motion ?? undefined}
       data-uncertain={track.uncertain !== null ? "yes" : undefined}>
       <title>
@@ -604,16 +785,38 @@ const LEGEND: { status: string; label: string }[] = [
   { status: "unreadable", label: "malformed line" },
 ];
 
+/** The thread and the poke are legends of their own, not statuses: an envelope
+ * has exactly one STATUS (what a cursor makes of it) and may additionally be in
+ * a thread and have been nudged about. Folding them into `LEGEND` would imply a
+ * fresh envelope could not also be awaiting an answer, which is the ordinary
+ * case rather than the exception. */
+const THREAD_LEGEND: { key: string; swatch: string; label: string }[] = [
+  { key: "awaiting", swatch: "◇", label: "request awaiting an answer" },
+  { key: "answered", swatch: "→", label: "request → the answer that closed it" },
+  { key: "late", swatch: "◆", label: "late answer — another closed it first" },
+  { key: "nudged", swatch: "▔", label: "nudged: a turn was woken about it" },
+];
+
 function Legend() {
   return (
-    <ul className="mail-legend" data-mail-legend>
-      {LEGEND.map((l) => (
-        <li key={l.status} data-legend={l.status}>
-          <span className={`legend-swatch glyph-${l.status}`} aria-hidden="true">{STATUS_GLYPH[l.status]}</span>
-          {l.label}
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="mail-legend" data-mail-legend>
+        {LEGEND.map((l) => (
+          <li key={l.status} data-legend={l.status}>
+            <span className={`legend-swatch glyph-${l.status}`} aria-hidden="true">{STATUS_GLYPH[l.status]}</span>
+            {l.label}
+          </li>
+        ))}
+      </ul>
+      <ul className="mail-legend mail-legend-thread" data-mail-legend="thread">
+        {THREAD_LEGEND.map((l) => (
+          <li key={l.key} data-legend={l.key}>
+            <span className={`legend-swatch legend-${l.key}`} aria-hidden="true">{l.swatch}</span>
+            {l.label}
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -632,6 +835,8 @@ function Detail(
   const e = line.envelope;
   const readers = state.cursors.filter((c) => e !== null && c.role === e.to);
   const closedBy = e === null ? undefined : state.closedBy[e.id];
+  const thread = e === null ? null : threadOf(state, e);
+  const nudges = nudgesFor(state, line.offset);
   return (
     <div className="mail-detail" data-mail-detail={line.offset}>
       <div className="mail-detail-head">
@@ -673,6 +878,18 @@ function Detail(
             {closedBy !== undefined && <div><dt>answered by</dt><dd>
               <code data-detail-closed-by>{closedBy}</code>
             </dd></div>}
+            {/* Where this envelope stands in its thread — the reading the
+                canvas draws, spelled out. `late` is the one that needs the
+                sentence rather than the tag: an answer arriving second is a
+                normal race on a bus with no locking (N5), and a reader who sees
+                only the word would take it for a fault. */}
+            {thread !== null && <div><dt>thread</dt><dd data-detail-thread={thread.standing}>
+              {threadWords(thread)}
+              {thread.standing === "late" && <>
+                {" "}— <span className="muted">two members answering one question is a race, not a fault;
+                the later answer may be the better one.</span>
+              </>}
+            </dd></div>}
             {e.replyTo !== null && <div><dt>reply to</dt><dd><code data-detail-reply-to>{e.replyTo}</code></dd></div>}
             <div><dt>ttl</dt><dd>{e.ttlDeliveries === null
               ? <>none — unicast, delivered once to <code>{e.to}</code></>
@@ -686,6 +903,17 @@ function Detail(
           </dl>
           <p className="mail-topic"><strong>{e.topic}</strong></p>
           {e.body !== null && <p className="mail-body" data-detail-body>{e.body}</p>}
+        </>
+      )}
+
+      {nudges.length > 0 && (
+        <>
+          <h3>Nudges</h3>
+          {/* What a poke COST, as numbers (d10) — never the row's own prose,
+              which a reader would have to parse to learn what it spent. */}
+          <ul className="mail-nudges" data-mail-nudges={nudges.length}>
+            {nudges.map((n, i) => <li key={i} data-nudge-row={n.dispatchId ?? i}>{nudgeWords(n)}</li>)}
+          </ul>
         </>
       )}
 
@@ -707,7 +935,10 @@ function Detail(
                   : c.offset === null ? <>position unknown</>
                   : line.offset >= c.offset ? <>has not reached it yet</>
                   : records.length > 0
-                    ? <>delivered at the <code>{records[0].seam}</code> seam by <code>{records[0].vehicle}</code></>
+                    ? <>delivered at the <code>{records[0].seam}</code> seam by <code>{records[0].vehicle}</code>
+                        {records[0].dispatchId !== null
+                          && state.nudges.some((n) => n.dispatchId === records[0].dispatchId)
+                          && <span data-pickup="robot"> — to a turn a nudge woke</span>}</>
                     : <>is past it · <span className="muted" data-no-record={state.deliveriesComplete ? "complete" : "bounded"}>
                         {state.deliveriesComplete
                           ? "no delivery record in this picture"
@@ -720,6 +951,19 @@ function Detail(
       )}
     </div>
   );
+}
+
+/** One nudge row in words. The budget is spelled with the same four numbers
+ * `MailNudgeBudget.Clause` renders on the engine side, in the same order, so a
+ * maintainer reading the trail and a maintainer reading this page are reading
+ * one arithmetic. */
+function nudgeWords(n: MailNudgeRecord): string {
+  const who = n.address === null ? `the ${n.role} lane` : `${n.address}, via the ${n.role} lane`;
+  const cost = n.budget === null ? ""
+    : ` · budget envelope ${n.budget.envelope}/${n.budget.perEnvelope}`
+      + ` · role ${n.budget.roleHour}/${n.budget.perRoleHour} this hour`;
+  const at = n.ts === null ? "" : ` · ${n.ts}`;
+  return `${who} — ${n.reason}${cost}${at}`;
 }
 
 /** What the reducer could not reconcile. These are the picture admitting its

@@ -1552,6 +1552,79 @@ run live*. The framework underneath is what exists today.
   is deferred until the reference integration is run in earnest. The thread lane
   (`thread-aware-delivery` → `thread-canvas`) and phase 7's docs sweep are
   unaffected — they are bus work, not watcher work.
+  Slices landed: `thread-canvas` (2026-08-25; phase 5, thread lane — the LAST
+  thread-lane slice, and the only one of them that is a picture. The engine work
+  taught an envelope to say what thread it is in (`thread-fields`) and a mailbox
+  to read a thread it asked into (`thread-aware-delivery`); this draws the two
+  facts NEITHER of those can show, because neither belongs to an envelope or to a
+  cursor. **A thread is the one relation on this bus that crosses lanes**, which
+  is the whole reason it is drawn: inside one lane the ledger's left-to-right
+  order already says the answer came after, and across roles nothing does. Links
+  are built from the ANSWER end — an answer names its request directly, and only
+  an answer can be LATE — and are drawn ONLY when both ends are glyphs in this
+  scene: a request that rotated away or sits below the `?since=` window draws no
+  link at all, the same refusal the spine makes about a ledger hole, and the
+  envelope keeps its own tag either way. N5's `late` is a TAG and never a fault:
+  two members answering one ask is a normal race on a bus with no locking, so the
+  second answer is drawn dashed-and-amber and hidden from nothing, because it may
+  be the better one.
+  **The join is on the ONE `closedBy` index and the ids are compared CLAMPED on
+  both sides.** That second half is load-bearing rather than defensive: the trail
+  clamps ids at the emitter and a snapshot does not, and the MIXED case is the
+  ordinary one — a page seeds from a snapshot and then folds live appends — so
+  comparing raw would read every long-id WINNER as late, which is the one
+  misreading here that accuses somebody of losing a race they won. A skeptic case
+  drives exactly that.
+  **A poke is a bar above the envelope on the ROLE's lane, and never a track
+  mark.** `mail.nudge` (d10) belongs to a role and carries no session, and the
+  distinction is the point: a track mark is a cursor's arithmetic about mail it
+  passed over, and a nudge is the opposite fact — that no cursor came. Folding
+  one moves NO cursor and claims NO presence (a nudge dispatch feeding the
+  presence the brain reads is d4's loop with no bottom) and raises no anomaly for
+  an id it cannot place, since a poke names mail nobody has read and a `?since=`
+  window may simply start above it. Placement is its own rule and deliberately
+  not `resolveDelivery`'s — that one asks which line a cursor CONSUMED and so
+  searches behind the cursor, and a nudge is about mail every cursor is still
+  behind. Two pokes about one envelope collapse to one counted mark, because the
+  second one means the first did not work; an unplaceable poke is COUNTED so the
+  lane can say there were more without pointing at the wrong line. A row whose
+  `budget` arrives partial renders NO budget: half a cost is worse than none,
+  because half a number is a number a reader believes.
+  **N6 is answered in the opposite direction to the way it is written.** It asks
+  the canvas to tell a woken turn's pickup from a person's and names
+  `vehicle: payload` as the signal — but there is no such vehicle, because a turn
+  payload does its own pickup through the ordinary hooks and its `mail.deliver`
+  says `inject` like anybody's. What the trail really carries is the DISPATCH:
+  d10's `dispatchId` is what joins the poke to the turn it woke, so an advance
+  under that same id is by construction the woken turn's and the cursor is drawn
+  hollow. A join, not an inference — and a cursor nothing has picked up from yet
+  says nothing rather than guessing.
+  **Two defects the tests were green through, both found by READING the
+  screenshots** (which is what `/ui-loop` is for). The mid-tier thread tag was a
+  WORD and printed straight through the topic beside it — it is now one of two
+  DISTINCT marks (`◇` open, `◆` late; never one mark in two colours, since colour
+  is not a channel this canvas relies on) with the words kept for the card, the
+  `<title>` and the detail card. And the near-tier card's new fifth line printed
+  through the glyph's own bottom border: `GLYPH_H` goes 68 → 82 and `cardMetrics`
+  now DERIVES the block's top from the glyph height instead of pinning it, so a
+  sixth line one day moves the block rather than overflowing it. The link also
+  moved off the glyph's centre onto its top EDGE — anchored at the centre it ran
+  through the card's own text — which is why the scene hands the renderer LANE
+  tops and the renderer applies the tier's glyph height.
+  **A stated limit rather than a silent one: a poke is LIVE-ONLY.** `mail.nudge`
+  rides the trail, so a page opened after the poke shows no mark for it — exactly
+  the gap slice 6a closed for delivery records, and the same fix would close it
+  (fold nudges beside deliveries in `MailDeliveryFold`, which already reads the
+  file). Named in the ADR, the flow doc and here; not built, because it is 6a's
+  shape and 6a was its own slice.
+  Tests: 3 in `web/src/mail.test.ts`, 7 in `mail.skeptic.test.ts`, 7 in
+  `mailCanvas.test.ts` (48 total against 17 goldens), one `web/e2e/mail.spec.ts`
+  case against a real bus, and a new ENGINE-generated golden scenario
+  `nudged-and-late-answer` whose `mail.nudge` row is written by the real
+  `NudgeStore.Record` — so a moved column fails the golden and the reducer suite
+  rather than quietly making a seed a lie. Docs: `doc/flow/mailbox-bus.md` gains
+  § *What the canvas draws that no cursor can* with its diagram and a ground-truth
+  row; ADR-0017's Ground truth gains the d8/d10 canvas row.)
   Slices landed: `thread-aware-delivery` (2026-08-20; phase 2, thread lane —
   the ASKER-SIDE reading of a thread, and the last engine behaviour in the
   ask/reply arc. `thread-fields` rendered what an envelope says about itself;

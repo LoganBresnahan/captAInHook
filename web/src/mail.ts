@@ -190,6 +190,40 @@ export type MailDeliveryRecord = {
   atMs: number;
 };
 
+/** One `mail.nudge` trail line (ADR-0017 d10) — a nudge is a TRAIL LINE, never
+ * an envelope: mail about mail would recurse, and "I poked them and they still
+ * have not read it" is the trail's kind of fact. It belongs to a ROLE and
+ * carries no session, exactly as d10 has it, which is why it draws on the LANE
+ * and never on a track: nobody's cursor moved.
+ *
+ * `offsets` is this picture's placement of `envelopeIds` — null per id it
+ * cannot place honestly. It is deliberately NOT `resolveDelivery`'s rule: that
+ * one asks "which line did this cursor CONSUME", so it searches behind the
+ * cursor and skips what is held. A nudge names mail the role has by definition
+ * NOT read — ahead of every cursor — so the question is the simpler one, "which
+ * line on this lane bears this id", answered only when the answer is unique. */
+export type MailNudgeRecord = {
+  role: string;
+  /** ADR-0018 d6: set only by the dead-mailbox rule, where `role` is the
+   * reaper's own lane and says nothing about whose mail is stranded. Null on an
+   * ordinary nudge, where the role IS the subject. */
+  address: string | null;
+  workspace: string | null;
+  envelopeIds: string[];
+  offsets: (number | null)[];
+  reason: string;
+  /** d10's numbers, never the sentence: a reader must not parse prose to learn
+   * what a poke cost. Null when the row carried none (the reaper's path). */
+  budget: { envelope: number; perEnvelope: number; roleHour: number; perRoleHour: number } | null;
+  /** What joins this poke to the turn it woke — `dispatch.start → exec.spawn →
+   * exec.exit`, and the `mail.deliver` the woken turn's own pickup writes.
+   * That last join is what lets the canvas draw a ROBOT pickup differently from
+   * a human's (N6, as-built: see `pickupKind`). */
+  dispatchId: string | null;
+  ts: string | null;
+  atMs: number;
+};
+
 export type MailNoteKind =
   | "malformed-event"      // a mail.* line the reducer refused to apply
   | "ledger-gap"           // an append landed past where the next line must start
@@ -268,6 +302,12 @@ export type MailState = {
    * record may simply predate what can still be proven. Unseeded state is
    * false — it has read nothing and may not claim otherwise. */
   deliveriesComplete: boolean;
+  /** Every `mail.nudge` this picture has watched go out (ADR-0017 d10), oldest
+   * first. Trail-only: no snapshot serves them, so — like `deliveries` — they
+   * survive a re-seed rather than being erased by it. A poke that happened is a
+   * fact about the past, and N8's "the snapshot is authoritative" governs
+   * STATE, not history. */
+  nudges: MailNudgeRecord[];
   /** The thread index (ADR-0017 d8): a request's id → the id of the FIRST
    * `answer` that names it in `inReplyTo`. Seeded from the snapshot, which
    * builds it over the WHOLE ledger — a request and its answer routinely sit on
@@ -299,6 +339,7 @@ export type MailInput =
 
 export const MAIL_NOTES_CAP = 200;
 export const MAIL_DELIVERIES_CAP = 500;
+export const MAIL_NUDGES_CAP = 200;
 
 // ---- helpers ---------------------------------------------------------------------
 
@@ -362,6 +403,7 @@ export function emptyMailState(): MailState {
     presence: [],
     deliveries: [],
     deliveriesComplete: false,
+    nudges: [],
     closedBy: {},
     hopBudget: null,
     notes: [],
@@ -503,6 +545,13 @@ export function seedMail(dto: MailDto, atMs: number, prev?: MailState): MailStat
     presence,
     deliveries: preloadDeliveries(dto, lines, cursors, atMs, prev),
     deliveriesComplete: dto.deliveriesComplete,
+    // Kept across the re-seed like the delivery records, and RE-PLACED against
+    // the new ledger: a nudge naming mail that was below the old `?since=`
+    // window can become placeable when a wider snapshot arrives, and a nudge
+    // whose lines have since rotated away must stop claiming a position it can
+    // no longer prove. The row's own columns are never touched — only this
+    // picture's reading of where they sit.
+    nudges: (prev?.nudges ?? []).map((n) => ({ ...n, offsets: placeById(lines, n.role, n.envelopeIds) })),
     // The snapshot's index REPLACES whatever was folded live: it is built over
     // the whole ledger, so it can only be a superset of what a stream taught us.
     closedBy: { ...dto.closedBy },
@@ -569,6 +618,7 @@ function reduceLine(state: MailState, line: TrailLine, atMs: number): MailState 
       const offset = nonNeg(data.offset);
       return { ...s, pendingTorn: offset };
     }
+    case "mail.nudge": return onNudge(s, data, line, ts, atMs);
     case "mail.lockBusy":
       return note(s, { kind: "lock-busy", severity: "info", role: null, session: null, offset: null,
         message: "the store's append lock was busy — a writer waited or gave up", atMs });
@@ -1036,6 +1086,152 @@ function sameDelivery(a: MailDeliveryRecord, b: MailDeliveryRecord): boolean {
     && a.hookEvent === b.hookEvent && a.seam === b.seam && a.vehicle === b.vehicle
     && a.renderHash === b.renderHash && a.envelopeIds.length === b.envelopeIds.length
     && a.envelopeIds.every((id, i) => id === b.envelopeIds[i]);
+}
+
+// ---- mail.nudge --------------------------------------------------------------------
+
+/** Fold one `mail.nudge` (ADR-0017 d10). Three things it deliberately does NOT
+ * do, each because a nudge is a poke and not a delivery:
+ *
+ *   * it moves NO cursor and marks nothing delivered — being nudged about mail
+ *     is the opposite of having read it, and this row exists precisely because
+ *     nobody has;
+ *   * it claims NO presence. The row carries no session by design, and a
+ *     dispatch raised BY the watcher must never count as a sighting: presence
+ *     feeds the watcher's own "is anybody live?" question (d4), and a nudge
+ *     that fed it would let the watcher's action answer the watcher's question;
+ *   * it raises no anomaly for an id it cannot place. A nudge names mail that
+ *     is by definition unread, which a `?since=` window may simply start above.
+ *
+ * A DENIED nudge writes no row at all (d10) — `nudge.denied` is not a `mail.*`
+ * event and never reaches here — so every row this folds is a poke that really
+ * went out, which is exactly what makes drawing it honest. */
+function onNudge(s: MailState, d: Record<string, unknown>, line: TrailLine, ts: string | null, atMs: number): MailState {
+  const role = str(d.role), reason = str(d.reason);
+  const ids = Array.isArray(d.envelopeIds) && d.envelopeIds.every((x) => typeof x === "string")
+    ? (d.envelopeIds as string[]) : null;
+  if (role === null || reason === null || ids === null)
+    return refuse(s, "mail.nudge", "role/envelopeIds/reason", atMs, role, null, null);
+
+  // The budget rides as four numbers or not at all: a row carrying a PARTIAL
+  // budget is a row whose arithmetic disagrees with itself, and half a cost is
+  // worse than no cost — it renders as a number a reader would believe.
+  const b = isRecord(d.budget) ? d.budget : null;
+  const nums = b === null ? null : {
+    envelope: nonNeg(b.envelope), perEnvelope: nonNeg(b.perEnvelope),
+    roleHour: nonNeg(b.roleHour), perRoleHour: nonNeg(b.perRoleHour),
+  };
+  const budget = nums !== null && nums.envelope !== null && nums.perEnvelope !== null
+    && nums.roleHour !== null && nums.perRoleHour !== null
+    ? { envelope: nums.envelope, perEnvelope: nums.perEnvelope, roleHour: nums.roleHour, perRoleHour: nums.perRoleHour }
+    : null;
+
+  const record: MailNudgeRecord = {
+    role,
+    address: str(d.address),
+    workspace: str(d.workspace),
+    envelopeIds: [...ids],
+    offsets: placeById(s.lines, role, ids),
+    reason,
+    budget,
+    dispatchId: typeof line.dispatchId === "string" ? line.dispatchId : null,
+    ts,
+    atMs,
+  };
+  // One poke, one mark. A nudge has no sequence number either, so its identity
+  // is its content — the dispatch it raised, the lane, and the envelopes it
+  // named — and a reconnect that re-sends the region must not draw it twice.
+  if (s.nudges.some((n) => sameNudge(n, record))) return s;
+  const nudges = [...s.nudges, record];
+  if (nudges.length > MAIL_NUDGES_CAP) nudges.splice(0, nudges.length - MAIL_NUDGES_CAP);
+  return { ...s, nudges };
+}
+
+function sameNudge(a: MailNudgeRecord, b: MailNudgeRecord): boolean {
+  return a.role === b.role && a.address === b.address && a.dispatchId === b.dispatchId
+    && a.reason === b.reason && a.envelopeIds.length === b.envelopeIds.length
+    && a.envelopeIds.every((id, i) => id === b.envelopeIds[i]);
+}
+
+/** Where an id sits on a lane, or null. The nudge's placement rule, and NOT
+ * `resolveDelivery`'s: that one answers "which line did this cursor consume"
+ * and is therefore cursor-relative (behind the offset, not held). This one
+ * answers "which line on this role's lane bears this id", which has nothing to
+ * do with any cursor — a nudge is about mail every cursor is still behind.
+ *
+ * Unique-or-nothing, for the same reason the delivery rule is: a wrong
+ * placement draws a poke pointing at the wrong envelope, which is a false
+ * picture, and two ids can collide across generations after a rotation.
+ * Ids are compared CLAMPED on both sides — the trail's are clamped at the
+ * source (`MailEnvelope.ClampField`) and a snapshot's are whole. */
+function placeById(lines: MailLedgerLine[], role: string, ids: string[]): (number | null)[] {
+  return ids.map((id) => {
+    const key = clampField(id);
+    const cands = lines.filter((l) => l.envelope !== null && l.envelope.to === role
+      && clampField(l.envelope.id) === key);
+    return cands.length === 1 ? cands[0].offset : null;
+  });
+}
+
+/** Every nudge that named this ledger position — what the lane draws a mark
+ * for, and what the detail card lists. */
+export function nudgesFor(state: MailState, offset: number): MailNudgeRecord[] {
+  return state.nudges.filter((n) => n.offsets.includes(offset));
+}
+
+// ---- the thread, read off the index (ADR-0017 d8) ----------------------------------
+
+/** How an envelope stands in its thread. `awaiting` is a request nothing has
+ * answered yet; `answered` is a request whose closer this picture knows, and
+ * the answer that closed it; `late` is an answer that named a request some
+ * OTHER answer had already closed — N5's case, where two members both answer
+ * one ask, which is a normal race on a bus with no locking and not a fault.
+ * The later answer is TAGGED, never hidden: it may well be the better one. */
+export type MailThreadStanding = "awaiting" | "answered" | "late";
+
+export type MailThreadView = {
+  /** Which end of the thread this envelope is. */
+  end: "request" | "answer";
+  standing: MailThreadStanding;
+  /** The other end, when this picture knows it: the answer that closed a
+   * request, or the request an answer names. Null for an unanswered request. */
+  counterpart: string | null;
+  hops: number;
+};
+
+/** The thread reading of one envelope, or null when it is in no thread at all.
+ *
+ * Both halves are joins onto `closedBy`, which is the ONE index (seeded from
+ * the snapshot's whole-ledger build, extended live by `closeThread`) — the
+ * canvas computes no second one, because a thread the picture draws and a
+ * thread the digest delivers on must be the same thread (N8's rule, worn as a
+ * thread rather than as a pending set).
+ *
+ * Ids are compared CLAMPED throughout. Within one provenance it changes
+ * nothing; across the mixed case it is load-bearing — a snapshot-seeded index
+ * holds whole ids and a live `mail.append` teaches clamped ones, and comparing
+ * the two raw would read every long-id answer as `late`, which is the one
+ * misreading here that accuses somebody of losing a race they won. */
+export function threadOf(state: MailState, e: MailEnvelopeView): MailThreadView | null {
+  const closer = closerOf(state, e.id);
+  if (e.kind === "request")
+    return { end: "request", standing: closer === null ? "awaiting" : "answered", counterpart: closer, hops: e.hops };
+  if (e.kind !== "answer" || e.inReplyTo === null) return null;
+  const closedIts = closerOf(state, e.inReplyTo);
+  // No entry at all is not "this one won" — it is a request this picture has
+  // never seen closed, which happens when the index predates the answer (a
+  // stream folded past a re-seed). Standing stays `answered` only when the
+  // index NAMES this envelope; otherwise the honest tag is what it says.
+  const standing: MailThreadStanding = closedIts === null ? "answered"
+    : clampField(closedIts) === clampField(e.id) ? "answered" : "late";
+  return { end: "answer", standing, counterpart: e.inReplyTo, hops: e.hops };
+}
+
+/** The id of the answer that closed this request, or null. Tries the key as
+ * given and as clamped, because the index is keyed by whichever spelling the
+ * side that taught it used. */
+function closerOf(state: MailState, id: string): string | null {
+  return state.closedBy[id] ?? state.closedBy[clampField(id)] ?? null;
 }
 
 // ---- the re-anchor family --------------------------------------------------------

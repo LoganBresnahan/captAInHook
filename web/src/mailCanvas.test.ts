@@ -5,9 +5,9 @@ import type { MailDto } from "./api.gen.ts";
 import type { TrailLine } from "./store.ts";
 import { seedMail, reduceMail, projectCursor, lineStatus, rolesOf, type MailState } from "./mail.ts";
 import {
-  buildScene, canvasHeight, cardLines, clampView, cursorKey, fitView, mapX, sceneSummary,
-  slotPixels, tierFor, unmapX, xForOffset, zoomView,
-  LEDGER_LEFT, MAX_Z, MIN_Z, PAD_X, SLOT_W, SLOT_PAD, TIER_FAR_MAX, TIER_MID_MAX, ZOOM_STEP,
+  buildScene, canvasHeight, cardLines, cardMetrics, clampView, cursorKey, fitView, mapX, sceneSummary,
+  slotPixels, threadLine, tierFor, unmapX, xForOffset, zoomView,
+  GLYPH_H, LEDGER_LEFT, MAX_Z, MIN_Z, PAD_X, SLOT_W, SLOT_PAD, TIER_FAR_MAX, TIER_MID_MAX, ZOOM_STEP,
 } from "./mailCanvas.ts";
 import type { MailLane } from "./mailCanvas.ts";
 
@@ -440,4 +440,174 @@ test("a track carries the motion that moved it, and a re-anchor is not an advanc
   assert.ok(jumped,
     "a re-anchored cursor must be distinguishable from one that read forward — " +
     "drawn as a slide it would depict a cursor reading backwards");
+});
+
+// ---- threads and pokes, laid out (slice `thread-canvas`) -------------------------
+//
+// The two new things this layer draws are the two a screenshot cannot check on
+// its own: a link is only right if both ends really are the request's glyph and
+// the answer's glyph (a curve between the WRONG pair looks exactly as good),
+// and a poke is only right if it sits over the envelope it named. Both are
+// joins, so both are tested here against the reducer's own reading.
+
+const threadState = () => {
+  const sc = scenario("nudged-and-late-answer");
+  let s = seedMail(sc.before, 500);
+  sc.trail.forEach((text, i) => {
+    s = reduceMail(s, { kind: "line", line: JSON.parse(text) as TrailLine, atMs: 1000 + i });
+  });
+  return s;
+};
+const glyphOf = (scene: ReturnType<typeof buildScene>, id: string) => {
+  for (const lane of scene.lanes) for (const g of lane.glyphs) if (g.id === id) return { g, lane };
+  throw new Error(`no glyph for ${id}`);
+};
+
+test("threads: both answers link back to the request ACROSS lanes, and only the second is late", () => {
+  const state = threadState();
+  const scene = buildScene(state);
+  const req = glyphOf(scene, "req-1"), ans1 = glyphOf(scene, "ans-1"), ans2 = glyphOf(scene, "ans-2");
+
+  // The case the link exists for: the request is on `reviewer`, the answers on
+  // `main`. Inside one lane the ledger's own order would already show it.
+  assert.equal(req.lane.role, "reviewer");
+  assert.equal(ans1.lane.role, "main");
+  assert.equal(scene.threads.length, 2);
+
+  for (const [ans, late] of [[ans1, false], [ans2, true]] as const) {
+    const link = scene.threads.find((t) => t.answerOffset === ans.g.offset)!;
+    assert.equal(link.requestOffset, req.g.offset, "a link's request end is the envelope inReplyTo names");
+    assert.equal(link.late, late);
+    // Anchored at the glyph centres, in the lanes the glyphs are actually in —
+    // the whole failure mode here is a curve drawn to a plausible wrong place.
+    assert.equal(link.x1, req.g.x + req.g.w / 2);
+    assert.equal(link.x2, ans.g.x + ans.g.w / 2);
+    // Lane tops, so the renderer can put the curve on each card's top EDGE at
+    // whatever height the tier draws — never through the card's own text.
+    assert.equal(link.y1, req.lane.glyphY);
+    assert.equal(link.y2, ans.lane.glyphY);
+    assert.notEqual(link.y1, link.y2, "the two ends are in different lanes and must not share a y");
+  }
+});
+
+test("threads: an answer whose request is off this picture's ledger draws NO link, and keeps its own tag", () => {
+  const state = threadState();
+  // A `?since=` window that starts above the request: the answers remain, the
+  // request does not. The picture must decline to anchor a curve at a position
+  // it would have to invent — the same refusal a ledger hole gets.
+  const cut = state.lines.find((l) => l.envelope?.id === "ans-1")!.offset;
+  const narrowed = { ...state, since: cut, lines: state.lines.filter((l) => l.offset >= cut) };
+  const scene = buildScene(narrowed);
+
+  assert.deepEqual(scene.threads, []);
+  assert.equal(glyphOf(scene, "ans-2").g.thread?.standing, "late", "the tag is the envelope's own reading, not the link's");
+});
+
+test("nudges: the poke lands on the ROLE's lane over the envelope it named, and is never a track mark", () => {
+  const state = threadState();
+  const scene = buildScene(state);
+  const reviewer = scene.lanes.find((l) => l.role === "reviewer")!;
+  const req = glyphOf(scene, "req-1");
+
+  assert.equal(reviewer.nudges.length, 1);
+  const mark = reviewer.nudges[0];
+  assert.equal(mark.offset, req.g.offset);
+  assert.equal(mark.x, req.g.x, "a poke is drawn against its envelope, not at a time of its own");
+  assert.equal(mark.w, req.g.w);
+  assert.equal(mark.count, 1);
+  assert.equal(mark.last.role, "reviewer");
+  assert.equal(reviewer.nudgesUnplaced, 0);
+
+  // It belongs to the lane and to nothing that reads: a track mark is a
+  // cursor's arithmetic about mail it passed over, and a nudge is the fact that
+  // no cursor came at all.
+  for (const t of reviewer.tracks) assert.deepEqual(t.marks.filter((m) => m.offset === req.g.offset), []);
+  // The other lane's mail is not this lane's poke.
+  assert.deepEqual(scene.lanes.find((l) => l.role === "main")!.nudges, []);
+  assert.equal(glyphOf(scene, "req-1").g.nudges.length, 1);
+  assert.equal(glyphOf(scene, "ans-1").g.nudges.length, 0);
+});
+
+test("nudges: two pokes about one envelope are ONE mark that counts them; an unplaceable poke is counted, never drawn", () => {
+  const state = threadState();
+  const req = state.lines.find((l) => l.envelope?.id === "req-1")!;
+  const nudge = state.nudges[0];
+  const scene = buildScene({
+    ...state,
+    nudges: [
+      nudge,
+      { ...nudge, dispatchId: "n-2", reason: "still unread", offsets: [req.offset] },
+      { ...nudge, dispatchId: "n-3", envelopeIds: ["gone-1"], offsets: [null] },
+    ],
+  });
+  const reviewer = scene.lanes.find((l) => l.role === "reviewer")!;
+
+  assert.equal(reviewer.nudges.length, 1, "one envelope, one mark");
+  assert.equal(reviewer.nudges[0].count, 2, "the second poke means the first did not work — that is the fact to show");
+  assert.equal(reviewer.nudges[0].last.reason, "still unread", "the mark speaks for the most recent poke");
+  assert.equal(reviewer.nudgesUnplaced, 1, "a poke the picture cannot place is counted, so the lane can SAY so");
+});
+
+test("pickup: an advance under a nudge's own dispatch id is a ROBOT pickup; anything else is a human's", () => {
+  // N6 as built. The signal is the DISPATCH, not a vehicle: a woken turn does
+  // its pickup through the ordinary hooks, so its `mail.deliver` says `inject`
+  // like anybody's, and the only thing that joins the poke to the turn is the
+  // id the nudge raised it under (d10).
+  const state = threadState();
+  const main = state.cursors.find((c) => c.role === "main")!;
+  assert.equal(buildScene(state).lanes.find((l) => l.role === "main")!.tracks[0].pickup, "human");
+
+  const dispatchId = main.lastAdvance!.dispatchId;
+  assert.ok(dispatchId !== null, "the golden's digest advance carries the dispatch it ran under");
+  const woken = buildScene({ ...state, nudges: [{ ...state.nudges[0], dispatchId }] });
+  assert.equal(woken.lanes.find((l) => l.role === "main")!.tracks[0].pickup, "robot");
+
+  // A cursor nothing has picked up from yet says nothing rather than guessing.
+  const untouched = buildScene({
+    ...state,
+    cursors: state.cursors.map((c) => (c.role === "main" ? { ...c, lastAdvance: null } : c)),
+  });
+  assert.equal(untouched.lanes.find((l) => l.role === "main")!.tracks[0].pickup, null);
+});
+
+test("the card grows a FIFTH line for a thread, and the five-line card still fits inside its glyph", () => {
+  const state = threadState();
+  const scene = buildScene(state);
+  const { g: req } = glyphOf(scene, "req-1");
+  const { g: late } = glyphOf(scene, "ans-2");
+  const { g: plain } = glyphOf(scene, "ans-1");
+
+  assert.equal(threadLine(req), "answered by ans-1 · hop 1");
+  assert.equal(threadLine(late), "late answer to req-1 · hop 2");
+  assert.match(cardLines(req, 60).at(-1)!, /^answered by/);
+  assert.equal(cardLines(req, 60).length, 5);
+  assert.equal(cardLines(plain, 60).length, 5);
+
+  // The one failure a screenshot shows and a test does not: text printed
+  // through the card's own border. The glyph's inner height is GLYPH_H - 10.
+  const m = cardMetrics(5);
+  // Baseline plus descender: a line whose baseline is exactly the glyph's
+  // bottom edge still prints its tails through the border, which is what the
+  // first screenshot of this slice showed.
+  assert.ok(m.top + 4 * m.step + 4 <= GLYPH_H - 10, "the fifth line, descenders and all, must sit inside the glyph");
+  const m4 = cardMetrics(4);
+  assert.ok(m4.top + 3 * m4.step <= GLYPH_H - 10, "and so must the four-line card");
+  assert.equal(m4.step, m.step, "one step for every card — a thread does not squeeze the text");
+
+  // An envelope in no thread keeps its four lines, and nothing shifts.
+  const plainState = stateOf(scenario("appends-only").after);
+  const g0 = buildScene(plainState).lanes[0].glyphs[0];
+  assert.equal(threadLine(g0), null);
+  assert.equal(cardLines(g0, 60).length, 4);
+});
+
+test("the spoken summary names what is WAITING on a person: awaiting requests, late answers, pokes raised", () => {
+  const state = threadState();
+  const said = sceneSummary(buildScene(state), state);
+  assert.match(said, /1 late answer\(s\)/);
+  assert.match(said, /1 nudge\(s\) raised/);
+  assert.doesNotMatch(said, /awaiting/, "req-1 was answered — the summary must not invent an open question");
+
+  const open = seedMail(scenario("nudged-and-late-answer").before, 500);
+  assert.match(sceneSummary(buildScene(open), open), /1 request\(s\) awaiting an answer/);
 });
