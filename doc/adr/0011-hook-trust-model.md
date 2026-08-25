@@ -218,5 +218,5 @@ endpoint commit — never left half-specified between commits).*
 | d5 wiring hint shown-not-written | `web/src/handlers.ts` (`wiringHint`, `kebab`), `StatusDto.ShimPath` (`ApiReadModel.ResolveShimPath`), the corrected `{captainShim}` template in `harnesses/claude-code.json` (spec-pinned, N4) |
 | d6 write-authz as-is | No code — the existing `ApiAuthGate` covers the new verb by construction (pinned: 401-without-token test) |
 | d7 sandboxing/provenance un-triggered | No code; the trigger text in this document |
-| tests | `ApiHandlersWriteTests` (17: mapping, atomicity interleave, both-directions next-dispatch daemon E2E), `HarnessTests` install-template pin, `web/src/handlers.test.ts` (unit), `web/e2e/handlers.spec.ts` (4 E2E: install-confirm-wiring-register, 422-in-modal, 412-stops-nothing-clobbered, uninstall+toggle) |
+| tests | `ApiHandlersWriteTests` (16: mapping, atomicity interleave, both-directions next-dispatch daemon E2E), `HarnessTests` install-template pin, `web/src/handlers.test.ts` (unit), `web/e2e/handlers.spec.ts` (4 E2E: install-confirm-wiring-register, 422-in-modal, 412-stops-nothing-clobbered, uninstall+toggle) |
 | flow docs | [management-api.md](../flow/management-api.md) § The writes; [management-gui.md](../flow/management-gui.md) § The handlers editor |

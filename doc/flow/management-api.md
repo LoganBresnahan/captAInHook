@@ -35,8 +35,13 @@ runtime deps — the managed `HttpListener` is BCL.
                             ├─ GET  /api/v1/harnesses   → HarnessesDto
                             ├─ GET  /api/v1/handlers    → HandlersDto    (gen/dead across C#/F#)
                             ├─ GET  /api/v1/events      → SSE tail       (long-lived; d5)
+                            ├─ GET  /api/v1/mail?since=  → MailDto        (ADR-0016 d14)
                             ├─ PUT  /api/v1/policy       → 200/422/412/413/500  (d4)
+                            ├─ PUT  /api/v1/handlers     → 200/422/412/413/500  (ADR-0011)
                             └─ else                      → 404 not_found
+                                 ↑ a NON-GET under /api/v1/mail lands here on
+                                   purpose: observation is not delivery, pinned
+                                   at the route table as well as in the graph.
 ```
 
 The reads (`ApiReadModel`) project the **same live Core objects the dispatch
@@ -250,7 +255,7 @@ where a hand edit would follow it.
 | port resolution (`4665`, `CAPTAINHOOK_API_PORT`, `0` disables) | `ApiHost.ResolvePort`, threaded via `Program.cs` |
 | SSE heartbeat cadence (`CAPTAINHOOK_SSE_HEARTBEAT_MS`; unset ⇒ `TrailSubscription`'s 15 s) | `ApiHost.ResolveHeartbeat`, threaded via `Program.cs` into `SseOptions.Heartbeat`; a daemon-start test knob so the GUI's stall watchdog can be pinned end-to-end in seconds (`ApiHostTests.ResolveHeartbeat`, `web/e2e/stream-health.spec.ts`) |
 | discovery path | `RendezvousPaths.ApiJsonPath` (`captainHookWire/Rendezvous.cs`) |
-| endpoints | `GET /api/v1/{status,policy,harnesses,handlers,events}`, `PUT /api/v1/{policy,handlers}`, else 404 |
+| endpoints | `GET /api/v1/{status,policy,harnesses,handlers,events,mail}`, `PUT /api/v1/{policy,handlers}`, else 404. `GET /mail` takes `?since=<byte offset>` and answers 400 `invalid_since` on anything else; it is the observation surface (ADR-0016 d14) and has no non-GET route — see [mailbox-bus.md](mailbox-bus.md) § *The observation surface* |
 | log events | `api.listening`, `api.stopped`, `api.bindContended`, `api.bindBlocked`, `api.discoveryFailed`, `api.tailError`, `api.handlerError`, `api.loopCrashed`; `daemon.superseded` (src `api`/`daemon`); `policy.write` (src **`policy`** — pairs with `policy.reload`) |
 | pinned by | `ApiHostTests`, `ApiHostInDaemonTests` (listener + hand-off + in-daemon); `ApiAuthGateTests`, `ApiAuthHttpTests` (auth, listener prefix-match); `ApiDiscoveryTests`, `ApiDiscoveryInDaemonTests` (0600, publish⟺holds-port); `ApiPortResolveTests`, `ApiRetryBindTests`, `ApiCutoverTests` (port singleton + two-daemon cutover); `ApiReadEndpointsTests` (read DTOs); `TrailCursorTests`, `TrailSubscriptionTests`, `SseBackpressureTests`, `SseIdleDeferTests`, `ApiSseHttpTests` (SSE edges, backpressure, idle-defer, wedged-Stop bound); `ApiPolicyWriteTests` (write mapping, atomicity probe, end-to-end deny-short-circuit, `PolicyWriteLedgerTests` — the write⇄reload same-hash pin); `ApiHandlersWriteTests` (handlers write mapping, d3 skip-refusal contrast, resolver-interleave atomicity, both-directions next-dispatch daemon E2E) |
 | platform facts | `doc/platform.md` § Loopback TCP & managed `HttpListener` (co-bind, SO_REUSEADDR/TIME_WAIT pairwise, teardown-blocks-behind-wedged-write, Host prefix-match); § Runtime directories (0600 token, mtime resolution) |

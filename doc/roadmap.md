@@ -1552,6 +1552,35 @@ run live*. The framework underneath is what exists today.
   is deferred until the reference integration is run in earnest. The thread lane
   (`thread-aware-delivery` → `thread-canvas`) and phase 7's docs sweep are
   unaffected — they are bus work, not watcher work.
+  Slices landed: `docs-and-ground-truth` (2026-08-25; phase 7, the critical
+  path's LAST slice — a sweep, not a rewrite, exactly as the plan row said: the
+  flow doc's § *The watcher*, § *The loop closes*, the `watch.json` and
+  `mail.nudge` schemas and the statusLine wiring all accrued in their own
+  landing commits, so what was left was to CHECK them. Checked mechanically,
+  which is the only way this kind of claim can be checked: all 251 backticked
+  identifiers in ADR-0017's Ground truth and all 383 in the flow doc's resolve
+  to real code, and every file path named exists — **names never drifted.**
+  **Numbers did, twelve times across ADR-0011/0016/0017/0018 and the flow
+  doc**, eleven of them LOW (a count taken when the row was written and never
+  re-measured — `MailWatchTests` 20→24, `MailStatusTests` 30→36,
+  `RoleKindsTests` 18→20, `MailNudgeEventTests` 11→13, `MailEnvelopeTests.cs`
+  115→147, `MailStoreTests.cs` 46→52, `mailCanvas.test.ts` 39→48 against 16→17
+  goldens, `MailInstanceRegistrationTests` 13→14 in two files,
+  `MailAddressTests` 17→21, `WatcherDeadMailboxTests.cs` 19→21) and ONE HIGH —
+  `ApiHandlersWriteTests` 17→16, a test that stopped existing, which is the
+  drift no reader catches by feel. Three bare `MailEnvelopeTests` citations
+  named a FILE where there is no such class and are now `.cs`-qualified. The
+  ADR's status paragraph stops promising the sweep and says what is actually
+  left; `thread-canvas` and this row are ticked in its plan table. Suite green
+  twice (1494), web units 278, and the field report is
+  `doc/dogfood/2026-08-25-the-sweep.md` — which is where the sweep's own finding
+  goes: the reproduction commands were already written down in the flow doc's
+  Ground truth preamble and drifted eleven more times anyway, because a command
+  nobody runs is a comment, so a count gate is a `/shipshape` candidate whose
+  failure mode is a one-line diff rather than a judgment call. **The box stays
+  UNCHECKED:** phase 8's two KEPT honesty fixes — `turn-provenance` and
+  `nudge-accounting`'s budget column — are still owed, and the plan row's
+  "roadmap 22 tick" was written before the 2026-08-20 narrowing added them.)
   Slices landed: `thread-canvas` (2026-08-25; phase 5, thread lane — the LAST
   thread-lane slice, and the only one of them that is a picture. The engine work
   taught an envelope to say what thread it is in (`thread-fields`) and a mailbox
