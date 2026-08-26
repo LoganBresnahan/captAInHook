@@ -332,9 +332,11 @@ public sealed class ExecHandler(
             Log.Info("exec", "exec.exit", F(e, ctx, sw.Elapsed.TotalMilliseconds,
                 data: new Dictionary<string, object> { ["handler"] = name, ["code"] = code }));
             if (stderrBuf.Length > 0)
-                Log.Info("exec", "exec.stderr", F(e, ctx,
-                    msg: Truncate(stderrBuf.ToString(), 2048),
-                    data: new Dictionary<string, object> { ["handler"] = name }));
+            {
+                var stderrData = new Dictionary<string, object> { ["handler"] = name };
+                var stderrMsg = StderrMsg(stderrBuf.ToString(), stderrData);
+                Log.Info("exec", "exec.stderr", F(e, ctx, msg: stderrMsg, data: stderrData));
+            }
         }
         catch (Exception ex)
         {
@@ -585,6 +587,29 @@ public sealed class ExecHandler(
 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "…";
+
+    /// The cap on the `exec.stderr` row — the ONE record of what a child said.
+    internal const int StderrCap = 2048;
+
+    /// `exec.stderr`'s message, and the row's own admission when it is not the
+    /// whole thing. A woken turn writes its entire answer here (`turn-claude`
+    /// sends the model's stdout to stderr on purpose — our stdout is the exec
+    /// wire), and the first real one was cut mid-sentence at 2049 characters
+    /// with nothing but a trailing ellipsis to say so
+    /// (doc/dogfood/2026-08-19-the-robot-channel.md finding 6). A reader
+    /// cannot tell an ellipsis the child typed from one we added, and a
+    /// COUNTER cannot be told anything at all — so the row now carries
+    /// `truncated` and the `chars` it had before the cut. This is the honest
+    /// half of ADR-0017's `nudge-accounting`: the engine cannot know what a
+    /// child SPENT, but it must not imply it recorded everything the child
+    /// said. Silent under the cap — the common row grows no fields.
+    internal static string StderrMsg(string text, IDictionary<string, object> data)
+    {
+        if (text.Length <= StderrCap) return text;
+        data["truncated"] = true;
+        data["chars"] = text.Length;
+        return Truncate(text, StderrCap);
+    }
 
     private static LogFields F(HookEvent e, HandlerContext ctx, double? durMs = null,
                                string? msg = null, IDictionary<string, object>? data = null) =>

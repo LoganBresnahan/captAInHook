@@ -215,7 +215,17 @@ budget). All degrade to the handler's fail-mode effect; classification
 changes what the *supervisor counts*, never what the dispatch returns. Worst-case dispatch wall time is the max over
 its handlers of (budget_i + grace_i), paid only when a handler never
 answers; `dispatch.start` logs the default budget, and a handler whose spec
-overrides it carries its own `budgetMs` on its `handler.*` lines.
+overrides it carries its own `budgetMs` on its `handler.*` lines. The default
+ALONE misdescribes a dispatch an override is in — a woken turn logged
+`budgetMs: 2000` and then ran 239 seconds under its entry's 600000 — so
+`dispatch.start` also carries **`budgetMsMax`**, the longest per-handler window
+in this dispatch, whenever that differs from the default (shorter counts too;
+absent when it would just repeat the default, and when there are no handlers).
+Two numbers because they answer two questions: `budgetMs` is what a handler
+that declared nothing gets, `budgetMsMax` is when this dispatch can still be
+running. The human trace header says the same (`budget 2000ms, longest
+600000ms`). Grace stays out of both: worst-case wall time is the arithmetic
+above, not a field. (ADR-0017, slice `nudge-accounting`.)
 
 ## Handlers as supervised workers
 

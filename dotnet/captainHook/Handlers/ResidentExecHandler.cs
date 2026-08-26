@@ -271,9 +271,12 @@ public sealed class ResidentExecHandler(
             data: new Dictionary<string, object> { ["handler"] = name, ["pid"] = pid, ["code"] = code }));
         lock (_stderr)
             if (_stderr.Length > 0)
-                Log.Info("exec", "exec.stderr", Fields(
-                    msg: Truncate(_stderr.ToString(), 2048),
-                    data: new Dictionary<string, object> { ["handler"] = name, ["pid"] = pid }));
+            {
+                // Same cap, same admission when it bites (ExecHandler.StderrMsg).
+                var stderrData = new Dictionary<string, object> { ["handler"] = name, ["pid"] = pid };
+                var stderrMsg = ExecHandler.StderrMsg(_stderr.ToString(), stderrData);
+                Log.Info("exec", "exec.stderr", Fields(msg: stderrMsg, data: stderrData));
+            }
 
         if (deliberate) return;   // DisposeAsync owns kill + cleanup
 

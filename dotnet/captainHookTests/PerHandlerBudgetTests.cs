@@ -116,6 +116,74 @@ public class PerHandlerBudgetTests
         var boosted = Assert.Single(oks, e => (string)e.Fields.Data!["handler"] == "boosted");
         Assert.False(plain.Fields.Data!.ContainsKey("budgetMs"));      // default: no noise
         Assert.Equal(7000d, boosted.Fields.Data!["budgetMs"]);         // override: named
+        // …and the dispatch row says how long it can still be running, which
+        // the default alone does not (ADR-0017, slice `nudge-accounting`).
+        Assert.Equal(7000d, start.Fields.Data!["budgetMsMax"]);
+    }
+
+    /// The FIELD case, at its real numbers: a woken turn logged
+    /// `budgetMs: 2000` and ran for 239 seconds under its entry's 600000, so
+    /// a maintainer diagnosing a killed turn read the dispatcher's fan-out
+    /// default and blamed the wrong number
+    /// (doc/dogfood/2026-08-19-the-robot-channel.md finding 4). Both numbers
+    /// are true and they answer different questions — so both are on the row.
+    [Fact]
+    public async Task Trail_DispatchStart_NamesTheLongestWindow_TheWokenTurnCase()
+    {
+        using var captured = new CapturedLog();
+        var reg = new Registry()
+            .On("UserPromptSubmit", TestHandler.Returning("turn-claude", new Effect.Noop()),
+                budget: TimeSpan.FromMilliseconds(600_000));
+        var dispatcher = new Dispatcher(reg, budget: TimeSpan.FromSeconds(2));
+
+        var r = await dispatcher.DispatchAsync(Ev(), "turn0001");
+
+        var start = Assert.Single(captured.Events, e => e.Evt == "dispatch.start");
+        Assert.Equal(2000d, start.Fields.Data!["budgetMs"]);        // what a plain handler gets
+        Assert.Equal(600_000d, start.Fields.Data!["budgetMsMax"]);  // when this dispatch may still be running
+        // The human trace reads the same way — one number was the whole bug.
+        var header = r.Trace.Render().Split('\n')[0];
+        Assert.Contains("budget 2000ms, longest 600000ms", header, StringComparison.Ordinal);
+    }
+
+    /// Silent when it would say nothing new: no override, and no handlers at
+    /// all. The common row grows no field (the same rule `handler.*` follows).
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Trail_DispatchStart_OmitsTheMaxWhenItIsJustTheDefault(bool withHandler)
+    {
+        using var captured = new CapturedLog();
+        var reg = new Registry();
+        if (withHandler) reg.On("UserPromptSubmit", TestHandler.Returning("plain", new Effect.Noop()));
+        var dispatcher = new Dispatcher(reg, budget: TimeSpan.FromSeconds(2));
+
+        var r = await dispatcher.DispatchAsync(Ev(), "quiet001");
+
+        var start = Assert.Single(captured.Events, e => e.Evt == "dispatch.start");
+        Assert.Equal(2000d, start.Fields.Data!["budgetMs"]);
+        Assert.False(start.Fields.Data!.ContainsKey("budgetMsMax"));
+        Assert.DoesNotContain("longest", r.Trace.Render(), StringComparison.Ordinal);
+    }
+
+    /// A max SHORTER than the default is reported too: a dispatch whose every
+    /// handler overrode downward cannot run for the default either, and a
+    /// number that is wrong in the safe direction is still wrong.
+    [Fact]
+    public async Task Trail_DispatchStart_ReportsAShorterMaxToo()
+    {
+        using var captured = new CapturedLog();
+        var reg = new Registry()
+            .On("UserPromptSubmit", TestHandler.Returning("brisk", new Effect.Noop()),
+                budget: TimeSpan.FromMilliseconds(500))
+            .On("UserPromptSubmit", TestHandler.Returning("brisker", new Effect.Noop()),
+                budget: TimeSpan.FromMilliseconds(250));
+        var dispatcher = new Dispatcher(reg, budget: TimeSpan.FromSeconds(2));
+
+        await dispatcher.DispatchAsync(Ev(), "brisk001");
+
+        var start = Assert.Single(captured.Events, e => e.Evt == "dispatch.start");
+        Assert.Equal(500d, start.Fields.Data!["budgetMsMax"]);   // the MAX of the overrides, not the default
     }
 
     [Fact]

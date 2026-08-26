@@ -100,6 +100,48 @@ public class ExecHandlerTests
             $"returned in {sw.Elapsed.TotalSeconds:F1}s — must not await the lingering child");
     }
 
+    /// A woken turn writes its WHOLE answer to stderr (`turn-claude` sends the
+    /// model's stdout there on purpose — our stdout is the exec wire), and the
+    /// first real one was cut mid-sentence at 2049 characters with nothing but
+    /// a trailing ellipsis to say so (`nudge-accounting`, ADR-0017; the field
+    /// pass of 2026-08-19, finding 6). The engine cannot know what a child
+    /// SPENT — but the row must not imply it recorded everything the child
+    /// said, so a cut row admits the cut and names what it had.
+    [Fact]
+    public async Task Stderr_OverTheCap_TheRowSaysItWasCut_AndHowMuchThereWas()
+    {
+        using var captured = new CapturedLog();
+        // 2100 characters: over the 2048 cap by a margin no rounding explains.
+        var h = Sh("""read line; printf '%2100s' '' | tr ' ' x >&2; printf '{"effect":"noop"}\n'""");
+
+        Assert.IsType<Effect.Noop>(await h.HandleAsync(Ev(), Ctx()));
+
+        await PollUntilAsync(() => Task.FromResult(captured.Events.Any(e => e.Evt == "exec.stderr")),
+            TimeSpan.FromSeconds(10), "the reaper's stderr row landed");
+        var row = captured.Events.First(e => e.Evt == "exec.stderr");
+        Assert.Equal(ExecHandler.StderrCap + 1, row.Fields.Msg!.Length);   // the cap plus the ellipsis
+        Assert.EndsWith("…", row.Fields.Msg, StringComparison.Ordinal);
+        Assert.True((bool)row.Fields.Data!["truncated"]);
+        Assert.Equal(2100, row.Fields.Data!["chars"]);
+    }
+
+    /// …and silent under the cap: the common row grows no fields.
+    [Fact]
+    public async Task Stderr_UnderTheCap_NoTruncationFields()
+    {
+        using var captured = new CapturedLog();
+        var h = Sh("""read line; echo brief >&2; printf '{"effect":"noop"}\n'""");
+
+        Assert.IsType<Effect.Noop>(await h.HandleAsync(Ev(), Ctx()));
+
+        await PollUntilAsync(() => Task.FromResult(captured.Events.Any(e => e.Evt == "exec.stderr")),
+            TimeSpan.FromSeconds(10), "the reaper's stderr row landed");
+        var row = captured.Events.First(e => e.Evt == "exec.stderr");
+        Assert.Contains("brief", row.Fields.Msg);
+        Assert.False(row.Fields.Data!.ContainsKey("truncated"));
+        Assert.False(row.Fields.Data!.ContainsKey("chars"));
+    }
+
     [Fact]
     public async Task PostAnswerChatter_DrainedAndIgnored_NeverRetroactivelyFails()
     {

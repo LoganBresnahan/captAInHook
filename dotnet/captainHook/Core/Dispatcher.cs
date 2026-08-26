@@ -585,19 +585,36 @@ public sealed class Dispatcher
         var handlers = excludedHandlers is { Count: > 0 }
             ? registered.Where(r => !excludedHandlers.Contains(r.Name)).ToList()
             : registered;
-        var trace = new Trace(e.Type, _budget, handlers.Count);
+        // The LONGEST window this dispatch can actually run for: every handler
+        // runs under its OWN budget (ADR-0010 d9), so the dispatcher default
+        // bounds only the handlers that did not override it. Null when it says
+        // nothing new — no handlers, or nobody overrode.
+        var budgetMsMax = EffectiveBudgetMax(handlers, _budget);
+        var trace = new Trace(e.Type, _budget, handlers.Count, budgetMsMax);
 
         // Structured trail alongside the human Trace: dispatch.start now, and a
         // span that stamps durMs onto dispatch.done when the whole run finishes.
         // budgetMs here is the dispatcher DEFAULT; a handler whose spec
         // overrides it carries its own budgetMs on its handler.* trail lines
         // (ADR-0010 d9 trail truthfulness).
-        Log.Info("dispatcher", "dispatch.start", Fields(e, dispatchId,
-            data: new Dictionary<string, object>
-            {
-                ["handlers"] = handlers.Count,
-                ["budgetMs"] = _budget.TotalMilliseconds,
-            }));
+        //
+        // `budgetMsMax` is the honesty fix ADR-0017's `nudge-accounting` asks
+        // for. The default ALONE misdescribes a dispatch with an overriding
+        // handler in it, and the field pass caught it on the one dispatch where
+        // it costs money: a woken turn logged `budgetMs: 2000` and then ran for
+        // 239 SECONDS under its entry's 600000, so a maintainer diagnosing a
+        // killed turn read the dispatcher's fan-out default and blamed the
+        // wrong number (doc/dogfood/2026-08-19-the-robot-channel.md finding 4).
+        // Both numbers, because both are true and they answer different
+        // questions: `budgetMs` is what an un-overriding handler gets,
+        // `budgetMsMax` is when this dispatch can still be running.
+        var startData = new Dictionary<string, object>
+        {
+            ["handlers"] = handlers.Count,
+            ["budgetMs"] = _budget.TotalMilliseconds,
+        };
+        if (budgetMsMax is { } max) startData["budgetMsMax"] = max;
+        Log.Info("dispatcher", "dispatch.start", Fields(e, dispatchId, data: startData));
         using var span = Log.Span("dispatcher", "dispatch.done", Fields(e, dispatchId));
 
         // FAN-OUT: every handler runs concurrently on the work-stealing thread
@@ -819,6 +836,23 @@ public sealed class Dispatcher
             Data = data,
         };
 
+    /// The longest per-handler window in this dispatch, in ms — or null when
+    /// that is exactly the default and saying it twice would be noise (the
+    /// same "override: named, default: silent" rule `HandlerData` follows).
+    ///
+    /// It reports a SHORTER max too: a dispatch whose every handler overrode
+    /// downward cannot run for the default either, and the number that is
+    /// wrong in the safe direction is still wrong. Grace is deliberately
+    /// excluded — `budgetMsMax` joins to the `budgetMs` on the `handler.*`
+    /// lines, and worst-case wall time (max over budget_i + grace_i) is the
+    /// flow doc's arithmetic, not a field.
+    private static double? EffectiveBudgetMax(IReadOnlyList<Runner> handlers, TimeSpan @default)
+    {
+        if (handlers.Count == 0) return null;
+        var max = handlers.Max(h => h.Budget);
+        return max == @default ? null : max.TotalMilliseconds;
+    }
+
     /// Handler(...) plus ADR-0010 d9 trail truthfulness: a spec-overridden
     /// budget rides on that handler's own trail lines (dispatch.start's
     /// budgetMs stays the dispatcher default).
@@ -854,7 +888,12 @@ public sealed class Dispatcher
     }
 }
 
-public sealed class Trace(string ev, TimeSpan budget, int handlerCount)
+/// `budgetMsMax` is the longest per-handler window in this dispatch when it
+/// differs from the default (see `Dispatcher.EffectiveBudgetMax`); the human
+/// trace shows it for the same reason the trail row carries it — the default
+/// alone tells a maintainer the wrong thing about a dispatch that is still
+/// running (ADR-0017, slice `nudge-accounting`).
+public sealed class Trace(string ev, TimeSpan budget, int handlerCount, double? budgetMsMax = null)
 {
     // Locked: the long-lived background consumer appends Side lines after the
     // response is built in daemon mode, so writes can race a Render.
@@ -873,7 +912,8 @@ public sealed class Trace(string ev, TimeSpan budget, int handlerCount)
     public string Render()
     {
         lock (_lines)
-            return $"[captAInHook] {ev}  ({handlerCount} handler(s), budget {budget.TotalMilliseconds:F0}ms)\n" +
+            return $"[captAInHook] {ev}  ({handlerCount} handler(s), budget {budget.TotalMilliseconds:F0}ms" +
+                   (budgetMsMax is { } max ? $", longest {max:F0}ms" : "") + ")\n" +
                    (_lines.Count > 0 ? string.Join("\n", _lines) : "  (no handlers registered)");
     }
 }

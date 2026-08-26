@@ -1493,7 +1493,7 @@ run live*. The framework underneath is what exists today.
 
 ## Later
 
-- [ ] **22. The watcher — human nudge always on, robot nudge sometimes, and
+- [x] **22. The watcher — human nudge always on, robot nudge sometimes, and
   ask/reply** — [ADR-0017](adr/0017-watcher-nudge-and-ask.md) (Proposed
   2026-08-17). `captainHook mail status` for the statusline (📬 count, ruleless,
   never enters the loop); an in-daemon watcher, event-driven off the trail's
@@ -1552,6 +1552,53 @@ run live*. The framework underneath is what exists today.
   is deferred until the reference integration is run in earnest. The thread lane
   (`thread-aware-delivery` → `thread-canvas`) and phase 7's docs sweep are
   unaffected — they are bus work, not watcher work.
+  Slices landed: `nudge-accounting` (2026-08-26; phase 8, the SECOND and last
+  KEPT honesty fix, and the one that ticks this item — what the record says a
+  woken turn cost, and what it must stop implying it knows. Two defects, one
+  sentence apart in the field report: the trail row that describes the turn's
+  window, and the row that holds the turn's own words. **The budget half:**
+  `dispatch.start` logged `budgetMs: 2000`, the dispatcher's fan-out default,
+  for a dispatch that then ran 239 seconds under its entry's 600000 — so a
+  maintainer diagnosing a killed turn read the wrong number off the first row
+  in the story (2026-08-19 finding 4). The default is not a lie, it is an
+  incomplete truth, and the fix keeps both: `budgetMsMax` — the longest
+  per-handler window in this dispatch — rides beside it, answering the
+  question the default cannot ("when can this dispatch still be running?")
+  while the default keeps answering its own ("what does a handler that
+  declared nothing get?"). Absent when it would only repeat the default and
+  when there are no handlers, present when the max is SHORTER too (every
+  handler overriding downward makes the default wrong in the safe direction,
+  which is still wrong), grace excluded so the field joins cleanly to the
+  `budgetMs` on the `handler.*` lines. The human trace header gained the same
+  clause, because a number that misleads on the trail misleads on stderr.
+  **The stderr half:** a turn payload sends the model's stdout to *stderr* on
+  purpose — our stdout is the exec wire — so `exec.stderr` is not diagnostics
+  for a turn, it is the ANSWER, and the first real one was cut mid-sentence at
+  2049 characters with a trailing ellipsis as its only witness. A reader
+  cannot tell that ellipsis from one the model typed and a counter cannot be
+  told anything by either, so a cut row now says `truncated` with the `chars`
+  it had; under the cap it grows no fields. One rule for both handlers —
+  `ExecHandler.StderrMsg` is called from the oneshot reaper and from
+  `ResidentExecHandler`'s exit path, because two caps drift. **The cost column
+  is NOT built, and that is the slice's other output:** the engine spawns an
+  opaque process and observes a pipe; tokens and dollars are the model
+  vendor's accounting, reachable only by the payload asking for them
+  (`claude -p --output-format json`) and reporting back — a per-harness
+  payload contract, on the component the 2026-08-20 amendment just froze. So
+  it is recorded as a limit with its revisit trigger (ADR-0017 N1's
+  resolution + a new trigger: anyone actually asking what the channel cost)
+  rather than half-built or quietly dropped. 6 tests — 4 in
+  `PerHandlerBudgetTests` (the woken-turn numbers verbatim on the row and in
+  the trace header; omitted with no override; omitted with no handlers; a
+  shorter max reported) and 2 in `ExecHandlerTests` (over the cap the row
+  admits it, under the cap it stays clean); 1508 → 1514 green twice. Docs:
+  `doc/flow/hook-dispatch.md` (the two numbers and why both),
+  `doc/flow/exec-payloads.md` (the cap, its admission, and the limit),
+  `doc/flow/mailbox-bus.md` § the nudge (what a turn's trail does and does not
+  say about its cost), ADR-0017's plan row, Ground truth row, N1 resolution and
+  revisit trigger. **Item 22 complete: 14 planned slices + 4 phase-8 findings ⇒
+  16 built, 1 withdrawn (`nudge-workspace`), 1 deferred
+  (`turn-pickup-bound`).**)
   Slices landed: `turn-provenance` (2026-08-26; phase 8, the first of the two
   KEPT honesty fixes — the answer's `from` stops being model prose. The 2026-08-19
   field pass caught the defect on the first real robot answer: `{agent: "claude",

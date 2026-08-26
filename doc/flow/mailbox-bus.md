@@ -1023,9 +1023,17 @@ between a nudge in ten minutes and a nudge in one second.
 **The nudge builds almost nothing, and that is the decision.** `handlers.json`
 registers turn payloads on `"events": ["mail-nudge"]`; `dispatch.json` is the
 consent; bosun, budgets, the kill discipline, the exec-wire envelope and the
-`dispatch.start → exec.spawn → exec.exit` trail apply unchanged. Four things
-make an internal event not a hook, and each is handled where it belongs rather
-than by a rule somebody has to remember:
+`dispatch.start → exec.spawn → exec.exit` trail apply unchanged. What that trail
+says about the turn is wall time, an exit code, and — capped, and now saying when
+it is capped — what the turn wrote to stderr, which for a turn payload is the
+model's whole answer. What it does NOT say is what the turn SPENT: the engine
+spawns an opaque process and watches a pipe, so tokens and dollars are the
+vendor's accounting and only the payload could report them (ADR-0017 N1's
+resolution, slice `nudge-accounting`). `dispatch.start` does carry both budget
+numbers — the dispatcher default and `budgetMsMax`, the entry's own window —
+because a turn killed at 600000ms was diagnosed against a row advertising 2000.
+Four things make an internal event not a hook, and each is handled where it
+belongs rather than by a rule somebody has to remember:
 
 - **No stdout.** The closed adapter set gains `none`, so the `internal` spec
   states the absence of a wire format *in data* instead of borrowing a real

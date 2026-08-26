@@ -110,6 +110,18 @@ is wiped exactly when the forensic record matters (SIGKILLed daemon) —
 deleted only at confirmed GROUP death; a per-process sweep clears stale
 records (doctor-orphans, phase 8, is then pure read-side).
 
+A child's stderr is drained in full but RECORDED capped: `exec.stderr` carries
+at most `ExecHandler.StderrCap` (2048) characters, and when it cuts, the row
+says so — `truncated: true` plus the `chars` there were, because a reader
+cannot tell an ellipsis the child typed from one the engine added and a counter
+cannot be told anything by either. Silent under the cap. This matters most
+where the stderr row is the child's whole output rather than its diagnostics: a
+turn payload sends the model's stdout to stderr on purpose (our stdout is the
+exec wire), so the cap is what stands between the trail and the answer
+(ADR-0017, slice `nudge-accounting`). What the row still does NOT carry is what
+the child SPENT — see that slice's row for why that is a recorded limit rather
+than a column.
+
 Collapsed runs (no daemon): a resident entry DEGRADES to oneshot-lifecycle
 (ADR-0010 d3, phase 6) — the collapsed run passes its one event so only that
 event's handlers register (an unrelated event's resident child never spawns
