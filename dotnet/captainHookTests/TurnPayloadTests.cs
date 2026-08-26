@@ -78,6 +78,23 @@ public class TurnPayloadTests : IDisposable
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
+    /// The same stub, plus the one thing a real turn does that matters here: it
+    /// pipes an answer envelope to the REAL `captainHook mail send`, inheriting
+    /// the environment the payload set. `fromJson` is the `from` object the
+    /// model writes — which is the whole point of the slice, since a model can
+    /// write anything there.
+    private void WriteAnsweringStubClaude(string fromJson)
+    {
+        WriteStubClaude();
+        var stub = Path.Combine(_stubDir, "claude");
+        File.AppendAllText(stub, $$"""
+
+            printf '{"v":1,"id":"m-answer","from":%s,"to":"maintainer","kind":"answer","topic":"re: t","inReplyTo":"m-01","body":"read it"}\n' '{{fromJson}}' \
+              | "$CAPTAINHOOK_BIN" mail send >&2 \
+              || { echo "stub-claude: mail send refused the answer" >&2; exit 1; }
+            """.Replace("\r\n", "\n"));
+    }
+
     private void Send(string id, string to = "reviewer", MailPriority priority = MailPriority.Urgent) =>
         MailFixtures.AppendOk(new MailStore(_mailDir),
             MailFixtures.Envelope(id: id, to: to, priority: priority, ttl: 3));
@@ -152,6 +169,61 @@ public class TurnPayloadTests : IDisposable
         Assert.Contains("\"effect\":\"inject\"", prompt);           // the delivery, verbatim
         Assert.Contains("m-01", prompt);
         Assert.Contains("replyHow", prompt);                        // spelled once, in the engine
+    }
+
+    // ---- provenance: the envelope a woken turn actually writes ---------------
+
+    /// ADR-0017 N6's amendment, slice `turn-provenance`. The model wrote a
+    /// `from` with no `session` — it cannot know one — and the answer on the
+    /// bus carries the instance THE PAYLOAD minted, because the payload put it
+    /// in the environment before the model existed. Nothing in the prompt can
+    /// produce this: it is the engine reading what it inherited.
+    [Fact]
+    public async Task AnAnsweringTurn_IsStampedWithTheRoleAndItsOwnDispatch()
+    {
+        WriteAnsweringStubClaude("""{"agent":"reviewer","harness":"claude-code"}""");
+        Send("m-01");
+
+        var (exit, stdout, stderr) = await RunAsync(Nudge(dispatchId: "d-abc123"));
+
+        Assert.Equal(0, exit);
+        Assert.Equal("{\"effect\":\"noop\"}\n", stdout.Replace("\r\n", "\n"));
+
+        var answer = Assert.Single(
+            new MailStore(_mailDir).Read(), l => l.Envelope?.Id == "m-answer").Envelope!;
+        Assert.Equal("reviewer", answer.From.Agent);           // the ROLE, not the model
+        Assert.Equal("claude-code", answer.From.Harness);
+        // The instance is the DISPATCH the nudge ran under — the id `mail.nudge`,
+        // `dispatch.start` and `exec.spawn` all carry, so provenance joins to
+        // the poke that caused it instead of to nothing.
+        Assert.Equal("turn-d-abc123", answer.From.Session);
+        Assert.DoesNotContain("refused", stderr);
+
+        // …and the model was TOLD what to write, so an obedient one never sees
+        // a refusal: belt (the prompt) and braces (the engine).
+        var prompt = File.ReadAllText(_promptLog);
+        Assert.Contains(
+            """{"agent":"reviewer","harness":"claude-code","session":"turn-d-abc123"}""", prompt);
+    }
+
+    /// The braces, on their own. A turn that names itself somebody else — the
+    /// live failure this slice fixes, `agent: "claude"` — is REFUSED by the bus
+    /// and writes nothing at all. The turn's mail stays delivered (the pickup
+    /// happened before the model ran) and the payload still answers one noop:
+    /// a lying turn is a lost answer, never a corrupted record.
+    [Fact]
+    public async Task ATurnThatNamesItselfSomebodyElse_IsRefused_AndWritesNothing()
+    {
+        WriteAnsweringStubClaude("""{"agent":"claude","harness":"claude-code","session":"reviewer"}""");
+        Send("m-01");
+
+        var (exit, stdout, stderr) = await RunAsync(Nudge());
+
+        Assert.Equal(0, exit);
+        Assert.Equal("{\"effect\":\"noop\"}\n", stdout.Replace("\r\n", "\n"));
+        Assert.DoesNotContain(new MailStore(_mailDir).Read(), l => l.Envelope?.Id == "m-answer");
+        Assert.Contains("cannot name itself somebody else", stderr);
+        Assert.Contains("CAPTAINHOOK_MAIL_FROM_AGENT", stderr);
     }
 
     /// The argv pin. `-p` is what makes it one prompt in and one answer out;

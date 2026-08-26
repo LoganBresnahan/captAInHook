@@ -135,6 +135,43 @@ case "$delivery" in
     ;;
 esac
 
+# ---- provenance: the turn does not get to name itself ----------------------
+# ADR-0017 N6's amendment (slice `turn-provenance`). The model composes the
+# answer envelope, so as first built it composed its own `from` too — and the
+# first real robot answer arrived as `{agent: "claude", harness: "claude-code",
+# session: "reviewer"}`: a MODEL name where the field means the member, and a
+# ROLE name in the field that is supposed to name a window.
+#
+# These three exports are what the model cannot write. They are read by
+# `mail send` (and `mail ask`) in every process descended from this one, so the
+# envelope says who wrote it whatever the model believes about itself: a claim
+# that disagrees is REFUSED, an absent one is stamped.
+#
+#   agent    the ROLE this turn is serving — the member, not the model.
+#   harness  the harness this payload drives. Constant here because this file
+#            IS the claude-code turn payload; a second harness means a second
+#            payload, not a knob.
+#   session  `turn-<dispatchId>` — the payload-stamped instance N6 asks for. It
+#            is deliberately NOT a window id: a woken turn has no window and no
+#            cursor of its own (the pickup above is the role's SESSIONLESS
+#            mailbox), so the honest thing to name is the DISPATCH, which is
+#            the same id the nudge, the spawn and the exit rows carry and the
+#            same join the canvas already uses to call a pickup robot. Absent
+#            when the nudge carried no dispatch id: then this turn really
+#            cannot be joined to anything, and a write-only member is what it
+#            is.
+CAPTAINHOOK_MAIL_FROM_AGENT="$role"
+CAPTAINHOOK_MAIL_FROM_HARNESS=claude-code
+export CAPTAINHOOK_MAIL_FROM_AGENT CAPTAINHOOK_MAIL_FROM_HARNESS
+if [ -n "$dispatch" ]; then
+  CAPTAINHOOK_MAIL_FROM_SESSION="turn-$dispatch"
+  export CAPTAINHOOK_MAIL_FROM_SESSION
+  from_json="{\"agent\":\"$role\",\"harness\":\"claude-code\",\"session\":\"turn-$dispatch\"}"
+else
+  unset CAPTAINHOOK_MAIL_FROM_SESSION
+  from_json="{\"agent\":\"$role\",\"harness\":\"claude-code\"}"
+fi
+
 # ---- the turn -------------------------------------------------------------
 # Both JSON lines go to the model verbatim, which is deliberate: `digest`,
 # `reason` and `replyHow` are escaped prose, and a shell that unescaped them
@@ -151,6 +188,11 @@ ${envelope}
 
 THE MAIL (as the bus just delivered it into this turn; read the \"text\" field):
 ${delivery}
+
+YOUR PROVENANCE (the envelope's \"from\", already decided — write it verbatim;
+captAInHook refuses an envelope that names anybody else, and stamps the
+\"session\" if you leave it out):
+${from_json}
 
 Do what the mail asks. Then answer on the bus exactly as \"replyHow\" says —
 that is the only channel anyone will see; nothing you print here is read by

@@ -44,6 +44,14 @@ namespace CaptainHook.Mail;
 // taken before the append lock and therefore racy in exactly one direction: a
 // parent appended between the read and the write reads as gone, which loses a
 // count and never invents one.
+//
+// `from` IS CHECKED AND STAMPED HERE when the spawning process declared one
+// (ADR-0017 N6's amendment, slice `turn-provenance`) — the third field this
+// verb establishes rather than believes, and for the third time for the same
+// reason: it is the one path every writer goes through. See
+// `MailSenderDeclaration` for the rule and why the seam is the environment.
+// It runs BEFORE the thread lookup because it is the cheaper refusal — a
+// sender that is not who it says it is never costs a store read.
 
 public static class MailSend
 {
@@ -52,10 +60,13 @@ public static class MailSend
     /// the other verbs having been routed away before it is called.
     /// `nowTs` overrides the stamp for tests; production passes null.
     /// `maxHops` overrides the thread bound for tests; production passes null
-    /// and gets `MailEnvelope.HopBudget`.
+    /// and gets `MailEnvelope.HopBudget`. `declaredFrom` overrides the sender
+    /// declaration for tests (`MailAsk`'s `toolTimeoutS` seam); production
+    /// passes null and reads the environment.
     public static int Run(
         string? subverb, TextReader stdin, TextWriter stdout, TextWriter stderr,
-        string? mailDir = null, string? nowTs = null, int? maxHops = null)
+        string? mailDir = null, string? nowTs = null, int? maxHops = null,
+        MailSenderDeclaration? declaredFrom = null)
     {
         // `digest`, `status` and `reap` are routed to their own files by
         // Program.cs before this runs; the usage line still names every verb,
@@ -79,6 +90,26 @@ public static class MailSend
             stderr.WriteLine("captainHook mail send: envelope rejected — nothing written:");
             foreach (var e in errors) stderr.WriteLine($"  {e}");
             return 1;
+        }
+
+        // Who is writing this, decided before anything is read or written. A
+        // declaration that agrees with the envelope changes nothing; one that
+        // disagrees refuses; one the envelope said nothing about is stamped.
+        var declared = declaredFrom ?? MailSenderDeclaration.FromEnvironment();
+        if (declared.Declares)
+        {
+            var (agent, harness, session) = declared.Resolve(
+                envelope.From.Agent, envelope.From.Harness, envelope.From.Session,
+                out var violations);
+            if (violations.Count > 0)
+            {
+                stderr.WriteLine("captainHook mail send: envelope rejected — nothing written:");
+                foreach (var v in violations) stderr.WriteLine($"  {v}");
+                return 1;
+            }
+            // agent/harness are non-null: the parser requires both, so a
+            // resolved value is either the sender's or the declaration's.
+            envelope = envelope with { From = new MailSender(agent!, harness!, session) };
         }
 
         var store = new MailStore(MailStore.ResolveDir(mailDir));

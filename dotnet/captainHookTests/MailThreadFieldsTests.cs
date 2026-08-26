@@ -33,7 +33,8 @@ public class MailThreadFieldsTests
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         var exit = MailSend.Run("send", new StringReader(envelope), stdout, stderr,
-            dir, nowTs: "2026-08-19T12:00:00Z", maxHops: maxHops);
+            dir, nowTs: "2026-08-19T12:00:00Z", maxHops: maxHops,
+            declaredFrom: MailSenderDeclaration.None);
         return (exit, stdout.ToString(), stderr.ToString());
     }
 

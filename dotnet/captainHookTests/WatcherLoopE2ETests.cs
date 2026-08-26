@@ -171,6 +171,15 @@ public class WatcherLoopE2ETests : IDisposable
         // human-held role with no rule, and the budget is spent either way. One
         // nudge is the whole bill for this exchange (N1).
         var nudge = Assert.Single(log.Events, e => e.Evt == "mail.nudge");
+
+        // PROVENANCE, all the way through (ADR-0017 N6's amendment, slice
+        // `turn-provenance`). The stub wrote a `from` with no `session` — a
+        // model cannot know one — and the answer on the bus carries the
+        // instance the PAYLOAD minted from the dispatch this very nudge ran
+        // under. Nothing in the prompt could have produced it: the payload put
+        // it in the environment, the model inherited it, and `mail send`
+        // stamped it. This is the assertion that says the join is real.
+        Assert.Equal($"turn-{nudge.Fields.DispatchId}", answer.From.Session);
         var start = Assert.Single(log.Events,
             e => e.Evt == "dispatch.start" && e.Fields.DispatchId == nudge.Fields.DispatchId);
         Assert.Contains(log.Events,

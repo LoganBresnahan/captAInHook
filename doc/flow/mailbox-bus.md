@@ -590,6 +590,60 @@ fact nothing else can reconstruct — whether the digest *informed* the loop or
 It is emitted only from the single branch where the cursor was actually written,
 and only after the answer is on stdout.
 
+### Who wrote it, when a payload can say (ADR-0017 N6 amendment, slice `turn-provenance`)
+
+A sender names itself, and for a human at a CLI or a window that *is* the
+answer: the process writing the envelope is the member. A **woken turn** is the
+one case where it is not. The turn's model composes the answer, `from` included,
+so as first built the bus's provenance was model prose — the first real robot
+answer arrived as `{agent: "claude", harness: "claude-code", session:
+"reviewer"}`, a MODEL name in the field that means the member and a ROLE name in
+the field that means a window.
+
+The fix is that the thing which *does* know says so, before the model exists:
+
+```
+turn-claude.sh                                    the model                mail send
+  role   ← the nudge                               composes an
+  disp   ← the nudge's dispatchId                  envelope; may
+  ────────────────────────────────────────────▶    say anything    ────────▶  agrees   ⇒ stands
+  export CAPTAINHOOK_MAIL_FROM_AGENT=$role         about `from`               differs  ⇒ REFUSED
+         CAPTAINHOOK_MAIL_FROM_HARNESS=claude-code                            absent   ⇒ stamped
+         CAPTAINHOOK_MAIL_FROM_SESSION=turn-$disp
+       └── inherited by every process in the turn ─────────────────────────┘
+```
+
+**The seam is the environment because it is the one thing the model does not
+write.** The flags a turn types and the JSON it pipes are all composed by the
+model; the environment it inherited is not. So the payload declares once, and
+`mail send` — the universal write path, already the place `ts` and `hops` are
+established rather than believed — enforces it for every process in that tree.
+
+**The rule is `hops`', for the same reason.** A stated value that agrees stands;
+one that disagrees is REFUSED with nothing written, never silently corrected,
+because rewriting a claim would hide the attempt on a chain nobody can amend; an
+absent one is stamped, which is `ts`'. Only `session` can be absent — the parser
+requires `agent` and `harness` — so the stamp is exactly the field a turn cannot
+know. `mail ask` takes the same declaration (it composes its own envelope, and
+one process must not have two provenances), where it *replaces* the derivation
+from registrations and *refuses* an explicit `--agent`/`--harness` that
+disagrees: a derivation is a reading, an argument is a claim.
+
+**The stamped instance is `turn-<dispatchId>`, and it is not a window.** A woken
+turn has no window and no cursor of its own — its pickup is the role's
+sessionless mailbox — so naming a session would be a fiction. The dispatch is
+real: the same id `mail.nudge`, `dispatch.start`, `exec.spawn` and `exec.exit`
+all carry, and the same join the canvas already uses to call a pickup robot. A
+nudge with no dispatch id stamps nothing and the sender stays a write-only
+member, which is then the truth.
+
+**Not declared is not an error**, and it is the ordinary case: with no
+declaration in the environment nothing here runs, every CLI sender is believed,
+and a blank value (`export X=`) is not a declaration. None of this is a trust
+boundary — N1 still holds, every member is a same-user process — it is the
+difference between a record that describes who spoke and one that repeats what
+they said about themselves.
+
 ## Three stores, three lifetimes (d13)
 
 | store | lifetime | mode as built |
@@ -1382,7 +1436,8 @@ prose, not ground truth.
 | `MailCursor`, `MailHeld`, `MailCursors` (`Pending`, `Advance`, `CursorPath`, `Enc`, `CurrentGen`) | `dotnet/captainHook/Mail/MailCursor.cs` |
 | `MailPendingView`, `PendingMail`, `MailCursorWrite` (Written/Failed) | `dotnet/captainHook/Mail/MailCursor.cs` |
 | `MailDigest` (`TryParseArgs`, `TryParseRequest`, `Plan`, `Render`, `Run`, `LogDelivery`), `MailSeam`, `MailVehicle`, `MailPlan`, `MailRender`, `MailDigestOptions` | `dotnet/captainHook/Mail/MailDigest.cs` |
-| `MailSend.Run` (the universal write path; stamps `ts`) | `dotnet/captainHook/Mail/MailSend.cs` |
+| `MailSend.Run` (the universal write path; stamps `ts`, `hops`, and a declared `from`) | `dotnet/captainHook/Mail/MailSend.cs` |
+| A DECLARED SENDER (ADR-0017 N6 amendment, slice `turn-provenance`) — a spawning payload states who the process is, in three env vars, before the model it wakes exists; the two write verbs enforce it: a stated value that agrees stands, one that disagrees is REFUSED with nothing written, an absent `session` is stamped. Not declared ⇒ nothing happens, which is every CLI sender. The stamp is `turn-<dispatchId>`, the dispatch the nudge ran under — never a window, because a woken turn has none | `MailSenderDeclaration` (`Agent`/`Harness`/`Session`, `AgentEnv`/`HarnessEnv`/`SessionEnv` = `CAPTAINHOOK_MAIL_FROM_{AGENT,HARNESS,SESSION}`, `None`, `Declares`, `FromEnvironment`, `Resolve`) in `dotnet/captainHook/Mail/MailSenderDeclaration.cs`; applied in `MailSend.Run` (before the thread lookup — the cheaper refusal) and `MailAsk.Run` (over its derivation); declared by `examples/payloads/turn-claude.sh`, which also names the `from` in the prompt so an obedient model never trips the refusal. Pinned by `dotnet/captainHookTests/MailTurnProvenanceTests.cs` (10), two `MailAskTests` cases (32 in that file now), two real-process cases in `TurnPayloadTests.cs`, and the whole-loop assertion in `WatcherLoopE2ETests.cs` (`turn-<the nudge's own dispatchId>`) |
 | REAPING a mailbox (ADR-0018 d6, slice `reap-verb`) — `captainHook mail reap <address> [--by <address>]`: removes ONE mailbox's cursor under the same per-cursor flock `Advance` takes, never unlinking the lock file, and writes `mail.reap`. Standing only: the store is read, never written, and the mailbox's history stays on the chain. Does not judge deadness (the watcher detects, the reaper disposes); idempotent (already gone ⇒ exit 0); exit 1 only for a bad argument or a busy lock. The row spells the mailbox `role` + `instance` (write-when-named), not a joined `address` — one spelling per trail (N8) — and is written AFTER the delete | `MailReap` (`Run`, `TryParseArgs`, `LogReap`) in `dotnet/captainHook/Mail/MailReap.cs`, routed from `Program.cs`'s `mail` switch; the lock is `MailStore.TryLock` (`Mail/MailStore.cs`), the stranded list is `MailCursors.Pending(address, hookSession: null)` (`Mail/MailCursor.cs`). Pinned by `dotnet/captainHookTests/MailReapTests.cs` (19 — the byte-identical ledger, first-contact redelivery, idempotence creating nothing, the surviving lock file, the refusal under a held lock with no false record, the commit point a broken stdout cannot undo, the two row shapes, expired-is-not-stranded, and the argument refusals) and the `mail.reap` golden in `WireJsonlTests`. The reducer does NOT fold it yet — `canvas-instances` |
 | verb routing (`Mode.MailSend`, `mail <subverb>` on the argv contract) | `dotnet/captainHook/Program.cs`; `captainHookWire/` argv contract; refused by the shim |
 | `Stop`/`SubagentStop` declaring `decide` + the top-level block shape | `dotnet/captainHook/harnesses/claude-code.json`; `DecidesAtTopLevel`/`TopLevelDecision` in `dotnet/captainHook/Core/Harness.cs` — see [hook-dispatch.md](hook-dispatch.md) and platform.md § The Stop block shape |

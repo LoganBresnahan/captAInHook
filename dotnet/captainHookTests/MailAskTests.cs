@@ -368,6 +368,54 @@ public class MailAskTests
     /// a dispatch.json, all passed explicitly, so nothing here can reach the
     /// operator's `~/.captainHook` (CLAUDE.md's pollution rule). The clock is
     /// fake and the sleeper only advances it: no test in this file waits.
+    // ---- provenance a spawning payload declared (slice `turn-provenance`) ----
+
+    /// ADR-0017 N6's amendment. `mail ask` composes its own envelope, so the
+    /// declaration a payload put in the environment has to reach it here too —
+    /// a member that says one thing on `mail send` and another on `mail ask`
+    /// would be two provenances for one process. The rule itself and every
+    /// `mail send` case live in `MailTurnProvenanceTests`.
+    ///
+    /// The declaration REPLACES this verb's derivation (the reply mailbox's
+    /// role, the registration's harness), which is a reading of a workspace's
+    /// files rather than a claim anybody made — and it fills the `session` this
+    /// verb otherwise leaves absent, because a woken turn's payload is exactly
+    /// the thing that CAN know one.
+    [Fact]
+    public void ADeclaredSender_OutranksTheDerivationAndFillsTheSession()
+    {
+        using var w = new AskWorld();
+        w.Register(role: "maintainer");
+
+        var (exit, _, err) = w.Run(["--to", "reviewer", "--topic", "a question"],
+            declaredFrom: new MailSenderDeclaration("scribe", "claude-code", "turn-d-nudge"));
+
+        Assert.True(exit == 0, err);
+        var asked = Assert.Single(w.Stored());
+        Assert.Equal(new MailSender("scribe", "claude-code", "turn-d-nudge"), asked.From);
+        // …and the return address is still the caller's own mailbox: who is
+        // writing and where the answer goes are different questions.
+        Assert.Equal("maintainer", asked.ReplyTo);
+    }
+
+    /// An explicit `--agent` that disagrees IS a claim, so it is refused rather
+    /// than overridden — the same direction `mail send` refuses a stated
+    /// `from.agent`, and the same direction it refuses a stated `hops`.
+    [Fact]
+    public void AnExplicitAgent_ThatDisagreesWithTheDeclaration_IsRefused()
+    {
+        using var w = new AskWorld();
+        w.Register(role: "maintainer");
+
+        var (exit, _, err) = w.Run(["--to", "reviewer", "--topic", "a question", "--agent", "claude"],
+            declaredFrom: new MailSenderDeclaration("scribe", null, null));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("'from.agent'", err);
+        Assert.Contains("scribe", err);
+        Assert.Empty(w.Stored());
+    }
+
     private sealed class AskWorld : IDisposable
     {
         private readonly List<object> _handlers = [];
@@ -428,7 +476,8 @@ public class MailAskTests
             MailFixtures.Envelope(id: id, to: to, body: body, inReplyTo: inReplyTo, hops: 1) with { Kind = kind };
 
         public (int Exit, string Out, string Err) Run(
-            string[] argv, string? stdin = null, string? toolTimeout = null)
+            string[] argv, string? stdin = null, string? toolTimeout = null,
+            MailSenderDeclaration? declaredFrom = null)
         {
             NapLengths.Clear();
             var stdout = new StringWriter();
@@ -443,7 +492,8 @@ public class MailAskTests
                     foreach (var (nap, envelope) in _scheduled.Where(x => x.Nap == NapLengths.Count))
                         MailFixtures.AppendOk(new MailStore(MailDir), envelope);
                 },
-                newId: () => "ask-fixed", nowTs: "2026-08-19T12:00:00Z", toolTimeoutS: toolTimeout);
+                newId: () => "ask-fixed", nowTs: "2026-08-19T12:00:00Z", toolTimeoutS: toolTimeout,
+                declaredFrom: declaredFrom ?? MailSenderDeclaration.None);
             return (exit, stdout.ToString(), stderr.ToString());
         }
 

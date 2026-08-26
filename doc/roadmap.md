@@ -1552,6 +1552,38 @@ run live*. The framework underneath is what exists today.
   is deferred until the reference integration is run in earnest. The thread lane
   (`thread-aware-delivery` → `thread-canvas`) and phase 7's docs sweep are
   unaffected — they are bus work, not watcher work.
+  Slices landed: `turn-provenance` (2026-08-26; phase 8, the first of the two
+  KEPT honesty fixes — the answer's `from` stops being model prose. The 2026-08-19
+  field pass caught the defect on the first real robot answer: `{agent: "claude",
+  harness: "claude-code", session: "reviewer"}` — a MODEL name in the field that
+  means the member, and a ROLE name in the field that means a window, so the
+  canvas would have read "claude" for every robot answer of every role. **Both
+  halves of the ADR row's "or", because neither works alone**: the payload
+  composes the identity (only it knows the role it woke for and the dispatch it
+  woke under) and `mail send` ENFORCES it (the payload never sees the envelope —
+  the model pipes that to the verb itself). **The seam is the environment**, which
+  is the whole trick: every other input to a turn's `mail send` is composed by the
+  model, and the one thing it does not write is what it inherited, so
+  `turn-claude.sh` exports `CAPTAINHOOK_MAIL_FROM_{AGENT,HARNESS,SESSION}` before
+  the model exists. The rule is `hops`' rule field for field — an agreeing claim
+  stands, a disagreeing one is REFUSED with nothing written, an absent one is
+  stamped (`ts`') — and only `session` can be absent, so the stamp lands exactly on
+  the field a turn cannot know. That stamp is `turn-<dispatchId>` and deliberately
+  NOT a window: a woken turn has no cursor of its own, while the dispatch is the id
+  `mail.nudge`, `dispatch.start`, `exec.spawn` and `exec.exit` all carry and the
+  same join `thread-canvas` uses to call a pickup robot. `mail ask` takes the same
+  declaration (one process, one provenance), replacing its derivation and refusing
+  a disagreeing explicit `--agent`. The canvas was deliberately not touched — the
+  detail card already renders `agent via harness · session` and now renders true
+  things; teaching the browser to sniff a `turn-` prefix would be ADR-0016 N8 again.
+  14 tests: `MailTurnProvenanceTests` (10 cases across 7 facts and a 3-case theory), two `MailAskTests` (32 now), two real-process
+  cases in `TurnPayloadTests` (the shipped payload with a stub that actually pipes
+  an answer to the real `mail send` — one honest, one naming itself `claude`, which
+  is refused and writes nothing), and one line in `WatcherLoopE2ETests` that is the
+  claim end to end: the answer's `from.session` is `turn-` + the dispatch id of the
+  nudge that woke it, through a real daemon and a real process tree. Suite
+  1494 → 1508 green twice. **The item stays unchecked**: `nudge-accounting`'s
+  budget column is the last KEPT phase-8 fix.)
   Slices landed: `docs-and-ground-truth` (2026-08-25; phase 7, the critical
   path's LAST slice — a sweep, not a rewrite, exactly as the plan row said: the
   flow doc's § *The watcher*, § *The loop closes*, the `watch.json` and

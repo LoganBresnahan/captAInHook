@@ -17,7 +17,12 @@ public class MailSendTests
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        var exit = MailSend.Run(subverb, new StringReader(stdin), stdout, stderr, dir, nowTs);
+        // `None` explicitly: these cases are about the envelope a sender
+        // writes, and reading the ambient environment would let a developer's
+        // own `CAPTAINHOOK_MAIL_FROM_*` change what they assert
+        // (`MailTurnProvenanceTests` owns the declared case).
+        var exit = MailSend.Run(subverb, new StringReader(stdin), stdout, stderr, dir, nowTs,
+            declaredFrom: MailSenderDeclaration.None);
         return (exit, stdout.ToString(), stderr.ToString());
     }
 

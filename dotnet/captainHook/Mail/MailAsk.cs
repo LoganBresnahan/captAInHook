@@ -76,7 +76,8 @@ public static class MailAsk
         IReadOnlyList<string> argv, TextReader stdin, TextWriter stdout, TextWriter stderr,
         string? mailDir = null, string? handlersPath = null, string? policyPath = null,
         string? cwd = null, Func<long>? nowMs = null, Action<int>? sleep = null,
-        Func<string>? newId = null, string? nowTs = null, string? toolTimeoutS = null)
+        Func<string>? newId = null, string? nowTs = null, string? toolTimeoutS = null,
+        MailSenderDeclaration? declaredFrom = null)
     {
         var opts = TryParseArgs(argv, out var argErrors);
         if (opts is null)
@@ -116,8 +117,26 @@ public static class MailAsk
         // wants the answer in, and the harness is the one its own digest
         // registration declares. `cli` is the honest fallback when neither is
         // knowable — this envelope really was written by a command line.
-        var agent = opts.Agent ?? replyTo.Role;
-        var harness = opts.Harness ?? HarnessOfCaller(handlersPath) ?? "cli";
+        //
+        // A SPAWNING PAYLOAD'S DECLARATION OUTRANKS BOTH (slice
+        // `turn-provenance`), and it has to: a member that says who it is on
+        // `mail send` and something else on `mail ask` would be two provenances
+        // for one process. It refuses an explicit `--agent`/`--harness` that
+        // disagrees — the sender's CLAIM, the same case `mail send` refuses —
+        // and simply replaces the DERIVATION below, which is a guess made from
+        // a workspace's registrations and not a claim anybody made.
+        var declared = declaredFrom ?? MailSenderDeclaration.FromEnvironment();
+        var (declaredAgent, declaredHarness, declaredSession) =
+            declared.Resolve(opts.Agent, opts.Harness, statedSession: null, out var senderRefusals);
+        if (senderRefusals.Count > 0)
+        {
+            stderr.WriteLine("captainHook mail ask: refused — nothing written:");
+            foreach (var r in senderRefusals) stderr.WriteLine($"  {r}");
+            return 1;
+        }
+
+        var agent = declaredAgent ?? replyTo.Role;
+        var harness = declaredHarness ?? HarnessOfCaller(handlersPath) ?? "cli";
 
         var body = ReadBody(stdin);
         var id = opts.Id ?? (newId ?? MintId)();
@@ -125,7 +144,10 @@ public static class MailAsk
         var envelope = new MailEnvelope(
             Id: id,
             Ts: nowTs ?? DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
-            From: new MailSender(agent, harness, Session: null),
+            // Session: the spawning payload's stamp when there is one, else
+            // absent — an ask from a window still names no window, because this
+            // verb leaves `from.session` to whoever can actually know it.
+            From: new MailSender(agent, harness, declaredSession),
             To: opts.To.ToString(),
             Kind: MailKind.Request,
             Topic: opts.Topic,
