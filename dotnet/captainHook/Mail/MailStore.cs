@@ -302,6 +302,21 @@ public sealed class MailStore(string dir)
                 data["inReplyTo"] = MailEnvelope.ClampField(irt);
                 data["hops"] = envelope.Hops;
             }
+            // The forward's provenance (ADR-0018 d8), on the trail for
+            // `inReplyTo`'s reason and not for `body`'s: the Mail canvas draws
+            // the dead→live link (`canvas-instances`), and a link visible on
+            // disk and invisible on the stream would leave a forward unjoined
+            // until the next snapshot — which is minutes, on a picture whose
+            // whole job is to show mail moving. A nested object, spelled as the
+            // envelope spells it, because the two halves answer different
+            // questions (which envelope, whose mailbox) and a joined string
+            // would have to be parsed back apart by every reader.
+            if (envelope.ForwardedFrom is { } fwd)
+                data["forwardedFrom"] = new Dictionary<string, object>
+                {
+                    ["id"] = MailEnvelope.ClampField(fwd.Id),
+                    ["address"] = fwd.Address,
+                };
             // Omitted for a unicast envelope, exactly as on the stored line —
             // one spelling of "no ttl" across the ledger and the trail, so the
             // observation surface reads the same fact the store holds. The

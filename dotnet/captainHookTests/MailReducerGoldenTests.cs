@@ -70,6 +70,12 @@ public class MailReducerGoldenTests
         /// own right).
         public long Since { get; set; }
 
+        /// Where a scenario's registrations live. The read model is handed this
+        /// path whether or not a file is there — an absent `handlers.json`
+        /// registers nothing, which is the ordinary case for every scenario that
+        /// does not care (ADR-0010 d4).
+        private string HandlersPath => Path.Combine(Tmp.Dir, "handlers.json");
+
         public World()
         {
             Cursors = Tmp.Cursors();
@@ -77,12 +83,38 @@ public class MailReducerGoldenTests
                 new Dispatcher(new Registry().On("UserPromptSubmit",
                     TestHandler.Returning("greeter", new Effect.Noop())), TimeSpan.FromSeconds(2)),
                 new ReloadingHarnessRegistry(NoHarnessDir()), new ReloadingPolicy(null), null,
-                clock: () => 6000, startTick: 1000, handlersPath: null,
+                clock: () => 6000, startTick: 1000, handlersPath: HandlersPath,
                 mail: MailReadPort.Over(Tmp.Dir), presence: null);
         }
 
+        /// DECLARE a mailbox: the registration that makes `role@instance` a
+        /// durable box somebody owns rather than a window's own (ADR-0018 d3).
+        /// It is the registration and not the cursor file that decides — which
+        /// is why the snapshot has to read it, and why a scenario about named
+        /// mailboxes has to write one.
+        public void RegisterNamed(string role, string instance) =>
+            File.WriteAllText(HandlersPath, JsonSerializer.Serialize(new
+            {
+                version = 1,
+                handlers = new[]
+                {
+                    new
+                    {
+                        name = $"mail-digest-{role}-{instance}",
+                        command = "/usr/bin/captainHook",
+                        args = new[] { "mail", "digest", "--role", role, "--as", instance, "--seam", "ambient" },
+                        events = new[] { "user-prompt-submit" },
+                        mode = "oneshot",
+                        failMode = "open",
+                    },
+                },
+            }, Web));
+
+        /// `ttl: null` is the UNICAST spelling (ADR-0018 d5) — the parser
+        /// refuses a TTL on a `role@instance` address, so an addressed envelope
+        /// must pass none.
         public long Append(string id, string to = "main",
-            MailPriority priority = MailPriority.Ambient, int ttl = 3, string? session = "s-77",
+            MailPriority priority = MailPriority.Ambient, int? ttl = 3, string? session = "s-77",
             string? inReplyTo = null, int hops = 0, MailKind kind = MailKind.Status) =>
             MailFixtures.AppendOk(Tmp.Store(),
                 MailFixtures.Envelope(id: id, to: to, priority: priority, ttl: ttl, session: session,
@@ -92,11 +124,14 @@ public class MailReducerGoldenTests
         /// exec-wire request in, one answer out. Asserts the run did not fail
         /// loudly (a bad registration would make the golden a lie).
         public string Digest(string role, string? session, string seam = "ambient",
-            string eventType = "UserPromptSubmit", string dispatchId = "d-1")
+            string eventType = "UserPromptSubmit", string dispatchId = "d-1", string? instance = null)
         {
             var stdout = new StringWriter();
             var stderr = new StringWriter();
-            var exit = MailDigest.Run(["--role", role, "--seam", seam],
+            string[] argv = instance is null
+                ? ["--role", role, "--seam", seam]
+                : ["--role", role, "--as", instance, "--seam", seam];
+            var exit = MailDigest.Run(argv,
                 new StringReader(DigestFixtures.Request(dispatchId, eventType, session)),
                 stdout, stderr, mailDir: Tmp.Dir, harnessDir: NoHarnessDir());
             Assert.True(exit == 0, $"digest exited {exit}: {stderr}");
@@ -116,6 +151,38 @@ public class MailReducerGoldenTests
                     Digest: "1 message(s) waiting", ReplyHow: "captainHook mail send",
                     Budget: budget ?? new MailNudgeBudget(1, 2, 1, 4)),
                 ran: true, dispatchId: dispatchId, nowMs: 1_000);
+
+        /// The DEAD-MAILBOX nudge (ADR-0018 d6): same recorder, but the row
+        /// names the corpse in `address` — the reaper's own lane says nothing
+        /// about whose mail is stranded, which is why the column exists.
+        public void NudgeDead(string address, string[] envelopeIds, string dispatchId = "n-1") =>
+            NudgeStore.Record(
+                NudgeState.Empty,
+                new MailNudge("reaper", envelopeIds, $"dead-mailbox {address} · {envelopeIds.Length} stranded past quiet (2h+)",
+                    Digest: "1 message(s) stranded", ReplyHow: WatcherBrain.ReaperHow,
+                    Address: address, Budget: new MailNudgeBudget(1, 2, 1, 4)),
+                ran: true, dispatchId: dispatchId, nowMs: 1_000);
+
+        /// The real verbs a deterministic reaper runs (slice `reaper-payloads`),
+        /// in its own order — so the golden's `mail.forward` / `mail.reap` rows
+        /// and the copies' `mail.append` rows are the engine's own.
+        public void Forward(string source, string to, string by = "reaper")
+        {
+            var stderr = new StringWriter();
+            // The id and the stamp are FIXED: a forward mints both, and a
+            // golden whose bytes move every run is not a drift detector.
+            var exit = MailForward.Run([source, "--to", to, "--by", by],
+                new StringWriter(), stderr, Tmp.Dir,
+                newId: () => "fwd-1", nowTs: "2026-08-12T19:00:00Z");
+            Assert.True(exit == 0, $"forward exited {exit}: {stderr}");
+        }
+
+        public void Reap(string address, string by = "reaper")
+        {
+            var stderr = new StringWriter();
+            var exit = MailReap.Run([address, "--by", by], new StringWriter(), stderr, Tmp.Dir);
+            Assert.True(exit == 0, $"reap exited {exit}: {stderr}");
+        }
 
         public string CursorPath(string role, string? session) => Cursors.CursorPath(role, session);
 
@@ -388,6 +455,39 @@ public class MailReducerGoldenTests
                 w.Digest("main", "s-1", dispatchId: "d-2");
             },
             Exact: false, ExpectUncertain: ["main/s-1"]),
+
+        new("named-instance-and-unicast",
+            "ADR-0018 d3/d4 on the canvas's side: a NAMED mailbox (`mail digest --as laptop-a`) beside an unnamed window on the same role, a broadcast both may read, this mailbox's own unicast, and a SIBLING's unicast that neither may. The reducer must key the named cursor by its INSTANCE (the `instance` column on the advance, not the window's sessionId — keying on the session would model two cursors for one file and flag every second advance) and must mirror the recipient predicate: a mailbox reads its role's broadcast always plus its own `role@instance`, never a sibling's.",
+            Setup: w =>
+            {
+                w.RegisterNamed("main", "laptop-a");
+                w.Append("m-01");
+                w.Append("u-a", to: "main@laptop-a", ttl: null);
+                w.Append("u-b", to: "main@laptop-b", ttl: null);
+            },
+            Act: w =>
+            {
+                w.Digest("main", "s-77", instance: "laptop-a", dispatchId: "d-1");   // takes m-01 + u-a, never u-b
+                w.Digest("main", "s-1", dispatchId: "d-2");                          // the window takes m-01 alone
+            }),
+
+        new("dead-mailbox-forwarded-and-reaped",
+            "The whole disposition, end to end (ADR-0018 d6, slices `watcher-dead-mailbox-rule` + `reaper-payloads`): a named mailbox holds mail nobody will ever read, the watcher raises a dead-mailbox nudge naming the ADDRESS, and the deterministic reaper forwards what was stranded to a live role and then reaps the standing. The reducer must fold the `mail.append` of the COPY with its `forwardedFrom` (which is what draws the dead→live link live rather than a snapshot later), the `mail.forward` row, and the `mail.reap` — after which the mailbox has no cursor at all, exactly as the after-snapshot reports.",
+            Setup: w =>
+            {
+                // The registration is DELIBERATELY absent: a corpse is a mailbox
+                // nobody declares any more, which is exactly the watcher's own
+                // condition (d6, ii) — so the snapshot must not call it named.
+                w.Append("m-01", to: "main@laptop-a", ttl: null);
+                w.Digest("main", "s-77", instance: "laptop-a", dispatchId: "d-0");   // the box exists and reads
+                w.Append("m-02", to: "main@laptop-a", ttl: null);                    // …and then nobody comes back
+            },
+            Act: w =>
+            {
+                w.NudgeDead("main@laptop-a", ["m-02"]);
+                w.Forward("main@laptop-a", "maintainer");
+                w.Reap("main@laptop-a");
+            }),
 
         new("reconcile-seam-decides",
             "Reconcile-priority mail at a Stop-class seam rides the `decide` vehicle (d5, the harness's own top-level decision). The reducer reads seam and vehicle off `mail.deliver` for the cursor's tag; nothing about the pending arithmetic changes.",

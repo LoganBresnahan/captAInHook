@@ -4,7 +4,9 @@ import type {
 } from "./mail.ts";
 import {
   lineStatus, projectCursor, rolesOf, presenceTier, sameSession, clampField, threadOf, nudgesFor,
+  accepts, addressOf, roleOf, instanceOf, deadNudgeFor, forwardsFrom, nudgeLane,
 } from "./mail.ts";
+import type { MailForwardRecord } from "./mail.ts";
 
 // mail-canvas, the geometry half (ADR-0016 decision 14, roadmap item 21 slice
 // 4). `buildScene(state)` turns the reducer's model into coordinates; the
@@ -137,6 +139,14 @@ export type MailGlyph = {
   x: number;
   w: number;
   id: string;
+  /** The envelope's `to`, verbatim — a role for a broadcast, `role@instance`
+   * for a UNICAST (ADR-0018 d1). The glyph sits in the role's lane either way;
+   * this is what says whether it is the lane's mail or one mailbox's. */
+  address: string;
+  /** The instance half, or null. Non-null means this envelope hangs on ONE
+   * sub-lane: nothing else on this role can read it, and the picture must not
+   * draw it as pending for the siblings (d4's named hazard). */
+  instance: string | null;
   kind: string;
   topic: string;
   priority: string;
@@ -163,6 +173,11 @@ export type MailGlyph = {
    * request nobody has answered, and an answer that lost a race it did not
    * know it was in (N5). */
   thread: MailThreadView | null;
+  /** Where this envelope was forwarded FROM, when it is a copy (ADR-0018 d8):
+   * which envelope, and whose mailbox it was stranded in. The link the scene
+   * draws hangs off this and nothing else — it is on the ledger, so it survives
+   * a re-seed, a rotation of the trail, and a page that watched nothing. */
+  forwardedFrom: { id: string; address: string } | null;
   /** The `mail.nudge` rows that named this envelope (d10). A poke is about
    * mail that has NOT been read, so this is drawn on the envelope and never on
    * a track: no cursor moved, which is the whole reason the poke happened. */
@@ -192,6 +207,29 @@ export type MailThreadLink = {
   /** N5: this answer named a request another answer had already closed. Drawn
    * differently, never hidden — the second answer may be the better one. */
   late: boolean;
+};
+
+/** One forward, drawn as a link from the ORIGINAL envelope to the COPY that
+ * carries it on (ADR-0018 d6/d8). Like a thread link it usually crosses lanes,
+ * and for a better reason: the whole point of a forward is that the mail left a
+ * mailbox nobody reads for one somebody does, and the ledger's left-to-right
+ * order shows only that the copy came later.
+ *
+ * Built from the COPY end, because the copy is the end that NAMES the other
+ * (`forwardedFrom` is a field on it, where the original knows nothing about
+ * having been forwarded) — the same reason `buildThreads` builds from the
+ * answer. An original that has rotated away, or sits below a `?since=` window,
+ * draws no link: the copy keeps its own provenance and the picture declines to
+ * anchor a line at a position it would have to invent. */
+export type MailForwardLink = {
+  originalOffset: number;
+  copyOffset: number;
+  x1: number; x2: number;
+  /** The two ends' LANE tops, as a thread link carries them. */
+  y1: number; y2: number;
+  /** The mailbox it was stranded in — what the link is ABOUT, and the half no
+   * reader could recover from the original's `to` when that is a bare role. */
+  source: string;
 };
 
 /** A poke on a role's lane, aligned with the envelope it named (d10). Its own
@@ -228,6 +266,24 @@ export type MailTrack = {
   role: string;
   session: MailSession;
   sessionLabel: string;
+  /** How a SENDER would reach this mailbox (ADR-0018 d3 as amended): the cursor
+   * key IS the address's instance half, so every track has one — a `--as`
+   * mailbox by its name, a window by its session id — except the sessionless
+   * reader, which is reachable only through its role. */
+  address: string;
+  /** Declared by a registration (durable) rather than a window's own
+   * (ephemeral). The canvas draws the two differently because they DIE
+   * differently: a window's mailbox goes when the tab closes and nobody
+   * expects mail to keep arriving in it; a declared one outlives every window
+   * and is where a corpse comes from. */
+  named: boolean;
+  /** Non-null when the WATCHER has said this mailbox is dead — the reason off
+   * the `mail.nudge` that named its address (d6). Never the canvas's own
+   * judgement: "dead" is the brain's rule and this is a row it wrote. */
+  dead: string | null;
+  /** Forwards that moved mail OUT of this mailbox, oldest first — what a
+   * reaper did about it after the nudge. */
+  forwards: MailForwardRecord[];
   y: number;
   /** The cursor's x, or null when the picture does not know its position. */
   x: number | null;
@@ -296,6 +352,8 @@ export type MailScene = {
    * belongs to neither, and drawing it inside one would clip it against that
    * lane's own bounds. */
   threads: MailThreadLink[];
+  /** Dead→live joins: what a reaper moved, and out of which corpse. */
+  forwards: MailForwardLink[];
   empty: boolean;
 };
 
@@ -323,15 +381,31 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
   let y = laneTop;
 
   for (const role of roles) {
-    const cursors = state.cursors.filter((c) => c.role === role);
+    // SUB-LANE ORDER: declared mailboxes first, then windows, then the
+    // sessionless reader — durability descending, which is also the order in
+    // which they stop being anybody's problem. Ties keep the reducer's own
+    // ordering (the snapshot's, sorted by key), so the layout is stable across
+    // polls and a screenshot is comparable.
+    const cursors = state.cursors.filter((c) => c.role === role)
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)
+      .map((x) => x.c);
     const glyphY = y + LANE_HEAD_H;
     const glyphs: MailGlyph[] = [];
 
     for (const slot of slots) {
       const line = slot.line;
-      if (line === null || line.envelope === null || line.envelope.to !== role) continue;
+      // A unicast envelope belongs to its ROLE's lane and to one sub-lane
+      // inside it (ADR-0018 d4) — never to a lane of its own, and never to
+      // every track on the role.
+      if (line === null || line.envelope === null || roleOf(line.envelope.to) !== role) continue;
       const e = line.envelope;
-      const perCursor = cursors.map((c) => ({
+      // ONLY the cursors that can actually read it. `lineStatus` would answer
+      // `foreign` for the others, which is true but draws a row per sibling
+      // saying "not mine" under every unicast on the bus; the honest picture is
+      // that a unicast hangs on the ONE track that may take it.
+      const readers = cursors.filter((c) => accepts(c, e.to));
+      const perCursor = readers.map((c) => ({
         key: cursorKey(c), session: c.session, status: lineStatus(state, c, line),
       }));
       glyphs.push({
@@ -339,17 +413,24 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
         x: slot.x + SLOT_PAD / 2,
         w: slot.w - SLOT_PAD,
         id: e.id,
+        address: e.to,
+        instance: instanceOf(e.to),
         kind: e.kind,
         topic: e.topic,
         priority: e.priority,
         ttlDeliveries: e.ttlDeliveries,
         from: e.from.agent === "" ? e.from.harness : `${e.from.agent}@${e.from.harness}`,
         bytes: line.bytes,
-        status: cursors.length === 0 ? "no-reader" : summarize(perCursor.map((p) => p.status)),
+        // `no-reader` is now a fact about THIS envelope rather than about the
+        // lane: a unicast addressed to a mailbox that has no cursor has nobody
+        // to read it even on a lane full of readers, which is exactly the state
+        // the reaper exists for.
+        status: readers.length === 0 ? "no-reader" : summarize(perCursor.map((p) => p.status)),
         perCursor,
         torn: !line.terminated,
         arrival: line.source,
         thread: threadOf(state, e),
+        forwardedFrom: e.forwardedFrom,
         nudges: nudgesFor(state, line.offset),
       });
     }
@@ -373,11 +454,17 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
             id: m.id,
           };
         });
+      const address = addressOf(c);
+      const dead = deadNudgeFor(state, address);
       return {
         key: cursorKey(c),
         role,
         session: c.session,
         sessionLabel: sessionLabel(c.session),
+        address,
+        named: c.named,
+        dead: dead === null ? null : dead.reason,
+        forwards: forwardsFrom(state, address),
         y: glyphY + GLYPH_H + i * TRACK_H,
         x: c.offset === null ? null : xOf(c.offset),
         offset: c.offset,
@@ -412,7 +499,10 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
     const laneNudges = new Map<number, MailNudgeRecord[]>();
     let nudgesUnplaced = 0;
     for (const n of state.nudges) {
-      if (n.role !== role) continue;
+      // A dead-mailbox nudge goes TO the reaper and is ABOUT somebody else's
+      // mailbox (ADR-0018 d6) — so it belongs on the lane where the stranded
+      // mail hangs, not on a `reaper` lane that usually does not exist.
+      if (nudgeLane(n) !== role) continue;
       let placed = false;
       for (const o of n.offsets) {
         if (o === null) continue;
@@ -454,6 +544,7 @@ export function buildScene(state: MailState, nowMs?: number): MailScene {
     frontierX: xForOffsetIn(slots, state.frontier),
     spineOnly,
     threads: buildThreads(lanes),
+    forwards: buildForwards(lanes),
     empty: slots.length === 0 && lanes.length === 0,
   };
 }
@@ -492,6 +583,36 @@ function buildThreads(lanes: MailLane[]): MailThreadLink[] {
     }
   }
   return links.sort((a, b) => a.answerOffset - b.answerOffset);
+}
+
+/** Join every placed copy to the original it carries on. Both ends must be
+ * glyphs in this scene, and the original must be on the lane its
+ * `forwardedFrom.address` names — the id alone is not enough, because ids are
+ * not unique on this bus (the store does not dedup, and a rotation can bring
+ * one back). */
+function buildForwards(lanes: MailLane[]): MailForwardLink[] {
+  const byIdAndRole = new Map<string, { g: MailGlyph; lane: MailLane }>();
+  for (const lane of lanes) for (const g of lane.glyphs) byIdAndRole.set(`${lane.role}\u0000${clampField(g.id)}`, { g, lane });
+
+  const links: MailForwardLink[] = [];
+  for (const lane of lanes) {
+    for (const g of lane.glyphs) {
+      const f = g.forwardedFrom;
+      if (f === null) continue;
+      const original = byIdAndRole.get(`${roleOf(f.address)}\u0000${clampField(f.id)}`);
+      if (original === undefined) continue;
+      links.push({
+        originalOffset: original.g.offset,
+        copyOffset: g.offset,
+        x1: original.g.x + original.g.w / 2,
+        y1: original.lane.glyphY,
+        x2: g.x + g.w / 2,
+        y2: lane.glyphY,
+        source: f.address,
+      });
+    }
+  }
+  return links.sort((a, b) => a.copyOffset - b.copyOffset);
 }
 
 /** N6, as built: was the last pickup on this cursor a human reading their mail
@@ -553,6 +674,13 @@ function xForOffsetIn(slots: MailSlot[], offset: number): number {
   }
   const last = slots[slots.length - 1];
   return last.x + last.w;
+}
+
+/** Durability rank for sub-lane order: a declared mailbox (0) outlives the
+ * windows (1); the sessionless reader (2) is neither — it is the one mailbox
+ * with no address at all. */
+function rank(c: MailCursorState): number {
+  return c.named ? 0 : c.session === null ? 2 : 1;
 }
 
 export function cursorKey(c: { role: string; session: MailSession }): string {

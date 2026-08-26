@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 
@@ -148,6 +148,26 @@ export function seedFiles(daemon) {
         events: ["UserPromptSubmit"], mode: "oneshot", failMode: "open", budgetMs: 4000,
         env: dotnetRootEnv(),
       },
+      // A DECLARED mailbox (ADR-0018 d3): `--as` makes `builder@ci-runner` a
+      // durable box an operator owns, keyed by its NAME rather than by whichever
+      // window happens to read it. It is what the canvas draws as a sub-lane,
+      // and the only kind of mailbox a unicast can be addressed to on purpose.
+      {
+        name: "mail-builder-ci", command: daemon.enginePath,
+        args: ["mail", "digest", "--role", "builder", "--as", "ci-runner", "--seam", "ambient"],
+        events: ["UserPromptSubmit"], mode: "oneshot", failMode: "open", budgetMs: 4000,
+        env: dotnetRootEnv(),
+      },
+      // …and one that is about to become a CORPSE. It is registered now so the
+      // cursor gets created by a real digest; `seedMail` then takes the
+      // registration away, which is exactly what a dead mailbox is — standing
+      // on disk that nobody declares any more (d6's condition ii).
+      {
+        name: "mail-reviewer-retired", command: daemon.enginePath,
+        args: ["mail", "digest", "--role", "reviewer", "--as", "retired-box", "--seam", "ambient"],
+        events: ["UserPromptSubmit"], mode: "oneshot", failMode: "open", budgetMs: 4000,
+        env: dotnetRootEnv(),
+      },
     ],
   }, null, 2) + "\n");
 
@@ -191,11 +211,19 @@ const MAIL_SESSIONS = { alpha: "sess-alpha-4f21", beta: "sess-beta-9c07" };
  * on the bus mid-test spells it exactly as the seed does — the strict parser
  * refuses anything else (`v` is required and must be 1), and one hand-rolled
  * literal drifting from this shape is a test that fails for the wrong reason. */
-export const mailEnvelope = (id, to, over) => ({
-  v: 1, id, to, kind: "status", priority: "ambient", ttlDeliveries: 3,
-  from: { agent: "seed", harness: "claude-code", session: MAIL_SESSIONS.alpha },
-  topic: "seed", body: "seeded envelope", ...over,
-});
+export const mailEnvelope = (id, to, over) => {
+  const e = {
+    v: 1, id, to, kind: "status", priority: "ambient", ttlDeliveries: 3,
+    from: { agent: "seed", harness: "claude-code", session: MAIL_SESSIONS.alpha },
+    topic: "seed", body: "seeded envelope", ...over,
+  };
+  // A UNICAST address has no TTL and the parser REFUSES one rather than
+  // ignoring it (ADR-0018 d5), and `null` is a present field, not an absent
+  // one — so the key is dropped outright. The address decides, exactly as it
+  // does in `mail ask`.
+  if (to.includes("@")) delete e.ttlDeliveries;
+  return e;
+};
 
 /**
  * Put the swarm on the sandbox bus and move its cursors. Call AFTER seedFiles
@@ -231,6 +259,26 @@ export function seedMail(daemon) {
   send("ledger-note-05", "builder", {
     kind: "status", priority: "ambient", ttlDeliveries: 3, topic: "ledger",
     body: "The ledger is the spine — mail never moves, cursors do.",
+  });
+  // UNICAST (ADR-0018 d1/d4): addressed to ONE mailbox, so it hangs on that
+  // sub-lane and on no other — a sibling of the same role cannot read it, which
+  // is the fact the predicate exists to keep true in four places.
+  send("ci-status-12", "builder@ci-runner", {
+    kind: "status", priority: "ambient", topic: "nightly build",
+    body: "The nightly is green on linux-x64; the AOT leg took 41s.",
+  });
+  // …and one addressed to a mailbox that does not exist. Nothing broadcasts a
+  // unicast to a second reader, so this envelope has nobody at all — which the
+  // canvas says rather than drawing it as somebody's pending mail.
+  send("ci-status-13", "builder@laptop-gone", {
+    kind: "status", priority: "ambient", topic: "nightly build",
+    body: "Addressed to a mailbox that was never registered: nobody reads this.",
+  });
+  // The envelope that will be STRANDED: sent to the box that is about to lose
+  // its registration, and never read by it.
+  send("handover-14", "reviewer@retired-box", {
+    kind: "request", priority: "ambient", topic: "handover",
+    body: "Take the read-port review; the box you are reading this in is being retired.",
   });
   // A role NOBODY reads: the store keeps it, and the canvas must say so rather
   // than draw an empty lane that looks like a rendering failure.
@@ -289,9 +337,44 @@ export function seedMail(daemon) {
     inReplyTo: "api-review-02", hops: 1,
     body: "Also checked the reducer: it interpolates between snapshots and stores nothing.",
   });
+  // THE CORPSE (ADR-0018 d6). `retired-box` read once — that is what put its
+  // cursor on disk — and then its registration goes away, which is precisely
+  // what a dead mailbox is: standing nobody declares any more, holding mail
+  // nobody will come for. The handlers file is rewritten rather than the cursor
+  // being hand-built, so the box the picture greys is one the engine really
+  // made and really abandoned.
+  daemon.fireHook("user-prompt-submit", { session_id: alpha });   // ci-runner + retired-box read
+  send("handover-15", "reviewer@retired-box", {
+    kind: "request", priority: "ambient", topic: "handover (2)",
+    body: "Second try — still addressed to the retired box, and still nobody is reading it.",
+  });
+  unregisterRetiredBox(daemon);
+
+  // What a REAPER did about it: a copy on a live lane carrying `forwardedFrom`,
+  // the original left exactly where it was. The reap itself is deliberately NOT
+  // seeded — this is the moment between the two verbs (the state a failed reap
+  // also leaves), and it is the only one in which the picture can show both the
+  // corpse and the rescue at once.
+  send("fwd-handover-16", "builder", {
+    kind: "request", priority: "ambient", ttlDeliveries: 3, topic: "handover",
+    from: { agent: "reaper", harness: "cli" },
+    forwardedFrom: { id: "handover-15", address: "reviewer@retired-box" },
+    body: "Second try — still addressed to the retired box, and still nobody is reading it.",
+  });
+
   // `plan-slice-04` and `deploy-window-09` stay unanswered — the canvas's
   // `awaiting` tag needs an open question to point at.
   return { sessions: MAIL_SESSIONS, roles: ["reviewer", "builder", "archivist"] };
+}
+
+/** Take the retired box's registration away, leaving its cursor behind. The
+ * rest of the file is rewritten verbatim from what `seedFiles` wrote, minus
+ * that one entry — a corpse is made by REMOVING a declaration, never by
+ * deleting a mailbox. */
+function unregisterRetiredBox(daemon) {
+  const file = JSON.parse(readFileSync(daemon.handlersPath, "utf8"));
+  file.handlers = file.handlers.filter((h) => h.name !== "mail-reviewer-retired");
+  writeFileSync(daemon.handlersPath, JSON.stringify(file, null, 2) + "\n");
 }
 
 /** The ROBOT NUDGES (ADR-0017 d10), appended with a live page already
@@ -319,15 +402,31 @@ export function seedMailNudges(daemon) {
     { role: "archivist", envelopeIds: ["archive-06"], dispatchId: "n0778899",
       reason: "no cursor has ever read this role",
       budget: { envelope: 1, perEnvelope: 2, roleHour: 1, perRoleHour: 4 } },
+    // The DEAD-MAILBOX nudge (ADR-0018 d6): it goes to the `reaper` and names
+    // the corpse in `address` — the one row shape that is about somebody else's
+    // mailbox, which is why the canvas draws its mark on the corpse's lane and
+    // greys the corpse's own track.
+    { role: "reaper", address: "reviewer@retired-box", envelopeIds: ["handover-15"], dispatchId: "n09aabb",
+      reason: "dead-mailbox reviewer@retired-box · 2 stranded past quiet (2h+)",
+      budget: { envelope: 1, perEnvelope: 2, roleHour: 1, perRoleHour: 4 } },
   ];
-  for (const { role, envelopeIds, reason, budget, dispatchId } of rows) {
+  for (const { role, address, envelopeIds, reason, budget, dispatchId } of rows) {
     daemon.appendTrail({
       ts: new Date().toISOString(), lvl: "info", src: "mail", evt: "mail.nudge", dispatchId,
       msg: "robot nudge raised: a turn was woken for mail this role had not read",
-      data: { role, envelopeIds, reason, budget },
+      data: { role, envelopeIds, reason, budget, ...(address === undefined ? {} : { address }) },
     });
   }
-  return rows.length;
+  // …and what the reaper did with what it found: the copy is already on the
+  // ledger (the seed sent it), and this row is the half a copy cannot state —
+  // WHO moved it, out of which mailbox.
+  daemon.appendTrail({
+    ts: new Date().toISOString(), lvl: "info", src: "mail", evt: "mail.forward",
+    msg: "stranded mail copied to a live address: the originals stay on the ledger",
+    data: { role: "reviewer", instance: "retired-box", to: "builder", by: "reaper",
+      forwardedIds: ["handover-15"], skippedIds: ["handover-14"] },
+  });
+  return rows.length + 1;
 }
 
 /** Append the varied synthetic trail — call it with a live page already

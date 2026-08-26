@@ -810,6 +810,76 @@ trail is queryable JSONL and reading it answers the debugging case; ADR-0016's
 addendum records the reasoning and the revisit trigger), and sending from the
 GUI, which is a consent decision of its own and is not in this ADR.
 
+### The picture learns addresses (ADR-0018 d7, slice `canvas-instances`)
+
+Until this slice the canvas knew roles and sessions, which is the bus ADR-0016
+built. Every fact ADR-0018 added was therefore invisible or, worse, drawn wrong:
+a unicast to `main@laptop-a` got a top-level LANE of its own beside `main`, as
+if the two were unrelated addresses; a `--as` mailbox's advances were filed
+under whichever window ran the digest; and the snapshot reported a declared
+mailbox as a SESSION nobody is called.
+
+```
+  builder ─┬─ envelopes ─────────────────────────────────────────
+           │      ci-status-12 (to builder@ci-runner) ── unicast: one sub-lane
+           │      ci-status-13 (to builder@laptop-gone) ── no reader at all
+           ├── ci-runner · d2        ← DECLARED: a registration names it
+           └── sess-alpha-4f21 · d2  ← a window's own, keyed by its session
+                                        ╲
+  reviewer ─┬─ handover-15 ─────────────╲──────────── nudged (about the corpse)
+            ├── r̶e̶t̶i̶r̶e̶d̶-̶b̶o̶x̶ · d2 · dead   ╲     the forward LINK, dead → live
+            │   dead — nobody reads this mailbox · 1 stranded · forwarded to builder
+            └── sess-alpha-4f21 · d2
+```
+
+**A lane is a ROLE; a mailbox is a sub-lane.** `rolesOf` folds an address to its
+role half, so `main@laptop-a` hangs under `main` — which is the truth, since a
+named mailbox reads the role's broadcast too. Sub-lanes sort by DURABILITY:
+declared mailboxes first (they outlive every window), then windows, then the
+sessionless reader, which is the one mailbox with no address at all.
+
+**The recipient predicate is mirrored, once, and called from five places.**
+`accepts(cursor, to)` is `MailAddress.Accepts` in the browser — a mailbox reads
+its role's broadcast always, plus its own `role@instance`. It decides which
+lines a cursor absorbs, which it re-derives after an anchor, which line a
+delivery record may name, what standing a line has for a cursor, and which
+cursors the detail card lists as readers. A sixth copy comparing `to === role`
+anywhere would paint a sibling's unicast as pending on every track, which is
+N5's named hazard and a picture no screenshot catches.
+
+**The cursor key is the mailbox, not the window.** Every `mail.*` row that names
+a cursor carries `sessionId` (who did the work) and, when they differ,
+`instance` (which mailbox it moved) — the advance's rule, extended by this slice
+to the expire, refuse, vanished and re-anchor rows so no cursor event can be
+misfiled. The reducer keys on `instance ?? sessionId`; keying on the session
+alone would model two cursors for one file whenever two windows share one
+`--as`, then flag every second advance as out-of-sequence.
+
+**A named mailbox is not a session.** The snapshot now says which cursors are
+DECLARED — read from `handlers.json` through `MailDigest.MailboxOf`, the same
+recognizer the watcher's dead-mailbox rule uses — and a declared one contributes
+no presence at all. That closes the read model's stated gap: presence used to
+list a `--as` name as a window that was never there and could never decay,
+because no dispatch is ever attributed to a name.
+
+**Dead is the watcher's word.** A track is greyed and struck when a `mail.nudge`
+has NAMED its address (`address` rides only a dead-mailbox nudge, d6), never
+because the browser inferred it: "is this mailbox dead" is the brain's rule —
+instance, unregistered, no live session, quiet past a threshold — and a second
+implementation of it here would be N8 in a hat. Its mark is drawn on the
+CORPSE's lane rather than the reaper's, because that is where the stranded mail
+hangs and a `reaper` lane usually does not exist.
+
+**A forward is a link, drawn from the copy.** `forwardedFrom` rides the
+`mail.append` row for `inReplyTo`'s reason — the live picture must join the two
+ends the moment the copy lands, not at the next snapshot — and the link is built
+from the COPY, which is the end that names the other. Dashed and green, because
+it is not a thread: a thread is a conversation, a forward is a rescue, and the
+two ends are two envelopes rather than one that moved. A `mail.reap` folds by
+REMOVING the cursor — the standing is gone, which is what the next snapshot will
+say anyway — and leaves a note, because a track that simply vanished would read
+as a rendering bug rather than as a member disposing of a mailbox.
+
 ## The human channel: `mail status` (ADR-0017 d2)
 
 The bus can now be *watched* (the Mail canvas) and *delivered* (a digest at a
@@ -1511,6 +1581,7 @@ prose, not ground truth.
 | A DECLARED SENDER (ADR-0017 N6 amendment, slice `turn-provenance`) — a spawning payload states who the process is, in three env vars, before the model it wakes exists; the two write verbs enforce it: a stated value that agrees stands, one that disagrees is REFUSED with nothing written, an absent `session` is stamped. Not declared ⇒ nothing happens, which is every CLI sender. The stamp is `turn-<dispatchId>`, the dispatch the nudge ran under — never a window, because a woken turn has none | `MailSenderDeclaration` (`Agent`/`Harness`/`Session`, `AgentEnv`/`HarnessEnv`/`SessionEnv` = `CAPTAINHOOK_MAIL_FROM_{AGENT,HARNESS,SESSION}`, `None`, `Declares`, `FromEnvironment`, `Resolve`) in `dotnet/captainHook/Mail/MailSenderDeclaration.cs`; applied in `MailSend.Run` (before the thread lookup — the cheaper refusal) and `MailAsk.Run` (over its derivation); declared by `examples/payloads/turn-claude.sh`, which also names the `from` in the prompt so an obedient model never trips the refusal. Pinned by `dotnet/captainHookTests/MailTurnProvenanceTests.cs` (10), two `MailAskTests` cases (32 in that file now), two real-process cases in `TurnPayloadTests.cs`, and the whole-loop assertion in `WatcherLoopE2ETests.cs` (`turn-<the nudge's own dispatchId>`) |
 | REAPING a mailbox (ADR-0018 d6, slice `reap-verb`) — `captainHook mail reap <address> [--by <address>]`: removes ONE mailbox's cursor under the same per-cursor flock `Advance` takes, never unlinking the lock file, and writes `mail.reap`. Standing only: the store is read, never written, and the mailbox's history stays on the chain. Does not judge deadness (the watcher detects, the reaper disposes); idempotent (already gone ⇒ exit 0); exit 1 only for a bad argument or a busy lock. The row spells the mailbox `role` + `instance` (write-when-named), not a joined `address` — one spelling per trail (N8) — and is written AFTER the delete | `MailReap` (`Run`, `TryParseArgs`, `LogReap`) in `dotnet/captainHook/Mail/MailReap.cs`, routed from `Program.cs`'s `mail` switch; the lock is `MailStore.TryLock` (`Mail/MailStore.cs`), the stranded list is `MailCursors.Pending(address, hookSession: null)` (`Mail/MailCursor.cs`). Pinned by `dotnet/captainHookTests/MailReapTests.cs` (19 — the byte-identical ledger, first-contact redelivery, idempotence creating nothing, the surviving lock file, the refusal under a held lock with no false record, the commit point a broken stdout cannot undo, the two row shapes, expired-is-not-stranded, and the argument refusals) and the `mail.reap` golden in `WireJsonlTests`. The reducer does NOT fold it yet — `canvas-instances` |
 | FORWARDING what a corpse held + the DETERMINISTIC REAPER (ADR-0018 d6, slice `reaper-payloads`) — `captainHook mail forward <address> --to <address> [--by <address>]`: appends a NEW envelope per stranded one, carrying `forwardedFrom {id, address}`; kind/topic/priority/body and `replyTo` ride, `inReplyTo` is dropped and `hops` restarts at 0, the TTL is the TARGET's (null when it is unicast). Idempotent on (source, target) — an id already forwarded there is skipped. One `mail.forward` row per run, never per envelope. The originals are untouched: the store is read for the pending set and appended to for the copies, and nothing is ever rewritten. The sender is REQUIRED (declaration, else `--by`), self-forward is refused, nothing-to-move is exit 0 so the caller can go on and reap. The payload picks the disposition from data and NEVER reads a body | `MailForward` (`Run`, `AlreadyForwarded`, `LogForward`, `TryParseArgs`, `MintId`) in `dotnet/captainHook/Mail/MailForward.cs`, routed from `Program.cs`'s `mail` switch; the pending set is `MailCursors.Pending(address, hookSession: null, lines)` under `MailStore.TryLock` on the cursor's own lock, the copies go through `MailStore.Append`, the sender through `MailSenderDeclaration.Resolve` (`mail ask`'s rule, one of the two sources being mandatory here). The payload is `examples/payloads/reaper-deterministic.sh` (`REAPER_DISPOSITION` = `forward-all-to-role` + `REAPER_FORWARD_TO` / `drop-all` / `hold`; no default), registered on `mail-nudge` in `examples/payloads/handlers.json`. Pinned by `dotnet/captainHookTests/MailForwardTests.cs` (21 — the copy and what rides, the TTL theory, ledger order, expired-is-not-forwarded, the skip and the per-target key, the two nothing-to-move outcomes, the sender refusals, self-forward, the argument table, and the two trail rows), `dotnet/captainHookTests/ReaperPayloadTests.cs` (10 — the verbs per disposition against a stub engine, a failed forward that does NOT reap, the refusals, and one real run against the REAL engine and store), and the `mail.forward` golden in `WireJsonlTests`. The reducer does NOT fold `mail.forward` — `canvas-instances` draws the dead→live link |
+| THE CANVAS LEARNS ADDRESSES (ADR-0018 d7, slice `canvas-instances`) — a lane is a ROLE and a mailbox is a sub-lane under it (declared first, then windows, then the sessionless reader); a unicast hangs on ONE sub-lane and reads `no reader` when its mailbox does not exist; the recipient predicate is mirrored ONCE and called from five sites; cursor events key on `instance ?? sessionId`; a declared mailbox is named by the snapshot and contributes NO presence; a dead track is greyed and struck on the WATCHER's word (a `mail.nudge` naming its address) with its stranded count, and its mark draws on the corpse's lane; a forward is a dashed green link from the copy to the original, and a `mail.reap` removes the track and leaves a note | `accepts`/`roleOf`/`instanceOf`/`addressOf`/`nudgeLane`/`deadNudgeFor`/`forwardsFrom` + `MailCursorState.named`, `MailForwardRecord`, `onForward`/`onReap` and `mailboxKey` in `web/src/mail.ts`; `MailGlyph.address`/`.instance`/`.forwardedFrom`, `MailTrack.address`/`.named`/`.dead`/`.forwards`, `MailForwardLink` + `buildForwards` and the sub-lane `rank` in `web/src/mailCanvas.ts`; the `Forwards` layer, the dead flag and the `forwarded` detail row in `web/src/MailPanel.tsx`. Engine side: `MailCursorDto.Named` (decided by `RoleKinds.From` over `handlersPath` in `ApiReadModel`, which also drops named cursors from `Presence`), `MailDeliveryDto.Instance` (shipped verbatim by `MailDeliveryFold`), `forwardedFrom` on `mail.append` (`MailStore`), and the `instance` column on `mail.expire`/`mail.cursorRefuse`/`mail.cursorVanished`/`mail.cursorReanchor` — the last of which also stops putting the cursor KEY in `sessionId` (`Mail/MailCursor.cs`). Pinned by two engine-generated golden scenarios (`named-instance-and-unicast`, `dead-mailbox-forwarded-and-reaped` in `MailReducerGoldenTests`), 7 `mail.test.ts` cases and 5 `mailCanvas.test.ts` cases, and shot in both themes at all three tiers |
 | verb routing (`Mode.MailSend`, `mail <subverb>` on the argv contract) | `dotnet/captainHook/Program.cs`; `captainHookWire/` argv contract; refused by the shim |
 | `Stop`/`SubagentStop` declaring `decide` + the top-level block shape | `dotnet/captainHook/harnesses/claude-code.json`; `DecidesAtTopLevel`/`TopLevelDecision` in `dotnet/captainHook/Core/Harness.cs` — see [hook-dispatch.md](hook-dispatch.md) and platform.md § The Stop block shape |
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |

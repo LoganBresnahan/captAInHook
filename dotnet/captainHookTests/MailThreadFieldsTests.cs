@@ -170,6 +170,31 @@ public class MailThreadFieldsTests
         Assert.Equal(1, rows[1].GetProperty("hops").GetInt32());
     }
 
+    /// `forwardedFrom` rides for the same reason and not for `body`'s: the
+    /// canvas draws the dead→live link live (ADR-0018 `canvas-instances`), and
+    /// a join visible on disk but invisible on the stream would leave a forward
+    /// unpaired until the next snapshot. Nested, because "which envelope" and
+    /// "whose mailbox" are two questions.
+    [Fact]
+    public void Append_CarriesTheForwardsProvenance()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+
+        MailFixtures.AppendOk(tmp.Store(), MailFixtures.Envelope(id: "m-01"));
+        MailFixtures.AppendOk(tmp.Store(), MailFixtures.Envelope(
+            id: "fwd-1", forwardedFrom: new MailForwardedFrom("m-01", "main@laptop-a")));
+
+        var rows = log.Events.Where(e => e.Evt == "mail.append")
+            .Select(e => JsonDocument.Parse(e.ToJson()).RootElement.GetProperty("data").Clone())
+            .ToList();
+
+        Assert.False(rows[0].TryGetProperty("forwardedFrom", out _));
+        var f = rows[1].GetProperty("forwardedFrom");
+        Assert.Equal("m-01", f.GetProperty("id").GetString());
+        Assert.Equal("main@laptop-a", f.GetProperty("address").GetString());
+    }
+
     [Fact]
     public void Append_ClampsTheLinkLikeEveryOtherSenderControlledId()
     {

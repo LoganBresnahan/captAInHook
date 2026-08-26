@@ -38,10 +38,17 @@ test.describe("mail", () => {
       await expect(mail.locator(`[data-lane="${role}"]`)).toHaveCount(1);
 
     // `reviewer` is read by two sessions — the case that made the trail name
-    // the session an advance moved (the reducer slice's find).
+    // the session an advance moved (the reducer slice's find) — plus the
+    // RETIRED box, a declared mailbox whose registration is gone: standing with
+    // nobody behind it (ADR-0018 d6), which the picture keeps and greys rather
+    // than dropping.
     const reviewer = mail.locator('[data-lane="reviewer"]');
-    await expect(reviewer.locator("[data-track]")).toHaveCount(2);
-    await expect(mail.locator('[data-lane="builder"] [data-track]')).toHaveCount(1);
+    await expect(reviewer.locator("[data-track]")).toHaveCount(3);
+    await expect(reviewer.locator('[data-track][data-address="reviewer@retired-box"]')).toHaveCount(1);
+    // `builder` is read by a window AND by a DECLARED mailbox (`--as
+    // ci-runner`): a sub-lane per mailbox, not per session (d3/d7).
+    await expect(mail.locator('[data-lane="builder"] [data-track]')).toHaveCount(2);
+    await expect(mail.locator('[data-lane="builder"] [data-track][data-named="yes"]')).toHaveCount(1);
     // …and `archivist` is read by nobody, which the lane SAYS rather than
     // rendering as an empty row.
     await expect(mail.locator('[data-lane="archivist"] [data-track]')).toHaveCount(0);
@@ -106,8 +113,10 @@ test.describe("mail", () => {
     // carries one (d14), so this is the proof the view read the real store.
     await expect(detail.locator("[data-detail-body]")).toContainText("Take the canvas slice next");
     await expect(detail).toContainText("seed");
-    // One standing line per reader of that role, in the cursor's own words.
-    await expect(detail.locator("[data-standing]")).toHaveCount(1);
+    // One standing line per reader OF THIS ENVELOPE, in the cursor's own words —
+    // which since ADR-0018 d4 is the recipient predicate and not a role match:
+    // `plan-slice-04` is a broadcast, so both of builder's mailboxes read it.
+    await expect(detail.locator("[data-standing]")).toHaveCount(2);
 
     // An envelope nobody reads says so instead of inventing a standing.
     await mail.locator('[data-lane="archivist"] [data-glyph] .glyph-body').first().click();
@@ -165,7 +174,7 @@ test.describe("mail", () => {
     const before = await mail.locator('[data-lane="builder"] [data-glyph]').count();
 
     // Every glyph on screen came from the snapshot: nothing has arrived yet.
-    await expect(mail.locator('[data-lane="builder"] [data-arrival="trail"]')).toHaveCount(0);
+    await expect(mail.locator('[data-lane="builder"] [data-glyph][data-arrival="trail"]')).toHaveCount(0);
 
     daemon.mailSend(mailEnvelope("live-arrival-01", "builder", {
       topic: "landed while watching",
@@ -176,7 +185,7 @@ test.describe("mail", () => {
     // get here is a re-snapshot, and `data-arrival` distinguishes them: a line
     // from a snapshot is never an arrival.
     await expect(mail.locator('[data-lane="builder"] [data-glyph]')).toHaveCount(before + 1);
-    const arrived = mail.locator('[data-lane="builder"] [data-arrival="trail"]');
+    const arrived = mail.locator('[data-lane="builder"] [data-glyph][data-arrival="trail"]');
     await expect(arrived).toHaveCount(1);
     await expect(arrived).toHaveAttribute("data-status", "fresh");
   });
@@ -197,7 +206,7 @@ test.describe("mail", () => {
       kind: "request", topic: "read me now",
       body: "The next ambient seam should deliver this and say so on the ledger.",
     }));
-    await expect(builder.locator('[data-arrival="trail"]')).toHaveCount(1);
+    await expect(builder.locator('[data-glyph][data-arrival="trail"]')).toHaveCount(1);
 
     // The SAME session that already holds builder's cursor reads again: a real
     // hook, a real registered digest, a real advance.
@@ -209,7 +218,7 @@ test.describe("mail", () => {
     // would be a test about the seed instead of about the fold. `delivered` is
     // granted by the reducer on a `mail.deliver` record and nothing else
     // (d14 pin iii), which is exactly what the snapshot could never carry.
-    await expect(builder.locator('[data-arrival="trail"]')).toHaveAttribute("data-status", "delivered");
+    await expect(builder.locator('[data-glyph][data-arrival="trail"]')).toHaveAttribute("data-status", "delivered");
     await expect(builder.locator('[data-glyph][data-status="delivered"]').first()).toBeVisible();
     // …and the cursor says a forward READ moved it — an advance, then the
     // delivery record that followed it — rather than a re-anchor. The two
@@ -218,7 +227,10 @@ test.describe("mail", () => {
     // nothing was read at all. (Which of the two forward events landed last is
     // the fold's business, not this test's; that it was neither a re-anchor nor
     // nothing is the claim.)
-    const motion = await builder.locator("[data-track]").getAttribute("data-motion");
+    // The WINDOW's track — builder is read by two mailboxes since ADR-0018 d3,
+    // and the one this hook moved is the session's own.
+    const motion = await builder.locator('[data-track][data-address="builder@sess-alpha-4f21"]')
+      .getAttribute("data-motion");
     expect(["advance", "deliver"]).toContain(motion);
   });
 
@@ -239,7 +251,7 @@ test.describe("mail", () => {
       kind: "request", topic: "read before the page opens",
       body: "Delivered while nobody is looking; the next page must still know.",
     }));
-    const arrived = builder.locator('[data-arrival="trail"]');
+    const arrived = builder.locator('[data-glyph][data-arrival="trail"]');
     await expect(arrived).toHaveCount(1);
     const offset = await arrived.getAttribute("data-glyph");
 
@@ -287,7 +299,7 @@ test.describe("mail", () => {
     daemon.mailSend(mailEnvelope("live-nopoll-01", "builder", {
       topic: "no poll", body: "Arriving on the stream, not on a timer.",
     }));
-    await expect(page.locator('[data-island="mail"] [data-arrival="trail"]')).toHaveCount(1);
+    await expect(page.locator('[data-island="mail"] [data-glyph][data-arrival="trail"]')).toHaveCount(1);
 
     // The stream carried it. Nothing re-read the bus to find out.
     expect(snapshots).toHaveLength(0);
@@ -329,7 +341,7 @@ test.describe("mail", () => {
     daemon.mailSend(mailEnvelope("post-resync-01", "builder", {
       topic: "after the reset", body: "The stream was re-anchored to a fresh snapshot.",
     }));
-    await expect(mail.locator('[data-lane="builder"] [data-arrival="trail"]')).toHaveCount(1);
+    await expect(mail.locator('[data-lane="builder"] [data-glyph][data-arrival="trail"]')).toHaveCount(1);
   });
 
   test("a thread crosses lanes and a poke lands on one, against a real bus", async ({ page, daemon }) => {
@@ -346,12 +358,36 @@ test.describe("mail", () => {
     await expect(mail.locator('[data-lane="builder"] [data-thread="answered"]')).toHaveCount(1);
     // The FIRST answer closed it; the second is late, and is drawn, not hidden.
     await expect(mail.locator('[data-lane="builder"] [data-thread="late"]')).toHaveCount(1);
-    await expect(mail.locator("[data-thread-tag]").first()).toBeVisible();
-    // Two open questions nobody has answered.
-    await expect(mail.locator('[data-thread="awaiting"]')).toHaveCount(2);
-    const links = mail.locator("[data-thread^='']").filter({ has: page.locator("path.thread-path") });
-    await expect(links).toHaveCount(2);
+    // Open questions nobody has answered — the seed's two planning requests plus
+    // the three the retired box's handover left behind (ADR-0018's corpse: two
+    // stranded, one forwarded copy).
+    await expect(mail.locator('[data-thread="awaiting"]')).toHaveCount(5);
+    // The LINKS and the mid-tier tag need a tier that draws them: `fit` over
+    // this bus — 17 envelopes since the seed grew a declared mailbox and a
+    // corpse — lands at FAR, where both are deliberately suppressed (a mesh of
+    // curves over a four-pixel slot reads as noise). A reader zooms in; so does
+    // the spec. WHICH ends stay on screen depends on where the zoom landed —
+    // the semantic-zoom test's own rule — so the claim is that the joins are
+    // drawn at all, not that a particular one is.
+    // The links themselves, by their own class rather than by an attribute
+    // prefix: a link group and a thread TAG both carry `data-thread`, and the
+    // two are different objects — one is a curve between lanes, the other a
+    // mark on a card.
+    await expect(mail.locator("g.thread-link")).toHaveCount(2);
     await expect(mail.locator('[data-late="true"]')).toHaveCount(1);
+    // The mid-tier MARK on a card needs a card wide enough to hold one
+    // (`w > 44`), and `fit` over this bus — 17 envelopes since the seed grew a
+    // declared mailbox and a corpse — is tighter than that. A reader zooms in
+    // to read tags; so does the spec, and WHICH cards stay on screen is the
+    // zoom's business, so the claim is that the tag is drawn at all.
+    await mail.locator('[data-zoom="in"]').click();
+    await expect(mail.locator("[data-thread-tag]").first()).toBeVisible();
+    await mail.locator('[data-zoom="fit"]').click();
+    // …and the dead→live FORWARD is drawn beside them, which is this slice's
+    // own join (ADR-0018 d6): a copy on `builder` pointing back at the envelope
+    // stranded in `reviewer@retired-box`. A different curve for a different
+    // relation — a thread is a conversation, a forward is a rescue.
+    await expect(mail.locator('[data-forward-source="reviewer@retired-box"]')).toHaveCount(1);
 
     // A poke is a TRAIL LINE and reaches the canvas on the stream, so it is
     // written now, with the view already subscribed — a nudge appended before
@@ -362,9 +398,15 @@ test.describe("mail", () => {
     seedMailNudges(daemon);
 
     // It lands on the ROLE's lane — never on a track, which belongs to a cursor
-    // that read something. Two pokes about one envelope are ONE counted mark.
-    await expect(mail.locator('[data-lane="reviewer"] [data-nudge]')).toHaveCount(1);
-    await expect(mail.locator('[data-lane="reviewer"] [data-nudge]')).toHaveAttribute("data-nudge-count", "2");
+    // that read something. Two pokes about one envelope are ONE counted mark…
+    const reviewerNudges = mail.locator('[data-lane="reviewer"] [data-nudge]');
+    await expect(reviewerNudges.first()).toHaveAttribute("data-nudge-count", "2");
+    // …and the reviewer lane carries a SECOND mark, about a different envelope:
+    // the DEAD-MAILBOX nudge (ADR-0018 d6). It went to the `reaper` and named
+    // `reviewer@retired-box` in `address`, and the picture draws it where the
+    // stranded mail hangs — this lane — rather than on a reaper lane that does
+    // not exist.
+    await expect(reviewerNudges).toHaveCount(2);
     await expect(mail.locator('[data-lane="archivist"] [data-nudge]')).toHaveCount(1);
     await expect(mail.locator('[data-lane="builder"] [data-nudge]')).toHaveCount(0);
 

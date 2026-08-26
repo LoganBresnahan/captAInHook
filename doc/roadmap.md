@@ -2307,6 +2307,48 @@ run live*. The framework underneath is what exists today.
   tree. With no `reaper` payload installed a `reaper` rule can only log
   `unserved`, so `reaper-payloads` is what makes the rule that already ships
   mean anything (`doc/dogfood/2026-08-19-the-robot-channel.md`).
+  Slices landed: `canvas-instances` (2026-08-26; phase 4, slice 10 — the PICTURE
+  learns addresses. Until this the Mail canvas knew roles and sessions, which is
+  the bus item 20 built, so every fact item 23 added was invisible or drawn
+  WRONG: a unicast to `main@laptop-a` got a top-level lane beside `main`, as if
+  the two were unrelated; a `--as` mailbox's advances were filed under whichever
+  window ran the digest; and the snapshot reported a declared mailbox as a
+  SESSION nobody is called. Now a lane is a ROLE and a mailbox is a sub-lane
+  under it — declared first, then windows, then the sessionless reader, which is
+  durability order and also the order in which they stop being anybody's
+  problem. **The predicate turned out to have FIVE sites in the browser, not the
+  four the plan counted** (absorb, re-derive-after-anchor, place-a-delivery,
+  line-status, and the detail card's reader list — the last being the one a
+  reader would notice first and a test never), and all five call one `accepts`,
+  mirroring `MailAddress.Accepts` the way the engine keeps one copy for the same
+  reason. **Two engine gaps had to close first.** Only the advance and the
+  delivery rows carried `instance`, so a named mailbox's expiry, refusal, vanish
+  or re-anchor was unattributable — and the re-anchor row was worse than silent:
+  it put the cursor KEY in `sessionId`, which is exactly what made the read
+  model report a `--as` name as a live session that could never decay. And
+  `forwardedFrom` did not ride `mail.append`, so a rescue could not be joined to
+  what it rescued until the next snapshot; it rides now, for `inReplyTo`'s
+  reason and not for `body`'s. **The read model's "known limit" is closed rather
+  than drawn around:** `MailCursorDto.Named` is decided from the registrations
+  through `MailDigest.MailboxOf` — the watcher's own recognizer, so the picture
+  and the brain call the same mailboxes declared for the same reason — and a
+  declared mailbox contributes no presence at all. **Deadness stays the
+  WATCHER's**: a track is greyed and struck when a `mail.nudge` NAMED its
+  address, never from a rule the browser invented (N8), and that nudge's mark
+  draws on the corpse's lane rather than the reaper's, because that is where the
+  stranded mail hangs. A forward is a dashed GREEN link built from the copy; a
+  `mail.reap` removes the track and leaves a note, since a track that simply
+  vanished would read as a rendering bug rather than as a member disposing of a
+  mailbox. Pinned by two goldens generated from the REAL engine
+  (`named-instance-and-unicast`, `dead-mailbox-forwarded-and-reaped`), 7 reducer
+  cases, 5 canvas cases and 5 new C# pins; C# 1548 → 1553 green twice, web units
+  282 → 294, e2e green after the seed grew a declared mailbox, a corpse and a
+  forward — which moved counts several specs asserted, and turned up one
+  pre-existing failure that is NOT this slice's (`stream-health`'s frozen-daemon
+  spec fails identically at HEAD). `/ui-loop` in both themes at all three tiers
+  caught the two things no test did: the forward link had borrowed the nudge
+  marks' purple, and the corpse's gutter label struck through the very words
+  that explained it.)
   Slices landed: `reaper-payloads` (2026-08-26; phase 4, slice 9 — the detection
   half built in `watcher-dead-mailbox-rule` finally has hands, and what they do
   is what an OPERATOR wrote rather than what a model decided. The LLM reaper was

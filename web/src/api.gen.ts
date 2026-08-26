@@ -143,6 +143,7 @@ export interface MailSenderDto {
 export interface MailCursorDto {
   role: string;
   session: string | null;
+  named: boolean;
   gen: number;
   head: string | null;
   offset: number;
@@ -171,6 +172,7 @@ export interface MailPresenceDto {
 export interface MailDeliveryDto {
   role: string;
   session: string | null;
+  instance: string | null;
   dispatchId: string | null;
   hookEvent: string | null;
   seam: string;

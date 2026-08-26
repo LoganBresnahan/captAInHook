@@ -24,12 +24,13 @@ public class MailApiTests
     private static readonly Effect Noop = new Effect.Noop();
 
     private static ApiReadModel Model(
-        MailReadPort? mail, SessionPresence? presence = null, string? trailPath = null) =>
+        MailReadPort? mail, SessionPresence? presence = null, string? trailPath = null,
+        string? handlersPath = null) =>
         new("testver", new ServeStats(),
             new Dispatcher(new Registry().On("UserPromptSubmit", TestHandler.Returning("greeter", Noop)),
                            TimeSpan.FromSeconds(2)),
             new ReloadingHarnessRegistry(NoHarnessDir()), new ReloadingPolicy(null), null,
-            clock: () => 6000, startTick: 1000, handlersPath: null, mail: mail, presence: presence,
+            clock: () => 6000, startTick: 1000, handlersPath: handlersPath, mail: mail, presence: presence,
             trailPath: trailPath);
 
     private static async Task<JsonElement> MailJson(ApiHost api, string query = "")
@@ -274,6 +275,77 @@ public class MailApiTests
         Assert.Equal(JsonValueKind.Null, quiet.GetProperty("lastDispatchAgeMs").ValueKind);
         Assert.Equal(new[] { "main", "reviewer" },
             quiet.GetProperty("roles").EnumerateArray().Select(r => r.GetString()).ToArray());
+    }
+
+    /// ADR-0018 d3, closed by `canvas-instances`: a cursor key is a NAME for a
+    /// declared mailbox and a session id for a window, and the mail dir alone
+    /// cannot tell them apart. The snapshot decides it from the registrations —
+    /// the same `MailDigest.MailboxOf` the watcher's dead-mailbox rule uses —
+    /// and a declared mailbox is then NOT a session: it contributes no presence,
+    /// because no window is ever called `laptop-a` and no dispatch could ever
+    /// be attributed to it.
+    [Fact]
+    public async Task Mail_ADeclaredMailbox_IsNamed_AndIsNotPresence()
+    {
+        using var tmp = new MailStoreTempDir();
+        CursorFixtures.AppendTo(tmp, "m-01");
+        var cursors = tmp.Cursors();
+        CursorFixtures.AdvanceOk(cursors, cursors.Pending(new MailAddress("main", "laptop-a"), null));
+        CursorFixtures.AdvanceOk(cursors, cursors.Pending(new MailAddress("main", "s-window"), null));
+
+        var handlers = Path.Combine(tmp.Dir, "handlers.json");
+        File.WriteAllText(handlers, JsonSerializer.Serialize(new
+        {
+            version = 1,
+            handlers = new[]
+            {
+                new
+                {
+                    name = "mail-main-laptop-a",
+                    command = "/usr/bin/captainHook",
+                    args = new[] { "mail", "digest", "--role", "main", "--as", "laptop-a" },
+                    events = new[] { "user-prompt-submit" },
+                    mode = "oneshot",
+                    failMode = "open",
+                },
+            },
+        }));
+
+        using var api = ApiHost.Start(FreeTcpPort(),
+            readModel: Model(MailReadPort.Over(tmp.Dir), handlersPath: handlers));
+        var dto = await MailJson(api);
+
+        var byKey = dto.GetProperty("cursors").EnumerateArray()
+            .ToDictionary(c => c.GetProperty("session").GetString()!, c => c.GetProperty("named").GetBoolean());
+        Assert.True(byKey["laptop-a"], "a registration names this mailbox");
+        Assert.False(byKey["s-window"], "a window's mailbox is keyed by a session id, not declared");
+
+        // The presence list is WINDOWS. The declared mailbox is gone from it,
+        // where it used to appear as a session that was never there.
+        Assert.Equal(["s-window"],
+            dto.GetProperty("presence").EnumerateArray().Select(p => p.GetProperty("session").GetString()).ToArray());
+    }
+
+    /// The delivery preload ships the row's own two columns (6a's rule: no
+    /// derivation here). `instance` is the one that lets the picture join a
+    /// record to the CURSOR that moved — for a named mailbox that is not the
+    /// window the pickup ran in, and a record filed under the window would join
+    /// to no cursor at all.
+    [Fact]
+    public async Task Mail_ADeliveryRecord_CarriesTheMailboxAndTheWindow()
+    {
+        using var tmp = new MailStoreTempDir();
+        var trail = Path.Combine(tmp.Dir, "trail.jsonl");
+        File.WriteAllText(trail,
+            """{"ts":"2026-08-26T00:00:01.000Z","lvl":"info","src":"mail","evt":"mail.deliver","sessionId":"s-77","dispatchId":"d-1","hookEvent":"UserPromptSubmit","data":{"role":"main","instance":"laptop-a","seam":"ambient","vehicle":"inject","envelopeIds":["m-01"]}}"""
+            + "\n");
+
+        using var api = ApiHost.Start(FreeTcpPort(),
+            readModel: Model(MailReadPort.Over(tmp.Dir), trailPath: trail));
+        var record = Assert.Single(await MailJson(api) is var dto ? dto.GetProperty("deliveries").EnumerateArray().ToList() : []);
+
+        Assert.Equal("laptop-a", record.GetProperty("instance").GetString());
+        Assert.Equal("s-77", record.GetProperty("session").GetString());
     }
 
     [Fact]

@@ -251,8 +251,26 @@ public sealed class ApiReadModel
                 l.Errors))
             .ToList();
 
+        // WHICH CURSORS ARE MAILBOXES SOMEBODY DECLARED (ADR-0018 d3, slice
+        // `canvas-instances`). A cursor file's name is just its key, so the mail
+        // dir alone cannot tell a durable `--as` mailbox from a window's
+        // ephemeral one — the gap this file used to state as a known limit. It
+        // is closed here rather than in the port, and with the registrations
+        // this model ALREADY reads: `RoleKinds.From` recognizes a digest through
+        // `MailDigest.MailboxOf`, the verb's own parser, which is the same rule
+        // the watcher's dead-mailbox test uses. One rule, two readers.
+        //
+        // It is not a guess about a name's shape and it never becomes one: no
+        // registration, no `named`, and a mailbox whose registration was removed
+        // reads as unnamed — which is exactly what the watcher already calls a
+        // corpse (d6's condition ii), so the picture and the brain agree about
+        // the same mailboxes for the same reason.
+        var named = RoleKinds.From(_handlersPath is null
+            ? new ExecHandlersResolution.Absent()
+            : ExecHandlersFile.Resolve(_handlersPath));
         var cursors = _mail.Cursors()
-            .Select(id => Cursor(_mail.Pending(id.Role, id.Session)))
+            .Select(id => Cursor(_mail.Pending(id.Role, id.Session),
+                named.IsRegisteredMailbox(new MailAddress(id.Role, id.Session))))
             .ToList();
 
         // The delivery preload (6a). Read AFTER the stamp on purpose: a record
@@ -266,7 +284,7 @@ public sealed class ApiReadModel
         return new MailDto(_mail.Dir, chain, since, aligned, frontier, trailEventId,
             lineDtos, cursors, Presence(cursors),
             fold.Records.Select(r => new MailDeliveryDto(
-                r.Role, r.SessionId, r.DispatchId, r.HookEvent, r.Seam, r.Vehicle,
+                r.Role, r.SessionId, r.Instance, r.DispatchId, r.HookEvent, r.Seam, r.Vehicle,
                 r.EnvelopeIds, r.RenderHash, r.BytesInjected, r.Ts)).ToList(),
             fold.Complete,
             MailThreads.Closures(complete),
@@ -288,8 +306,8 @@ public sealed class ApiReadModel
         catch (UnauthorizedAccessException) { return 0; }
     }
 
-    private static MailCursorDto Cursor(MailPendingView v) => new(
-        v.Role, v.Session, v.Gen, v.Head, v.Offset, v.Frontier, v.Deliveries, v.LastDeliveredId,
+    private static MailCursorDto Cursor(MailPendingView v, bool named) => new(
+        v.Role, v.Session, named, v.Gen, v.Head, v.Offset, v.Frontier, v.Deliveries, v.LastDeliveredId,
         v.Reanchored, v.ReanchorReason,
         v.Pending.Select(p => Pending(p, v.Deliveries)).ToList(),
         v.Expired.Select(p => Pending(p, v.Deliveries)).ToList(),
@@ -303,18 +321,13 @@ public sealed class ApiReadModel
         p.Offset, p.Envelope.Id, Camel(p.Envelope.Priority.ToString()), p.Envelope.TtlDeliveries,
         p.SeenAt, p.SeenAt is { } seen ? deliveries - seen + 1 : 0);
 
-    // KNOWN LIMIT, ADR-0018 d3: `c.Session` is a CURSOR KEY, which since
-    // `instance-registration` is the `--as` name when a registration has one.
-    // A named mailbox therefore appears here as a session that no window is
-    // ever called, and its age is always null (no dispatch is attributed to a
-    // name). Nothing in the SNAPSHOT can tell the two apart — the file name is
-    // just the key, and learning which keys are names would mean reading
-    // `handlers.json` from a port that deliberately reads only the mail dir.
-    // The live trail CAN tell (`mail.cursorAdvance` carries `instance` exactly
-    // when the two differ), so the picture is recoverable from the stream;
-    // making the snapshot say it is `canvas-instances`' decision to make, with
-    // its sub-lanes. Left as an honest gap rather than papered over with a
-    // heuristic that would guess a mailbox's kind from its name.
+    // A NAMED MAILBOX IS NOT A SESSION (ADR-0018 d3, closed by
+    // `canvas-instances`). `c.Session` is a cursor KEY, which for a registered
+    // mailbox is its `--as` name — a name no window is ever called. This used
+    // to report those as present sessions, so a canvas showed a window that
+    // does not exist and could never decay: its age is always null, because no
+    // dispatch is ever attributed to a name. `Named` is now decided from the
+    // registrations above, and a named cursor contributes no presence at all.
     //
     // Presence = cursor files ∪ recently-dispatched sessions (ADR-0016 d14).
     // Both halves are INFERENCE: the first says "this session was delivered to
@@ -328,6 +341,7 @@ public sealed class ApiReadModel
         foreach (var c in cursors)
         {
             if (c.Session is null) continue;   // a sessionless reader has no presence to infer
+            if (c.Named) continue;             // …and a declared mailbox is a NAME, never a window
             if (!roles.TryGetValue(c.Session, out var list)) roles[c.Session] = list = [];
             if (!list.Contains(c.Role)) list.Add(c.Role);
         }

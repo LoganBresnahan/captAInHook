@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore, type MailStreamState } from "./store.ts";
-import { deliveriesFor, label as cursorLabel, nudgesFor, opportunities, threadOf } from "./mail.ts";
+import {
+  accepts, deliveriesFor, nudgesFor, opportunities, threadOf,
+} from "./mail.ts";
 import {
   buildScene, canvasHeight, cardLines, cardMetrics, clampView, cursorKey, fitView, mapX, sceneSummary,
   sessionLabel, slotPixels, tierFor, zoomView,
@@ -273,6 +275,7 @@ export function MailPanel() {
               ))}
             </g>
             <Threads scene={scene} canvas={canvas} tier={tier} width={width} />
+            <Forwards scene={scene} canvas={canvas} tier={tier} width={width} />
             <Spine scene={scene} state={mail} canvas={canvas} tier={tier} width={width} />
             <LaneHeads scene={scene} tier={tier} />
           </svg>
@@ -394,11 +397,31 @@ function LaneHeads({ scene, tier }: { scene: MailScene; tier: MailTier }) {
               <text className="lane-noreader" x={12} y={lane.y + 41} style={{ fontSize: 10 }}>
                 {!lane.hasReader ? "no reader" : lane.counts.expired > 0 ? `${lane.counts.expired} spent` : ""}
               </text>
+              {/* A sub-lane per MAILBOX (ADR-0018 d3/d7). A DECLARED one is
+                  named by the operator, so it is spelled out whole — that name
+                  is how a sender reaches it — while a window's mailbox is a
+                  session id, shortened as it always was because nobody types
+                  one. A dead one keeps its name and says so: the corpse is the
+                  thing you are meant to see. */}
               {lane.tracks.map((t) => (
-                <text key={t.key} className={`lane-session presence-${t.presence}`} x={12} y={t.y + 4}
-                  style={{ fontSize: 10 }} data-track-label={t.key}>
-                  {t.session === null ? "sessionless" : shortSession(t.session)}
+                <text key={t.key}
+                  className={`lane-session presence-${t.presence}${t.named ? " is-named" : ""}${t.dead !== null ? " is-dead" : ""}`}
+                  x={12} y={t.y + 4} style={{ fontSize: 10 }} data-track-label={t.key}
+                  data-named={t.named ? "yes" : undefined} data-dead={t.dead !== null ? "yes" : undefined}>
+                  {/* Only the NAME is struck: the strike says "this mailbox is
+                      finished", and striking the words that explain WHY would
+                      make the one legible thing on a greyed row the hardest to
+                      read. */}
+                  <tspan className={t.dead !== null ? "is-struck" : undefined}>
+                    {t.session === null ? "sessionless" : t.named ? t.session : shortSession(t.session)}
+                  </tspan>
                   {t.deliveries !== null ? ` · d${t.deliveries}` : ""}
+                  {/* Just the word here: the gutter is 168px and what is
+                      STRANDED is said on the track itself, where there is room
+                      for the sentence. A count that spills out of the gutter
+                      and into the ledger is the overflow ADR-0015 d5 opens
+                      with. */}
+                  {t.dead !== null ? " · dead" : ""}
                 </text>
               ))}
             </>
@@ -458,6 +481,36 @@ function ThreadLink(
       data-late={t.late ? "true" : undefined}>
       <path className="thread-path" d={d} fill="none" />
       <circle className="thread-end" cx={x2} cy={y2} r={3} />
+    </g>
+  );
+}
+
+/** The dead→live joins (ADR-0018 d6): what a reaper carried out of a mailbox
+ * nobody reads into one somebody does. Drawn like a thread link and
+ * deliberately not the same as one — a thread is a conversation, a forward is a
+ * rescue — so it takes the same curve and its own class, and it points at the
+ * COPY: that is the end a reader can still do something about. Suppressed at
+ * the far tier for `Threads`' reason. */
+function Forwards(
+  { scene, canvas, tier, width }: { scene: MailScene; canvas: MailView; tier: MailTier; width: number },
+) {
+  if (tier === "far" || scene.forwards.length === 0) return null;
+  const lift = (GLYPH_H - 10 - glyphHeight(tier)) / 2;
+  return (
+    <g className="mail-forwards" clipPath="url(#mailLedgerClip)" aria-hidden="true">
+      {scene.forwards.map((f) => {
+        const x1 = mapX(canvas, f.x1), x2 = mapX(canvas, f.x2);
+        const y1 = f.y1 + lift, y2 = f.y2 + lift;
+        if ((x1 < LEDGER_LEFT && x2 < LEDGER_LEFT) || (x1 > width && x2 > width)) return null;
+        const arc = Math.max(18, Math.min(64, Math.abs(y2 - y1) / 2 + 18));
+        return (
+          <g key={`${f.originalOffset}-${f.copyOffset}`} className="forward-link"
+            data-forward={`${f.originalOffset}->${f.copyOffset}`} data-forward-source={f.source}>
+            <path className="forward-path" d={`M ${x1} ${y1} C ${x1} ${y1 - arc}, ${x2} ${y2 - arc}, ${x2} ${y2}`} fill="none" />
+            <circle className="forward-end" cx={x2} cy={y2} r={3} />
+          </g>
+        );
+      })}
     </g>
   );
 }
@@ -709,15 +762,18 @@ function Track(
   const y = track.y;
   const cx = track.x === null ? null : mapX(canvas, track.x);
   return (
-    <g className={`mail-track presence-${track.presence}${track.uncertain !== null ? " is-uncertain" : ""}`}
+    <g className={`mail-track presence-${track.presence}${track.uncertain !== null ? " is-uncertain" : ""}`
+        + `${track.dead !== null ? " is-dead" : ""}${track.named ? " is-named" : ""}`}
       data-track={track.key} data-presence={track.presence} data-pickup={track.pickup ?? undefined}
-      data-motion={track.motion ?? undefined}
+      data-motion={track.motion ?? undefined} data-address={track.address}
+      data-dead={track.dead !== null ? "yes" : undefined} data-named={track.named ? "yes" : undefined}
       data-uncertain={track.uncertain !== null ? "yes" : undefined}>
       <title>
-        {`${cursorLabel(track.role, track.session)} — ${track.offset === null ? "position unknown"
+        {`${track.address} — ${track.offset === null ? "position unknown"
           : `at byte ${track.offset}${track.atFrontier ? " (the frontier: nothing pending ahead)" : ""}`}`
           + `; ${track.pendingCount} pending, ${track.expiredCount} spent`
-          + (track.uncertain !== null ? `; uncertain: ${track.uncertain}` : "")}
+          + (track.uncertain !== null ? `; uncertain: ${track.uncertain}` : "")
+          + (track.dead !== null ? `; the watcher calls this mailbox dead — ${track.dead}` : "")}
       </title>
       <line className="track-rail" x1={LEDGER_LEFT} y1={y} x2={width - 8} y2={y} />
       {cx !== null && <line className="track-read" x1={LEDGER_LEFT} y1={y} x2={cx} y2={y} />}
@@ -761,7 +817,19 @@ function Track(
           <path d="M 0 -9 L 9 0 L 0 9 Z" />
         </g>
       )}
-      {track.reanchored && tier !== "far" && (
+      {/* A corpse says so ON the track, not only in the gutter: the mail is
+          still hanging above it and a reader has to know nobody is coming for
+          it. The word is the WATCHER's — a `mail.nudge` named this address —
+          never a judgement the browser made (ADR-0018 d6). */}
+      {track.dead !== null && tier !== "far" && (
+        <text className="track-flag is-dead" x={LEDGER_LEFT + 6} y={y + 12} style={{ fontSize: 9 }}
+          data-track-dead={track.address}>
+          dead — nobody reads this mailbox
+          {track.pendingCount > 0 ? ` · ${track.pendingCount} stranded` : ""}
+          {track.forwards.length > 0 ? ` · forwarded to ${track.forwards[track.forwards.length - 1].to}` : ""}
+        </text>
+      )}
+      {track.reanchored && track.dead === null && tier !== "far" && (
         <text className="track-flag" x={LEDGER_LEFT + 6} y={y + 12} style={{ fontSize: 9 }}>re-anchored</text>
       )}
     </g>
@@ -795,6 +863,10 @@ const THREAD_LEGEND: { key: string; swatch: string; label: string }[] = [
   { key: "answered", swatch: "→", label: "request → the answer that closed it" },
   { key: "late", swatch: "◆", label: "late answer — another closed it first" },
   { key: "nudged", swatch: "▔", label: "nudged: a turn was woken about it" },
+  // The two ADR-0018 d6 facts a reader has to be able to name: a mailbox
+  // nobody reads any more, and the copy a reaper carried out of one.
+  { key: "forwarded", swatch: "⇢", label: "forwarded out of a dead mailbox — a new envelope" },
+  { key: "dead", swatch: "⌁", label: "dead mailbox: standing with nobody behind it" },
 ];
 
 function Legend() {
@@ -833,7 +905,11 @@ function Detail(
 ) {
   if (line === null) return null;
   const e = line.envelope;
-  const readers = state.cursors.filter((c) => e !== null && c.role === e.to);
+  // The recipient predicate again, and the one place it is easiest to forget:
+  // "who reads this envelope" is `MailAddress.Accepts`, not a role comparison —
+  // a unicast is read by ONE mailbox, and listing every sibling's standing
+  // under it would be the card contradicting the lane (ADR-0018 d4).
+  const readers = state.cursors.filter((c) => e !== null && accepts(c, e.to));
   const closedBy = e === null ? undefined : state.closedBy[e.id];
   const thread = e === null ? null : threadOf(state, e);
   const nudges = nudgesFor(state, line.offset);
@@ -891,6 +967,14 @@ function Detail(
               </>}
             </dd></div>}
             {e.replyTo !== null && <div><dt>reply to</dt><dd><code data-detail-reply-to>{e.replyTo}</code></dd></div>}
+            {/* A COPY, and where it was stranded (ADR-0018 d6/d8). Both halves,
+                because the id says which envelope and the address says whose
+                mailbox — the half no reader could recover from the original's
+                `to` when that is a bare role a dozen mailboxes hold. */}
+            {e.forwardedFrom !== null && <div><dt>forwarded</dt><dd data-detail-forwarded-from={e.forwardedFrom.id}>
+              from <code>{e.forwardedFrom.address}</code>, which held <code>{e.forwardedFrom.id}</code>
+              {" "}— <span className="muted">a new envelope; the original stays on the ledger, unread</span>
+            </dd></div>}
             <div><dt>ttl</dt><dd>{e.ttlDeliveries === null
               ? <>none — unicast, delivered once to <code>{e.to}</code></>
               : <>{e.ttlDeliveries} delivery opportunit{e.ttlDeliveries === 1 ? "y" : "ies"}</>}</dd></div>

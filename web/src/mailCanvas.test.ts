@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { MailDto } from "./api.gen.ts";
 import type { TrailLine } from "./store.ts";
-import { seedMail, reduceMail, projectCursor, lineStatus, rolesOf, type MailState } from "./mail.ts";
+import {
+  seedMail, reduceMail, projectCursor, lineStatus, rolesOf, accepts, roleOf, type MailState,
+} from "./mail.ts";
 import {
   buildScene, canvasHeight, cardLines, cardMetrics, clampView, cursorKey, fitView, mapX, sceneSummary,
   slotPixels, threadLine, tierFor, unmapX, xForOffset, zoomView,
@@ -54,22 +56,30 @@ for (const sc of golden.scenarios) {
     assert.deepEqual(scene.lanes.map((l) => l.role), rolesOf(state));
 
     for (const lane of scene.lanes) {
+      // A lane is a ROLE and a unicast lives in it (ADR-0018 d4): membership is
+      // the address's role half, never the address whole — the old comparison
+      // gave `main@laptop-a` a lane of its own.
       const cursors = state.cursors.filter((c) => c.role === lane.role);
-      const mine = state.lines.filter((l) => l.envelope !== null && l.envelope.to === lane.role);
+      const mine = state.lines.filter((l) => l.envelope !== null && roleOf(l.envelope.to) === lane.role);
 
       // Exactly this role's mail, in ledger order, at its ledger position.
       assert.deepEqual(lane.glyphs.map((g) => g.offset), mine.map((l) => l.offset));
       for (const g of lane.glyphs) {
         const line = mine.find((l) => l.offset === g.offset)!;
         assert.equal(g.id, line.envelope!.id);
+        assert.equal(g.address, line.envelope!.to);
         assert.ok(Math.abs(g.x - (xForOffset(scene, g.offset) + SLOT_PAD / 2)) < 1e-9,
           "a glyph must sit at its own ledger offset");
         // Per-cursor standing is the reducer's, verbatim — the canvas never
-        // computes a status of its own.
+        // computes a status of its own — over exactly the cursors that MAY read
+        // this envelope. A sibling that cannot is absent rather than listed as
+        // `foreign`: a unicast hangs on its own sub-lane and nowhere else.
+        const readers = cursors.filter((c) => accepts(c, line.envelope!.to));
         assert.deepEqual(
           g.perCursor,
-          cursors.map((c) => ({ key: cursorKey(c), session: c.session, status: lineStatus(state, c, line) })));
-        if (cursors.length === 0) assert.equal(g.status, "no-reader");
+          readers.map((c) => ({ key: cursorKey(c), session: c.session, status: lineStatus(state, c, line) })));
+        assert.ok(g.perCursor.every((p) => p.status !== "foreign"), "a track that cannot read it is not shown holding it");
+        if (readers.length === 0) assert.equal(g.status, "no-reader");
       }
 
       // Envelopes never overlap: one ledger line, one slot.
@@ -79,7 +89,14 @@ for (const sc of golden.scenarios) {
 
       // One track per cursor, at the position the reducer holds, carrying
       // exactly the held/expired set `projectCursor` reports.
-      assert.deepEqual(lane.tracks.map((t) => t.key), cursors.map(cursorKey));
+      // One track per cursor — order is the canvas's (declared mailboxes first),
+      // membership is the reducer's.
+      assert.deepEqual([...lane.tracks.map((t) => t.key)].sort(), cursors.map(cursorKey).sort());
+      assert.deepEqual(
+        lane.tracks.map((t) => t.named),
+        [...lane.tracks].map((t) => cursors.find((c) => cursorKey(c) === t.key)!.named));
+      assert.ok(lane.tracks.every((t, i, all) => i === 0 || !(t.named && !all[i - 1].named)),
+        "declared mailboxes sort ahead of windows");
       for (const t of lane.tracks) {
         const c = cursors.find((x) => cursorKey(x) === t.key)!;
         const p = projectCursor(c);
@@ -610,4 +627,104 @@ test("the spoken summary names what is WAITING on a person: awaiting requests, l
 
   const open = seedMail(scenario("nudged-and-late-answer").before, 500);
   assert.match(sceneSummary(buildScene(open), open), /1 request\(s\) awaiting an answer/);
+});
+
+// ---- instances: sub-lanes, corpses and the forward link (ADR-0018 d4/d6/d7) -------
+
+test("scene: a unicast hangs in its role's lane, on ONE sub-lane", () => {
+  const state = stateOf(scenario("named-instance-and-unicast").after);
+  const scene = buildScene(state);
+
+  // One lane, not three: `main@laptop-a` and `main@laptop-b` are addresses on
+  // the `main` lane, and a top-level lane per address is the picture this slice
+  // replaced.
+  assert.deepEqual(scene.lanes.map((l) => l.role), ["main"]);
+  const lane = scene.lanes[0];
+  const glyph = (id: string) => lane.glyphs.find((g) => g.id === id)!;
+
+  assert.equal(glyph("m-01").instance, null, "a broadcast belongs to the whole lane");
+  assert.equal(glyph("u-a").instance, "laptop-a");
+  assert.equal(glyph("u-a").address, "main@laptop-a");
+
+  // The broadcast is on both tracks; the unicast is on exactly the one mailbox
+  // that may take it; the sibling's is on none — and `no-reader` says so.
+  assert.deepEqual(glyph("m-01").perCursor.map((p) => p.session).sort(), ["laptop-a", "s-1"]);
+  assert.deepEqual(glyph("u-a").perCursor.map((p) => p.session), ["laptop-a"]);
+  assert.deepEqual(glyph("u-b").perCursor, []);
+  assert.equal(glyph("u-b").status, "no-reader");
+});
+
+test("scene: a declared mailbox is a durable sub-lane and sorts ahead of a window", () => {
+  const scene = buildScene(stateOf(scenario("named-instance-and-unicast").after));
+  const tracks = scene.lanes[0].tracks;
+
+  assert.deepEqual(tracks.map((t) => [t.address, t.named]),
+    [["main@laptop-a", true], ["main@s-1", false]]);
+  // A track's y is its position in the lane: declared first, and the geometry
+  // agrees with the order rather than only the list.
+  assert.ok(tracks[0].y < tracks[1].y);
+});
+
+test("scene: a dead mailbox is drawn dead — the watcher's word, with what it still holds", () => {
+  // The state BETWEEN the nudge and the reap: the corpse still has standing, so
+  // it is still a track, and the picture can say why it is greyed.
+  const sc = scenario("dead-mailbox-forwarded-and-reaped");
+  let s = stateOf(sc.before);
+  let nudged: MailState | null = null;
+  sc.trail.forEach((text, i) => {
+    const line = JSON.parse(text) as TrailLine;
+    if ((line as { evt?: string }).evt === "mail.reap") return;   // stop short of the disposal
+    s = reduceMail(s, { kind: "line", line, atMs: 2000 + i });
+    if (nudged === null && s.nudges.length > 0) nudged = s;
+  });
+  assert.ok(nudged, "the scenario's trail must pass through a dead-mailbox nudge");
+
+  const track = buildScene(s).lanes.find((l) => l.role === "main")!.tracks
+    .find((t) => t.address === "main@laptop-a")!;
+  assert.match(track.dead!, /dead-mailbox main@laptop-a/);
+  assert.equal(track.pendingCount, 1, "…and it says what is stranded in it");
+  // What the reaper did about it, on the track it did it to.
+  assert.deepEqual(track.forwards.map((f) => [f.source, f.to]), [["main@laptop-a", "maintainer"]]);
+});
+
+test("scene: the forward is a link from the corpse's envelope to the live copy", () => {
+  const sc = scenario("dead-mailbox-forwarded-and-reaped");
+  let s = stateOf(sc.before);
+  sc.trail.forEach((text, i) => {
+    s = reduceMail(s, { kind: "line", line: JSON.parse(text) as TrailLine, atMs: 2000 + i });
+  });
+  const scene = buildScene(s);
+
+  const link = scene.forwards[0];
+  assert.equal(scene.forwards.length, 1);
+  assert.equal(link.source, "main@laptop-a");
+  const original = scene.lanes.find((l) => l.role === "main")!.glyphs.find((g) => g.id === "m-02")!;
+  const copy = scene.lanes.find((l) => l.role === "maintainer")!.glyphs.find((g) => g.id === "fwd-1")!;
+  assert.equal(link.originalOffset, original.offset);
+  assert.equal(link.copyOffset, copy.offset);
+  // It crosses lanes, which is the whole reason it is drawn at all.
+  assert.notEqual(link.y1, link.y2);
+
+  // …and the reaped mailbox leaves no track: its standing is gone, and a
+  // cursor drawn for a mailbox that no longer exists is a false picture.
+  assert.deepEqual(scene.lanes.find((l) => l.role === "main")!.tracks.map((t) => t.address), []);
+});
+
+test("scene: a dead-mailbox nudge marks the CORPSE's lane, not the reaper's", () => {
+  const sc = scenario("dead-mailbox-forwarded-and-reaped");
+  let s = stateOf(sc.before);
+  sc.trail.forEach((text, i) => {
+    s = reduceMail(s, { kind: "line", line: JSON.parse(text) as TrailLine, atMs: 2000 + i });
+  });
+  const scene = buildScene(s);
+
+  // The row's `role` is `reaper` — who was woken — and its `address` is what it
+  // is about. There is no reaper lane on this bus, and the mark belongs where
+  // the stranded envelope hangs.
+  assert.equal(s.nudges[0].role, "reaper");
+  assert.equal(scene.lanes.some((l) => l.role === "reaper"), false);
+  const lane = scene.lanes.find((l) => l.role === "main")!;
+  assert.deepEqual(lane.nudges.map((n) => n.offset),
+    [lane.glyphs.find((g) => g.id === "m-02")!.offset]);
+  assert.equal(lane.nudgesUnplaced, 0);
 });

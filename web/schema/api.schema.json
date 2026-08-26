@@ -592,6 +592,9 @@
                   "null"
                 ]
               },
+              "named": {
+                "type": "boolean"
+              },
               "gen": {
                 "type": "integer"
               },
@@ -679,6 +682,7 @@
             "required": [
               "role",
               "session",
+              "named",
               "gen",
               "head",
               "offset",
@@ -737,6 +741,12 @@
                   "null"
                 ]
               },
+              "instance": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "dispatchId": {
                 "type": [
                   "string",
@@ -783,6 +793,7 @@
             "required": [
               "role",
               "session",
+              "instance",
               "dispatchId",
               "hookEvent",
               "seam",

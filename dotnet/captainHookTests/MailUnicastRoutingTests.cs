@@ -437,4 +437,65 @@ public class MailUnicastRoutingTests
         Assert.Equal(["u-1"], Ids(port.Pending("main", "laptop-a")));
         Assert.Equal(["b-1", "u-2"], Ids(port.Pending("main", "s-9")));
     }
+
+    // ---- every cursor row names its mailbox (slice `canvas-instances`) --------
+
+    /// The advance already carried `instance`; the rest of the cursor family did
+    /// not, and a reader keying on `sessionId` alone therefore charged a named
+    /// mailbox's expiry, refusal, vanish or re-anchor to the WINDOW — a cursor
+    /// that may not exist. The write-when-named rule is the advance's, applied
+    /// everywhere, so every line a pre-ADR-0018 reader has seen keeps its shape.
+    [Fact]
+    public void AnExpiry_NamesTheMailboxThatSpentIt()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, MailFixtures.Envelope(id: "amb-1", to: "main", ttl: 1));
+        var cursors = tmp.Cursors();
+        // Two advances: the first holds it (seenAt 1), the second finds it spent.
+        CursorFixtures.AdvanceOk(cursors, cursors.Pending(Named, "s-77"));
+        CursorFixtures.AdvanceOk(cursors, cursors.Pending(Named, "s-77"));
+
+        var row = Assert.Single(log.Events, e => e.Evt == "mail.expire");
+        Assert.Equal("laptop-a", row.Fields.Data!["instance"]);
+        Assert.Equal("s-77", row.Fields.SessionId);   // …and the window is still who
+    }
+
+    /// A RE-ANCHOR used to put the cursor KEY in `sessionId`, which for a named
+    /// mailbox is a name no window is called — and the read model then inferred
+    /// presence for a session that does not exist. The window goes in
+    /// `sessionId`, the mailbox in `instance`, like every other cursor row.
+    [Fact]
+    public void AReanchor_NamesTheWindowAndTheMailboxSeparately()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, MailFixtures.Envelope(id: "m-01", to: "main"));
+        var cursors = tmp.Cursors();
+        CursorFixtures.AdvanceOk(cursors, cursors.Pending(Named, "s-77"));
+        var path = cursors.CursorPath("main", "laptop-a");
+        File.WriteAllText(path, (MailCursor.TryParse(File.ReadAllText(path), out _)! with { Gen = 4 }).Render());
+
+        cursors.Pending(Named, "s-77");   // the read that re-anchors
+
+        var row = Assert.Single(log.Events, e => e.Evt == "mail.cursorReanchor");
+        Assert.Equal("s-77", row.Fields.SessionId);
+        Assert.Equal("laptop-a", row.Fields.Data!["instance"]);
+    }
+
+    /// …and the unnamed path is byte-identical: no column, because there is
+    /// nothing extra to say when the mailbox IS the window.
+    [Fact]
+    public void AnUnnamedReadersRows_CarryNoInstanceColumn()
+    {
+        using var log = new CapturedLog();
+        using var tmp = new MailStoreTempDir();
+        Send(tmp, MailFixtures.Envelope(id: "amb-1", to: "main", ttl: 1));
+        var cursors = tmp.Cursors();
+        CursorFixtures.AdvanceOk(cursors, cursors.Pending(Unnamed, "s-77"));
+        CursorFixtures.AdvanceOk(cursors, cursors.Pending(Unnamed, "s-77"));
+
+        Assert.DoesNotContain(log.Events.Where(e => e.Src == "mail"),
+            e => e.Fields.Data is { } d && d.ContainsKey("instance"));
+    }
 }

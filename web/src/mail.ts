@@ -142,7 +142,19 @@ export type MailAdvanceMark = {
 
 export type MailCursorState = {
   role: string;
+  /** THE CURSOR KEY, which since ADR-0018 d3 IS the mailbox's instance: `--as`
+   * when a registration named one, else the window's session id. `null` is the
+   * sessionless reader, which has no instance and therefore no address of its
+   * own. */
   session: MailSession;
+  /** Is this a mailbox somebody DECLARED, or a window's own? The key cannot
+   * say — a name and a session id look alike — so the snapshot decides it from
+   * the registrations, and the trail says it by carrying an `instance` column
+   * at all (the engine writes that column exactly when the key is not the
+   * window). A named mailbox is DURABLE: it outlives the window that reads it,
+   * which is why the canvas draws it as a sub-lane and why a dead one is a
+   * corpse rather than a closed tab. */
+  named: boolean;
   gen: number | null;
   head: string | null;
   /** The cursor's read position; null when the reducer has only ever seen a
@@ -177,7 +189,16 @@ export type MailCursorEventKind = "advance" | "deliver" | "expire" | "reanchor" 
  * ledger positions (null per id when it could not resolve one honestly). */
 export type MailDeliveryRecord = {
   role: string;
+  /** THE MAILBOX this pickup moved — the cursor key (`instance ?? sessionId`),
+   * not necessarily the window (ADR-0018 d3). It has to be the key, because
+   * this record is what turns "before the cursor" into "delivered" for one
+   * cursor, and a named mailbox's record filed under the window it was read in
+   * would join to no cursor at all. */
   session: MailSession;
+  /** WHO read it, when that is not the same question — the window the pickup
+   * ran in, or null for a sessionless reader. Display only; nothing joins on
+   * it. */
+  window: MailSession;
   dispatchId: string | null;
   hookEvent: string | null;
   seam: string;
@@ -224,6 +245,29 @@ export type MailNudgeRecord = {
   atMs: number;
 };
 
+/** One `mail.forward` trail line (ADR-0018 d6, slice `reaper-payloads`). Like a
+ * nudge it belongs to no cursor and moves nothing: the mail it names was never
+ * read by the mailbox it came out of, and the copies are ordinary appends that
+ * arrive on their own rows. */
+export type MailForwardRecord = {
+  /** The mailbox the mail was stranded in — role + instance, the trail's own
+   * two columns, joined here into the address a sender would write. */
+  source: string;
+  /** Where the copies went, verbatim as the copies' `to`. */
+  to: string;
+  /** Who did it, as an address. */
+  by: string | null;
+  /** The ORIGINALS that were copied (not the copies' ids — those arrive as
+   * their own `mail.append` rows and carry the link). */
+  forwardedIds: string[];
+  /** Ids this run found already forwarded to this target and skipped. Absent on
+   * a first run; present is the fact that distinguishes "nothing was there"
+   * from "it had already been moved". */
+  skippedIds: string[];
+  ts: string | null;
+  atMs: number;
+};
+
 export type MailNoteKind =
   | "malformed-event"      // a mail.* line the reducer refused to apply
   | "ledger-gap"           // an append landed past where the next line must start
@@ -243,6 +287,8 @@ export type MailNoteKind =
   | "deliver-unknown-cursor"
   | "deliver-unmatched"    // a delivery record naming an envelope the picture cannot place
   | "lock-busy"
+  | "forward"              // stranded mail was copied to a live address (ADR-0018 d6)
+  | "reaped"               // a mailbox's standing was removed; its mail stays on the ledger
   | "unknown-event";       // a mail.* kind this reducer does not know (forward compatibility)
 
 export type MailNote = {
@@ -308,6 +354,15 @@ export type MailState = {
    * fact about the past, and N8's "the snapshot is authoritative" governs
    * STATE, not history. */
   nudges: MailNudgeRecord[];
+  /** Every `mail.forward` this picture watched go out (ADR-0018 d6) — the row
+   * that says somebody moved ANOTHER mailbox's mail. Trail-only history, kept
+   * across a re-seed for `nudges`' reason: a forward that happened is a fact
+   * about the past, and the snapshot is authoritative about STATE, not about
+   * what it did not witness. The dead→live LINK the canvas draws does not come
+   * from here — it comes from the copy's own `forwardedFrom`, which is on the
+   * ledger and survives everything; this is what lets a lane say WHO moved it
+   * and what was skipped as already-moved. */
+  forwards: MailForwardRecord[];
   /** The thread index (ADR-0017 d8): a request's id → the id of the FIRST
    * `answer` that names it in `inReplyTo`. Seeded from the snapshot, which
    * builds it over the WHOLE ledger — a request and its answer routinely sit on
@@ -340,6 +395,11 @@ export type MailInput =
 export const MAIL_NOTES_CAP = 200;
 export const MAIL_DELIVERIES_CAP = 500;
 export const MAIL_NUDGES_CAP = 200;
+/** Forwards are rarer than nudges by construction — one per disposed mailbox,
+ * and a mailbox can only be disposed of once — so the bound exists to keep a
+ * pathological trail from growing the picture without limit, not because a real
+ * bus reaches it. */
+export const MAIL_FORWARDS_CAP = 200;
 
 // ---- helpers ---------------------------------------------------------------------
 
@@ -373,12 +433,73 @@ export function sameSession(a: MailSession, b: MailSession): boolean {
   return (a ?? null) === (b ?? null);
 }
 
+// ---- addresses (ADR-0018 d2/d3/d4) ---------------------------------------------
+//
+// An address is a ROLE — every mailbox holding it, the broadcast this bus began
+// with — or a ROLE@INSTANCE, exactly one mailbox. The three helpers below are
+// the browser's mirror of `MailAddress`, and they are deliberately a PROJECTION
+// of the grammar rather than a second copy of it: an ungrammatical address
+// cannot reach a snapshot or the trail (the engine's parser refuses it at the
+// door), so all this side has to answer is which of the two shapes an
+// already-valid address has. Re-checking `[a-z0-9][a-z0-9-]*` here would be the
+// N8 hazard wearing an address for a hat — two spellings of one grammar, and
+// the browser's would be the one nobody notices drifting.
+
+/** The role half. `main@laptop-a` → `main`; a bare role is its own role. */
+export function roleOf(address: string): string {
+  const at = address.indexOf("@");
+  return at < 0 ? address : address.slice(0, at);
+}
+
+/** The instance half, or null for a broadcast address. */
+export function instanceOf(address: string): string | null {
+  const at = address.indexOf("@");
+  return at < 0 ? null : address.slice(at + 1);
+}
+
+/** How a mailbox is spelled — what a SENDER would write to reach it. The cursor
+ * key IS the address's instance half (d3 as amended: `--as` when a registration
+ * named one, else the window's session id), so this is a rendering and not a
+ * derivation. A sessionless reader has no instance and therefore no address of
+ * its own; it is reachable only through its role. */
+export function addressOf(c: { role: string; session: MailSession }): string {
+  return c.session === null ? c.role : `${c.role}@${c.session}`;
+}
+
+/** THE RECIPIENT PREDICATE — `MailAddress.Accepts`, mirrored (d4).
+ *
+ * A mailbox reads its role's BROADCAST always, plus its own `role@instance`
+ * UNICAST. Naming a mailbox ADDS an address; it never replaces one. A sibling's
+ * unicast is invisible here exactly as it is in the engine, and that invisibility
+ * is the whole reason this is one function called from every site rather than a
+ * comparison written out four times: the C# side keeps ONE `Accepts` for the same
+ * reason, and a browser that mirrored it in three places and forgot the fourth
+ * would paint a sibling's mail as pending on this track — a false picture, which
+ * is worse than no picture (d14). */
+export function accepts(c: { role: string; session: MailSession }, to: string): boolean {
+  return to === c.role || (c.session !== null && to === `${c.role}@${c.session}`);
+}
+
 function byOffset<T extends { offset: number }>(a: T, b: T): number { return a.offset - b.offset; }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function str(v: unknown): string | null { return typeof v === "string" ? v : null; }
+
+/** WHICH MAILBOX a cursor row is about (ADR-0018 d3). Every `mail.*` row that
+ * names a cursor carries `sessionId` = the WINDOW that did the work and, when
+ * the two differ, `instance` = the mailbox the work moved. The cursor key is
+ * the instance when there is one, and the window otherwise — the engine's own
+ * `Instance ?? hookSession`, mirrored.
+ *
+ * Keying on the session alone is not a smaller mistake, it is a different
+ * picture: two windows sharing one `--as` are ONE cursor with one counter, so a
+ * reader that split them would model two, then flag every second advance as
+ * out-of-sequence and ask for a snapshot that says the same thing again. */
+function mailboxKey(d: Record<string, unknown>, session: MailSession): MailSession {
+  return str(d.instance) ?? session;
+}
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) && Number.isInteger(v) ? v : null;
 }
@@ -404,6 +525,7 @@ export function emptyMailState(): MailState {
     deliveries: [],
     deliveriesComplete: false,
     nudges: [],
+    forwards: [],
     closedBy: {},
     hopBudget: null,
     notes: [],
@@ -451,6 +573,7 @@ function cursorFromDto(c: MailCursorDto): MailCursorState {
   return {
     role: c.role,
     session: c.session,
+    named: c.named,
     gen: c.gen,
     head: c.head,
     offset: c.offset,
@@ -488,11 +611,17 @@ function preloadDeliveries(
 ): MailDeliveryRecord[] {
   const out: MailDeliveryRecord[] = [];
   for (const d of dto.deliveries) {
-    const c = cursors.find((x) => x.role === d.role && sameSession(x.session, d.session))
-      ?? blankCursor(d.role, d.session);
-    const { offsets } = resolveDelivery(lines, c, d.role, d.envelopeIds, []);
+    // The record's own key is the MAILBOX (ADR-0018 d3) — `instance` when the
+    // row carried one, else the window — so a `--as` mailbox's history joins to
+    // the cursor that actually holds it. The fold ships both columns verbatim
+    // for exactly this reason; deriving one from the other here would be the
+    // reducer inventing a rule the engine did not send.
+    const key = d.instance ?? d.session;
+    const c = cursors.find((x) => x.role === d.role && sameSession(x.session, key))
+      ?? blankCursor(d.role, key, d.instance !== null);
+    const { offsets } = resolveDelivery(lines, c, d.envelopeIds, []);
     const record: MailDeliveryRecord = {
-      role: d.role, session: d.session, dispatchId: d.dispatchId, hookEvent: d.hookEvent,
+      role: d.role, session: key, window: d.session, dispatchId: d.dispatchId, hookEvent: d.hookEvent,
       seam: d.seam, vehicle: d.vehicle, envelopeIds: [...d.envelopeIds], offsets,
       renderHash: d.renderHash, bytesInjected: d.bytesInjected, ts: d.ts, atMs,
     };
@@ -551,7 +680,12 @@ export function seedMail(dto: MailDto, atMs: number, prev?: MailState): MailStat
     // whose lines have since rotated away must stop claiming a position it can
     // no longer prove. The row's own columns are never touched — only this
     // picture's reading of where they sit.
-    nudges: (prev?.nudges ?? []).map((n) => ({ ...n, offsets: placeById(lines, n.role, n.envelopeIds) })),
+    nudges: (prev?.nudges ?? []).map((n) => ({ ...n, offsets: placeById(lines, nudgeLane(n), n.envelopeIds) })),
+    // Kept for the same reason and re-placed for none: a forward record names
+    // ORIGINALS by id and claims no ledger position of its own — the link the
+    // canvas draws hangs off the copy's `forwardedFrom`, which is on the ledger
+    // this snapshot just replaced.
+    forwards: prev?.forwards ?? [],
     // The snapshot's index REPLACES whatever was folded live: it is built over
     // the whole ledger, so it can only be a superset of what a stream taught us.
     closedBy: { ...dto.closedBy },
@@ -619,6 +753,8 @@ function reduceLine(state: MailState, line: TrailLine, atMs: number): MailState 
       return { ...s, pendingTorn: offset };
     }
     case "mail.nudge": return onNudge(s, data, line, ts, atMs);
+    case "mail.forward": return onForward(s, data, ts, atMs);
+    case "mail.reap": return onReap(s, data, atMs);
     case "mail.lockBusy":
       return note(s, { kind: "lock-busy", severity: "info", role: null, session: null, offset: null,
         message: "the store's append lock was busy — a writer waited or gave up", atMs });
@@ -659,6 +795,15 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
   const hops = d.hops === undefined ? null : nonNeg(d.hops);
   const threadOk = (d.inReplyTo === undefined && d.hops === undefined)
     || (inReplyTo !== null && hops !== null);
+  // `forwardedFrom` rides the trail for `inReplyTo`'s reason and not for
+  // `body`'s (ADR-0018 d8, as amended by `canvas-instances`): the canvas draws
+  // the dead→live link, and a join visible on disk but invisible on the stream
+  // would leave a forward unpaired until the next snapshot. Both halves or
+  // neither — a row with one is a row the store could not have written.
+  const fwd = isRecord(d.forwardedFrom) ? d.forwardedFrom : null;
+  const fwdId = fwd ? str(fwd.id) : null, fwdAddress = fwd ? str(fwd.address) : null;
+  const forwardedFrom = fwdId !== null && fwdAddress !== null ? { id: fwdId, address: fwdAddress } : null;
+  const fwdOk = d.forwardedFrom === undefined || forwardedFrom !== null;
   const agent = from ? str(from.agent) : null, harness = from ? str(from.harness) : null;
   const fromSession = from && from.session !== undefined ? str(from.session) : null;
   // A unicast address carries NO ttl and a role address MUST carry one
@@ -674,8 +819,8 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
     : d.ttlDeliveries === undefined;
   if (id === null || to === null || offset === null || bytes === null || kind === null || topic === null
       || priority === null || !ttlOk || agent === null || harness === null
-      || (from !== null && from.session !== undefined && fromSession === null) || !threadOk) {
-    return refuse(s, "mail.append", "id/to/offset/bytes/from/kind/topic/priority/ttlDeliveries/inReplyTo+hops", atMs, null, null, offset);
+      || (from !== null && from.session !== undefined && fromSession === null) || !threadOk || !fwdOk) {
+    return refuse(s, "mail.append", "id/to/offset/bytes/from/kind/topic/priority/ttlDeliveries/inReplyTo+hops/forwardedFrom", atMs, null, null, offset);
   }
   const line: MailLedgerLine = {
     offset, bytes, terminated: true, hash: null,
@@ -683,7 +828,7 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
       // `inReplyTo`/`hops` DO ride the trail (unlike `ts`, `body`, `prev`),
       // because the live picture has to be able to close a thread the moment
       // its answer lands rather than at the next snapshot.
-      inReplyTo, hops: hops ?? 0, replyTo: null, forwardedFrom: null,
+      inReplyTo, hops: hops ?? 0, replyTo: null, forwardedFrom,
       ttlDeliveries: ttlApplies ? ttl : null, body: null, prev: null },
     errors: [], source: "trail",
   };
@@ -774,7 +919,7 @@ function onAppend(s: MailState, d: Record<string, unknown>, atMs: number): MailS
 function absorbCompleteLine(c: MailCursorState, line: MailLedgerLine): MailCursorState {
   if (c.offset === null || line.offset < c.offset) return c;
   if (line.envelope === null) return { ...c, skippedMalformed: c.skippedMalformed + 1 };
-  if (line.envelope.to !== c.role) return c;
+  if (!accepts(c, line.envelope.to)) return c;   // the recipient predicate, site 1 of 4
   if (c.fresh.some((f) => f.offset === line.offset)) return c;
   const e = line.envelope;
   const fresh = [...c.fresh, { offset: line.offset, id: e.id, priority: e.priority, ttlDeliveries: e.ttlDeliveries }].sort(byOffset);
@@ -794,8 +939,13 @@ function onAdvance(s: MailState, d: Record<string, unknown>, session: MailSessio
       || new Set(deliveredOffsets).size !== deliveredOffsets.length) {   // one position is one envelope
     return refuse(s, "mail.cursorAdvance", "role/offset/deliveries/delivered/deliveredOffsets/held/expired", atMs, role, session, offset);
   }
-  const ev = { role, session, offset, deliveries, deliveredOffsets, heldCount, expiredCount, atMs };
-  const idx = s.cursors.findIndex((c) => c.role === role && sameSession(c.session, session));
+  // WHICH MAILBOX, not which window (ADR-0018 d3): the cursor this advance
+  // moved is keyed by the row's `instance` when it carries one. Presence
+  // already learned the WINDOW from the row's `sessionId`, one layer up — the
+  // two facts are separate and stay separate.
+  const key = mailboxKey(d, session);
+  const ev = { role, session: key, offset, deliveries, deliveredOffsets, heldCount, expiredCount, atMs };
+  const idx = s.cursors.findIndex((c) => c.role === role && sameSession(c.session, key));
   const c = idx >= 0 ? s.cursors[idx] : null;
 
   let next = touchPresence(s, session, role, atMs);
@@ -807,21 +957,21 @@ function onAdvance(s: MailState, d: Record<string, unknown>, session: MailSessio
     // set was the whole retained ledger for the role: reconstructible exactly
     // when the ledger is complete. Anything else joined mid-lineage: its held
     // set is unknown until a snapshot says.
-    const base: MailCursorState = c ?? blankCursor(role, session);
+    const base: MailCursorState = c ?? blankCursor(role, key, str(d.instance) !== null);
     if (deliveries === 1) {
       const r = reconstructFromZero(next, base, ev, "first contact");
       cursor = r.cursor;
       next = r.state;
-      if (c === null) next = note(next, { kind: "advance-unknown-cursor", severity: "info", role, session, offset,
-        message: `first contact: ${label(role, session)} anchored at 0 and advanced to ${offset} (deliveries 1)`, atMs });
+      if (c === null) next = note(next, { kind: "advance-unknown-cursor", severity: "info", role, session: key, offset,
+        message: `first contact: ${label(role, key)} anchored at 0 and advanced to ${offset} (deliveries 1)`, atMs });
     } else {
-      cursor = { ...base, offset, deliveries, held: [], fresh: freshFromLedger(next, role, offset),
+      cursor = { ...base, offset, deliveries, held: [], fresh: freshFromLedger(next, { role, session: key }, offset),
         skippedMalformed: skippedFromLedger(next, offset), reanchored: false, reanchorReason: null,
         uncertain: `first seen mid-lineage at deliveries ${deliveries} — its held set is unknown until a snapshot`,
         lastAdvance: mark(ev, []), lastEventKind: "advance", lastEventAtMs: atMs };
-      next = raise(note(next, { kind: "advance-unknown-cursor", severity: "warn", role, session, offset,
-        message: `${label(role, session)} advanced (deliveries ${deliveries}) but the picture never saw it anchor — held set unknown`, atMs }),
-        "advance-unknown-cursor", `${label(role, session)} joined at deliveries ${deliveries}`, atMs);
+      next = raise(note(next, { kind: "advance-unknown-cursor", severity: "warn", role, session: key, offset,
+        message: `${label(role, key)} advanced (deliveries ${deliveries}) but the picture never saw it anchor — held set unknown`, atMs }),
+        "advance-unknown-cursor", `${label(role, key)} joined at deliveries ${deliveries}`, atMs);
     }
     return replaceCursor(next, idx, cursor);
   }
@@ -850,7 +1000,7 @@ function onAdvance(s: MailState, d: Record<string, unknown>, session: MailSessio
     // any first advance is.
     const r = reconstructFromZero(next, c, ev, "lineage restarted");
     next = note(r.state, { kind: "lineage-restarted", severity: "warn", role, session, offset,
-      message: `${label(role, session)}'s deliveries fell from ${c.deliveries} back to 1 — its cursor file was deleted and re-anchored silently; everything retained redelivered`, atMs });
+      message: `${label(role, key)}'s deliveries fell from ${c.deliveries} back to 1 — its cursor file was deleted and re-anchored silently; everything retained redelivered`, atMs });
     return replaceCursor(next, idx, r.cursor);
   }
   // Out of sequence in a way nothing explains: skipped advances (a gap), a
@@ -863,11 +1013,11 @@ function onAdvance(s: MailState, d: Record<string, unknown>, session: MailSessio
     : deliveries < c.deliveries
       ? `deliveries went from ${c.deliveries} to ${deliveries} while the position moved forward — a restarted lineage whose first advance was never seen`
       : `deliveries jumped from ${c.deliveries} to ${deliveries} — ${deliveries - c.deliveries - 1} advance(s) never seen`;
-  const broken: MailCursorState = { ...c, offset, deliveries, held: [], fresh: freshFromLedger(next, role, offset),
+  const broken: MailCursorState = { ...c, offset, deliveries, held: [], fresh: freshFromLedger(next, { role, session: key }, offset),
     skippedMalformed: skippedFromLedger(next, offset), reanchored: false, reanchorReason: null,
     uncertain: why, lastAdvance: mark(ev, []), lastEventKind: "advance", lastEventAtMs: atMs };
-  next = raise(note(next, { kind: "advance-out-of-sequence", severity: "warn", role, session, offset, message: why, atMs }),
-    "advance-out-of-sequence", `${label(role, session)}: ${why}`, atMs);
+  next = raise(note(next, { kind: "advance-out-of-sequence", severity: "warn", role, session: key, offset, message: why, atMs }),
+    "advance-out-of-sequence", `${label(role, key)}: ${why}`, atMs);
   return replaceCursor(next, idx, broken);
 }
 
@@ -945,7 +1095,7 @@ function applyAdvance(s: MailState, c: MailCursorState, ev: AdvanceEvent): { sta
  * ledger (`since` > 0) it is not, and says so. */
 function reconstructFromZero(s: MailState, c: MailCursorState, ev: AdvanceEvent, why: string): { state: MailState; cursor: MailCursorState } {
   const anchored: MailCursorState = {
-    ...c, offset: 0, deliveries: 0, held: [], fresh: freshFromLedger(s, c.role, 0),
+    ...c, offset: 0, deliveries: 0, held: [], fresh: freshFromLedger(s, c, 0),
     skippedMalformed: skippedFromLedger(s, 0), lastDeliveredId: null,
     reanchored: false, reanchorReason: null,
     uncertain: s.since > 0
@@ -958,18 +1108,18 @@ function reconstructFromZero(s: MailState, c: MailCursorState, ev: AdvanceEvent,
   return r;
 }
 
-function freshFromLedger(s: MailState, role: string, from: number): MailFreshItem[] {
+function freshFromLedger(s: MailState, box: { role: string; session: MailSession }, from: number): MailFreshItem[] {
   return s.lines
-    .filter((l) => l.terminated && l.offset >= from && l.envelope !== null && l.envelope.to === role)
+    .filter((l) => l.terminated && l.offset >= from && l.envelope !== null && accepts(box, l.envelope.to))
     .map((l) => ({ offset: l.offset, id: l.envelope!.id, priority: l.envelope!.priority, ttlDeliveries: l.envelope!.ttlDeliveries }));
 }
 function skippedFromLedger(s: MailState, from: number): number {
   return s.lines.filter((l) => l.terminated && l.offset >= from && l.envelope === null).length;
 }
 
-function blankCursor(role: string, session: MailSession): MailCursorState {
+function blankCursor(role: string, session: MailSession, named = false): MailCursorState {
   return {
-    role, session, gen: null, head: null, offset: null, deliveries: null, lastDeliveredId: null,
+    role, session, named, gen: null, head: null, offset: null, deliveries: null, lastDeliveredId: null,
     held: [], fresh: [], skippedMalformed: 0, reanchored: false, reanchorReason: null,
     origin: "trail", uncertain: null, lastAdvance: null, lastEventKind: null, lastEventAtMs: null,
   };
@@ -978,12 +1128,19 @@ function blankCursor(role: string, session: MailSession): MailCursorState {
 // ---- mail.expire -------------------------------------------------------------------
 
 function onExpire(s: MailState, d: Record<string, unknown>, session: MailSession, atMs: number): MailState {
-  const id = str(d.id), role = str(d.to), offset = nonNeg(d.offset), ttl = num(d.ttlDeliveries), seenAt = nonNeg(d.seenAt);
+  // `to` is the ENVELOPE's address, which for a unicast is `role@instance` —
+  // so the lane it belongs to is its ROLE half, and the mailbox that spent it
+  // is the row's own `instance` (else the window). Reading `to` as a role
+  // outright would look for a cursor on a lane called `main@laptop-a`, which
+  // no reader is ever keyed by.
+  const id = str(d.id), to = str(d.to), offset = nonNeg(d.offset), ttl = num(d.ttlDeliveries), seenAt = nonNeg(d.seenAt);
+  const role = to === null ? null : roleOf(to);
   if (id === null || role === null || offset === null || ttl === null || seenAt === null)
     return refuse(s, "mail.expire", "id/to/offset/ttlDeliveries/seenAt", atMs, role, session, offset);
-  const idx = s.cursors.findIndex((c) => c.role === role && sameSession(c.session, session));
-  if (idx < 0) return note(s, { kind: "expire-mismatch", severity: "warn", role, session, offset,
-    message: `expire for ${label(role, session)}, a cursor the picture does not have`, atMs });
+  const key = mailboxKey(d, session);
+  const idx = s.cursors.findIndex((c) => c.role === role && sameSession(c.session, key));
+  if (idx < 0) return note(s, { kind: "expire-mismatch", severity: "warn", role, session: key, offset,
+    message: `expire for ${label(role, key)}, a cursor the picture does not have`, atMs });
   const c = s.cursors[idx];
   const h = c.held.find((x) => x.offset === offset);
   let next = s;
@@ -992,11 +1149,11 @@ function onExpire(s: MailState, d: Record<string, unknown>, session: MailSession
     // Already dropped by an advance the picture applied (a stale replay), or
     // never held here at all — the second is a divergence.
     if (c.offset !== null && offset < c.offset && !c.fresh.some((f) => f.offset === offset)) return s;
-    next = note(next, { kind: "expire-mismatch", severity: "warn", role, session, offset,
-      message: `the digest expired ${id} at ${offset} but the picture does not hold it for ${label(role, session)}`, atMs });
+    next = note(next, { kind: "expire-mismatch", severity: "warn", role, session: key, offset,
+      message: `the digest expired ${id} at ${offset} but the picture does not hold it for ${label(role, key)}`, atMs });
     cursor = { ...c, uncertain: c.uncertain ?? `expired an envelope (${offset}) the picture did not hold` };
   } else if (c.deliveries !== null && !isExpired(h, c.deliveries)) {
-    next = note(next, { kind: "expire-mismatch", severity: "warn", role, session, offset,
+    next = note(next, { kind: "expire-mismatch", severity: "warn", role, session: key, offset,
       message: `the digest expired ${id} at ${offset} but the picture's arithmetic (${opportunities(c.deliveries, h.seenAt)} of ${h.ttlDeliveries} opportunities) says it is still held`, atMs });
     cursor = { ...c, uncertain: c.uncertain ?? `expiry arithmetic diverged at ${offset}` };
   }
@@ -1014,17 +1171,22 @@ function onDeliver(s: MailState, d: Record<string, unknown>, session: MailSessio
   const dispatchId = typeof line.dispatchId === "string" ? line.dispatchId : null;
   const hookEvent = typeof line.hookEvent === "string" ? line.hookEvent : null;
 
+  // Presence is the WINDOW's (it really did dispatch); the cursor is the
+  // MAILBOX's (ADR-0018 d3). For a named registration those are two different
+  // names, and filing this record under the window would join it to no cursor
+  // at all — the `delivered` glyph would never appear for a `--as` mailbox.
+  const key = mailboxKey(d, session);
   let next = touchPresence(s, session, role, atMs);
-  const idx = next.cursors.findIndex((c) => c.role === role && sameSession(c.session, session));
+  const idx = next.cursors.findIndex((c) => c.role === role && sameSession(c.session, key));
   let c = idx >= 0 ? next.cursors[idx] : null;
 
   if (c === null) {
     // A delivery proves a cursor exists (only an advance that succeeded emits
     // one) — but not WHERE it is. Record the fact, place nothing.
-    c = { ...blankCursor(role, session), uncertain: "seen only through a delivery record — position unknown until a snapshot" };
-    next = raise(note(next, { kind: "deliver-unknown-cursor", severity: "warn", role, session, offset: null,
-      message: `a delivery to ${label(role, session)}, a cursor the picture never saw advance`, atMs }),
-      "deliver-unknown-cursor", label(role, session), atMs);
+    c = { ...blankCursor(role, key, str(d.instance) !== null), uncertain: "seen only through a delivery record — position unknown until a snapshot" };
+    next = raise(note(next, { kind: "deliver-unknown-cursor", severity: "warn", role, session: key, offset: null,
+      message: `a delivery to ${label(role, key)}, a cursor the picture never saw advance`, atMs }),
+      "deliver-unknown-cursor", label(role, key), atMs);
   }
 
   // Resolve ids → offsets. First against the advance this delivery belongs
@@ -1033,13 +1195,13 @@ function onDeliver(s: MailState, d: Record<string, unknown>, session: MailSessio
   // (a replay after a re-seed), against consumed lines — accepted only when
   // UNIQUE, since a wrong duplicate is a false picture too. Else null.
   const pool = c.lastAdvance !== null && c.lastAdvance.seam === null ? [...c.lastAdvance.delivered] : [];
-  const { offsets, unmatched } = resolveDelivery(next.lines, c, role, ids, pool);
+  const { offsets, unmatched } = resolveDelivery(next.lines, c, ids, pool);
   if (unmatched.length > 0)
-    next = note(next, { kind: "deliver-unmatched", severity: "warn", role, session, offset: null,
-      message: `a delivery to ${label(role, session)} names ${unmatched.length} envelope(s) the picture cannot place (${unmatched.map((u) => `'${u}'`).join(", ")}) — the trail may be truncated, or the append predates this picture`, atMs });
+    next = note(next, { kind: "deliver-unmatched", severity: "warn", role, session: key, offset: null,
+      message: `a delivery to ${label(role, key)} names ${unmatched.length} envelope(s) the picture cannot place (${unmatched.map((u) => `'${u}'`).join(", ")}) — the trail may be truncated, or the append predates this picture`, atMs });
 
   const record: MailDeliveryRecord = {
-    role, session, dispatchId, hookEvent, seam, vehicle, envelopeIds: [...ids], offsets,
+    role, session: key, window: session, dispatchId, hookEvent, seam, vehicle, envelopeIds: [...ids], offsets,
     renderHash: str(d.renderHash), bytesInjected: nonNeg(d.bytesInjected), ts, atMs,
   };
   // The same ledger line again (a reconnect re-sent it, or a re-seed kept the
@@ -1064,7 +1226,7 @@ function onDeliver(s: MailState, d: Record<string, unknown>, session: MailSessio
  * since a wrong duplicate is a false picture too. Else null — an id the picture
  * cannot place honestly is placed nowhere. */
 function resolveDelivery(
-  lines: MailLedgerLine[], c: MailCursorState, role: string, ids: string[], pool: { id: string; offset: number }[],
+  lines: MailLedgerLine[], c: MailCursorState, ids: string[], pool: { id: string; offset: number }[],
 ): { offsets: (number | null)[]; unmatched: string[] } {
   const offsets: (number | null)[] = [];
   const unmatched: string[] = [];
@@ -1072,7 +1234,7 @@ function resolveDelivery(
     const hit = pool.findIndex((p) => clampField(p.id) === id);
     if (hit >= 0) { offsets.push(pool[hit].offset); pool.splice(hit, 1); continue; }
     const behind = c.offset;
-    const cands = lines.filter((l) => l.envelope !== null && l.envelope.to === role && clampField(l.envelope.id) === id
+    const cands = lines.filter((l) => l.envelope !== null && accepts(c, l.envelope.to) && clampField(l.envelope.id) === id
       && (behind === null || l.offset < behind) && !c.held.some((h) => h.offset === l.offset));
     if (cands.length === 1) { offsets.push(cands[0].offset); continue; }
     offsets.push(null);
@@ -1126,12 +1288,15 @@ function onNudge(s: MailState, d: Record<string, unknown>, line: TrailLine, ts: 
     ? { envelope: nums.envelope, perEnvelope: nums.perEnvelope, roleHour: nums.roleHour, perRoleHour: nums.perRoleHour }
     : null;
 
+  const address = str(d.address);
   const record: MailNudgeRecord = {
     role,
-    address: str(d.address),
+    address,
     workspace: str(d.workspace),
     envelopeIds: [...ids],
-    offsets: placeById(s.lines, role, ids),
+    // Placed on the lane the nudge is ABOUT, which for a dead-mailbox row is
+    // the corpse's, not the reaper's.
+    offsets: placeById(s.lines, address === null ? role : roleOf(address), ids),
     reason,
     budget,
     dispatchId: typeof line.dispatchId === "string" ? line.dispatchId : null,
@@ -1167,16 +1332,97 @@ function sameNudge(a: MailNudgeRecord, b: MailNudgeRecord): boolean {
 function placeById(lines: MailLedgerLine[], role: string, ids: string[]): (number | null)[] {
   return ids.map((id) => {
     const key = clampField(id);
-    const cands = lines.filter((l) => l.envelope !== null && l.envelope.to === role
+    // The LANE, not the address: a dead-mailbox nudge names mail stranded in
+    // `role@instance`, and what is stranded there is a mix of the role's
+    // broadcast and that mailbox's own unicast (ADR-0018 d4). Both live on the
+    // role's lane, which is where the mark is drawn, so that is the set to
+    // search. Unique-or-nothing still decides, as it always did.
+    const cands = lines.filter((l) => l.envelope !== null && roleOf(l.envelope.to) === role
       && clampField(l.envelope.id) === key);
     return cands.length === 1 ? cands[0].offset : null;
   });
+}
+
+/** Which LANE a nudge is about. An ordinary nudge is about its role; a
+ * dead-mailbox nudge (d6) goes TO the reaper and is about somebody else's
+ * mailbox, so its subject is the address's role half — the lane the stranded
+ * mail is actually hanging on. Drawing it on a `reaper` lane would put the mark
+ * where the mail is not, and that lane usually does not exist at all. */
+export function nudgeLane(n: MailNudgeRecord): string {
+  return n.address === null ? n.role : roleOf(n.address);
 }
 
 /** Every nudge that named this ledger position — what the lane draws a mark
  * for, and what the detail card lists. */
 export function nudgesFor(state: MailState, offset: number): MailNudgeRecord[] {
   return state.nudges.filter((n) => n.offsets.includes(offset));
+}
+
+// ---- mail.forward / mail.reap (ADR-0018 d6) ----------------------------------------
+
+/** Fold one `mail.forward`. It moves NO cursor and marks nothing delivered —
+ * the whole point of a forward is that the mailbox it came out of never read
+ * this mail — and it places nothing on the ledger, because the copies arrive as
+ * their own `mail.append` rows carrying `forwardedFrom`, which is the join the
+ * picture actually draws. What this row adds is the half a copy cannot state:
+ * WHO moved it, and what was skipped as already moved. */
+function onForward(s: MailState, d: Record<string, unknown>, ts: string | null, atMs: number): MailState {
+  const role = str(d.role), to = str(d.to);
+  const ids = Array.isArray(d.forwardedIds) && d.forwardedIds.every((x) => typeof x === "string")
+    ? (d.forwardedIds as string[]) : null;
+  const skipped = d.skippedIds === undefined ? [] :
+    (Array.isArray(d.skippedIds) && d.skippedIds.every((x) => typeof x === "string") ? (d.skippedIds as string[]) : null);
+  if (role === null || to === null || ids === null || skipped === null)
+    return refuse(s, "mail.forward", "role/to/forwardedIds/skippedIds", atMs, role, null, null);
+
+  // The source is spelled the way the trail spells every mailbox — `role` plus
+  // `instance` when there is one — and joined here into the address a sender
+  // would write, because that is what the copies' `forwardedFrom.address`
+  // holds and the two have to compare equal.
+  const instance = str(d.instance);
+  const source = instance === null ? role : `${role}@${instance}`;
+  const record: MailForwardRecord = { source, to, by: str(d.by), forwardedIds: [...ids], skippedIds: [...skipped], ts, atMs };
+  // One row, one record: a reconnect that re-sends the line must not double it.
+  // A forward has no sequence number, so its identity is its content — the same
+  // rule the delivery records follow.
+  if (s.forwards.some((f) => sameForward(f, record))) return s;
+  const forwards = [...s.forwards, record];
+  if (forwards.length > MAIL_FORWARDS_CAP) forwards.splice(0, forwards.length - MAIL_FORWARDS_CAP);
+  return note({ ...s, forwards }, { kind: "forward", severity: "info", role, session: instance, offset: null,
+    message: `${ids.length} envelope(s) stranded in ${source} were copied to ${to}${record.by === null ? "" : ` by ${record.by}`}`
+      + `${skipped.length > 0 ? ` (${skipped.length} already forwarded, skipped)` : ""} — the originals stay on the ledger`, atMs });
+}
+
+function sameForward(a: MailForwardRecord, b: MailForwardRecord): boolean {
+  return a.source === b.source && a.to === b.to && a.by === b.by && a.ts === b.ts
+    && a.forwardedIds.length === b.forwardedIds.length && a.forwardedIds.every((id, i) => id === b.forwardedIds[i]);
+}
+
+/** Fold one `mail.reap`: the mailbox's STANDING is gone (ADR-0018 d6), so the
+ * cursor leaves the picture — which is exactly what the next snapshot will say,
+ * since the file it was read from no longer exists.
+ *
+ * Nothing else changes. The mail this box was holding stays on the ledger, at
+ * its offsets, unread: `pendingIds` names it, and after this it is pending for
+ * nobody rather than pending for a corpse. That is the honest picture, and it
+ * is why the reap leaves a NOTE — a track that simply disappeared would read as
+ * a rendering bug, where the note says a member disposed of it. */
+function onReap(s: MailState, d: Record<string, unknown>, atMs: number): MailState {
+  const role = str(d.role);
+  const ids = Array.isArray(d.pendingIds) && d.pendingIds.every((x) => typeof x === "string")
+    ? (d.pendingIds as string[]) : null;
+  if (role === null || ids === null) return refuse(s, "mail.reap", "role/pendingIds", atMs, role, null, null);
+  const instance = str(d.instance);
+  const address = instance === null ? role : `${role}@${instance}`;
+  const by = str(d.by);
+
+  const next = note(s, { kind: "reaped", severity: "warn", role, session: instance, offset: null,
+    message: `${address}'s standing was removed${by === null ? " by hand" : ` by ${by}`}`
+      + `${ids.length === 0 ? " — nothing was pending" : ` — ${ids.length} envelope(s) it never read stay on the ledger, now pending for nobody`}`, atMs });
+  // A reap the picture never had a cursor for is not an anomaly: the mailbox
+  // may have been created and disposed of between two snapshots, or below this
+  // one's `?since=`. Removing nothing is the right answer either way.
+  return { ...next, cursors: next.cursors.filter((c) => !(c.role === role && sameSession(c.session, instance))) };
 }
 
 // ---- the thread, read off the index (ADR-0017 d8) ----------------------------------
@@ -1240,15 +1486,16 @@ function onReanchor(s: MailState, d: Record<string, unknown>, session: MailSessi
   const role = str(d.role), reason = str(d.reason), deliveries = nonNeg(d.deliveries), cause = str(d.cause);
   if (role === null || reason === null || deliveries === null || (cause !== "cursor" && cause !== "store"))
     return refuse(s, "mail.cursorReanchor", "role/reason/cause/deliveries", atMs, role, session, null);
+  const key = mailboxKey(d, session);
   let next = touchPresence(s, session, role, atMs);
-  const idx = next.cursors.findIndex((c) => c.role === role && sameSession(c.session, session));
+  const idx = next.cursors.findIndex((c) => c.role === role && sameSession(c.session, key));
   const known = idx >= 0 ? next.cursors[idx] : null;
   // The counter a re-anchor carries is the disk cursor's (or 0 when the file
   // was unreadable). It cannot be BELOW a count the picture already saw and
   // still be current — a re-anchor read later than an advance carries at
   // least that advance's count — so a lower non-zero count is a replay.
   if (known !== null && known.deliveries !== null && deliveries > 0 && deliveries < known.deliveries) return s;
-  const base = known ?? blankCursor(role, session);
+  const base = known ?? blankCursor(role, key, str(d.instance) !== null);
   // The effective cursor after a re-anchor is Fresh(head, deliveries): offset
   // 0, nothing held, the counter carried. Its fresh set is every retained line
   // for the role — rebuildable only from a ledger that starts at 0 AND is
@@ -1262,37 +1509,39 @@ function onReanchor(s: MailState, d: Record<string, unknown>, session: MailSessi
     : partial ? `re-anchored at 0 but the picture's ledger starts at ${next.since} — the pending set below it is unknown` : null;
   const cursor: MailCursorState = {
     ...base, offset: 0, deliveries, held: [],
-    fresh: storeChanged ? [] : freshFromLedger(next, role, 0),
+    fresh: storeChanged ? [] : freshFromLedger(next, { role, session: key }, 0),
     skippedMalformed: storeChanged ? 0 : skippedFromLedger(next, 0), lastDeliveredId: null,
     reanchored: true, reanchorReason: reason, uncertain,
     lastAdvance: null, lastEventKind: "reanchor", lastEventAtMs: atMs,
   };
-  next = note(next, { kind: "reanchor", severity: "warn", role, session, offset: 0,
-    message: `${label(role, session)} re-anchored at 0 (${reason}) — retained mail for the role is pending again; deliveries ${deliveries} carried`, atMs });
+  next = note(next, { kind: "reanchor", severity: "warn", role, session: key, offset: 0,
+    message: `${label(role, key)} re-anchored at 0 (${reason}) — retained mail for the role is pending again; deliveries ${deliveries} carried`, atMs });
   if (storeChanged)
-    next = raise(note(next, { kind: "store-changed", severity: "warn", role, session, offset: null,
-      message: `the store changed under ${label(role, session)} (${reason}) — every line in this picture is suspect; re-snapshot`, atMs }),
+    next = raise(note(next, { kind: "store-changed", severity: "warn", role, session: key, offset: null,
+      message: `the store changed under ${label(role, key)} (${reason}) — every line in this picture is suspect; re-snapshot`, atMs }),
       "store-changed", reason, atMs);
   else if (partial)
-    next = raise(note(next, { kind: "reanchor-partial", severity: "warn", role, session, offset: 0,
-      message: `${label(role, session)} re-anchored below the picture's since (${next.since}) — re-snapshot to see what is pending`, atMs }),
-      "reanchor-partial", label(role, session), atMs);
+    next = raise(note(next, { kind: "reanchor-partial", severity: "warn", role, session: key, offset: 0,
+      message: `${label(role, key)} re-anchored below the picture's since (${next.since}) — re-snapshot to see what is pending`, atMs }),
+      "reanchor-partial", label(role, key), atMs);
   return replaceCursor(next, idx, cursor);
 }
 
 function onRefuse(s: MailState, d: Record<string, unknown>, session: MailSession, atMs: number): MailState {
   const role = str(d.role) ?? "?", reason = str(d.reason) ?? "(no reason)";
-  const next = note(s, { kind: "refuse", severity: "info", role, session, offset: null,
-    message: `${label(role, session)}: an advance was refused (${reason}) — the mail stays pending; usually a concurrent delivery winning the race`, atMs });
-  return stampCursor(next, role, session, "refuse", atMs);
+  const key = mailboxKey(d, session);
+  const next = note(s, { kind: "refuse", severity: "info", role, session: key, offset: null,
+    message: `${label(role, key)}: an advance was refused (${reason}) — the mail stays pending; usually a concurrent delivery winning the race`, atMs });
+  return stampCursor(next, role, key, "refuse", atMs);
 }
 
 function onVanished(s: MailState, d: Record<string, unknown>, session: MailSession, atMs: number): MailState {
   const role = str(d.role) ?? "?";
+  const key = mailboxKey(d, session);
   const viewDeliveries = nonNeg(d.viewDeliveries);
-  const next = note(s, { kind: "vanished", severity: "warn", role, session, offset: null,
-    message: `${label(role, session)}'s cursor file vanished under a view read at deliveries ${viewDeliveries ?? "?"} — the advance proceeds as a fresh lineage; mail it consumed may redeliver`, atMs });
-  return stampCursor(next, role, session, "vanished", atMs);
+  const next = note(s, { kind: "vanished", severity: "warn", role, session: key, offset: null,
+    message: `${label(role, key)}'s cursor file vanished under a view read at deliveries ${viewDeliveries ?? "?"} — the advance proceeds as a fresh lineage; mail it consumed may redeliver`, atMs });
+  return stampCursor(next, role, key, "vanished", atMs);
 }
 
 // ---- shared mutations ------------------------------------------------------------
@@ -1414,7 +1663,10 @@ export type MailLineStatus =
 export function lineStatus(s: MailState, c: MailCursorState, line: MailLedgerLine): MailLineStatus {
   if (!line.terminated) return "torn";
   if (line.envelope === null) return "unreadable";
-  if (line.envelope.to !== c.role) return "foreign";
+  // The recipient predicate, site 4 of 4 — and the one whose failure is
+  // loudest: a sibling's unicast drawn as pending on this track is the false
+  // picture d4's verify note names.
+  if (!accepts(c, line.envelope.to)) return "foreign";
   if (c.offset === null || c.deliveries === null) return "unknown";
   const h = c.held.find((x) => x.offset === line.offset);
   if (h !== undefined) return isExpired(h, c.deliveries) ? "expired" : "held";
@@ -1444,9 +1696,38 @@ export function presenceTier(p: MailPresenceEntry, nowMs: number): MailPresenceT
  * whose mail is all behind it. Sorted for stable lanes. */
 export function rolesOf(s: MailState): string[] {
   const set = new Set<string>();
-  for (const l of s.lines) if (l.envelope !== null) set.add(l.envelope.to);
+  // A LANE IS A ROLE, and a unicast envelope's lane is its role half (ADR-0018
+  // d1/d4). Adding `to` whole would give `main@laptop-a` a top-level lane of
+  // its own, beside `main`, as if the two were unrelated addresses — which is
+  // precisely the picture this slice exists to stop drawing: an instance is a
+  // sub-lane of its role, because a mailbox named there reads the role's
+  // broadcast too.
+  for (const l of s.lines) if (l.envelope !== null) set.add(roleOf(l.envelope.to));
   for (const c of s.cursors) set.add(c.role);
   return [...set].sort();
+}
+
+/** The mailboxes a `mail.nudge` has named as DEAD, newest row per address
+ * (ADR-0018 d6). The address rides only a dead-mailbox nudge — an ordinary
+ * nudge is about a role and names none — so its presence IS the discriminator,
+ * and the picture never parses the reason's prose to learn what happened.
+ *
+ * This is READ off the nudge history rather than re-derived from cursors and
+ * presence: "is this mailbox dead" is the watcher's rule (an instance mailbox,
+ * unregistered, no live session, quiet past a threshold), and a second
+ * implementation of it in the browser would be N8 exactly — two answers to one
+ * question, and the browser's would be the one nobody notices drifting. What
+ * the canvas shows is that the WATCHER said so, which is a fact with a row
+ * behind it. */
+export function deadNudgeFor(s: MailState, address: string): MailNudgeRecord | null {
+  let last: MailNudgeRecord | null = null;
+  for (const n of s.nudges) if (n.address === address) last = n;
+  return last;
+}
+
+/** Every forward that moved mail OUT of this mailbox, oldest first. */
+export function forwardsFrom(s: MailState, address: string): MailForwardRecord[] {
+  return s.forwards.filter((f) => f.source === address);
 }
 
 export function findCursor(s: MailState, role: string, session: MailSession): MailCursorState | null {

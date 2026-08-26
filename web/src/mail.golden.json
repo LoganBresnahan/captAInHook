@@ -310,6 +310,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "58d33f5a098f9d3c32a48f2c997aa29ea5b67f2579721acfb53a51d067028c6e",
             "offset": 937,
@@ -508,6 +509,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "74741ad441eb905cfcd4024fc87e3735ea2758ba2b1117b8cdcf2cec12f0d673",
             "offset": 971,
@@ -757,6 +759,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 910,
@@ -867,6 +870,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "87d5840a735057a56695c4f3c76d8a5504554a6b1c1db4106af7358063f63729",
             "offset": 605,
@@ -1042,6 +1046,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "87d5840a735057a56695c4f3c76d8a5504554a6b1c1db4106af7358063f63729",
             "offset": 1209,
@@ -1152,6 +1157,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 604,
@@ -1289,6 +1295,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 906,
@@ -1304,6 +1311,7 @@
           {
             "role": "main",
             "session": "s-2",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 906,
@@ -1421,6 +1429,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 604,
@@ -1557,6 +1566,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 906,
@@ -1656,6 +1666,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 302,
@@ -1779,6 +1790,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 302,
@@ -1871,6 +1883,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "4a4bf8d7f264adf0bde3a0b9af3451082167fa1d4193507bf3e828b577d4b794",
             "offset": 908,
@@ -1996,6 +2009,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "4a4bf8d7f264adf0bde3a0b9af3451082167fa1d4193507bf3e828b577d4b794",
             "offset": 1210,
@@ -2081,6 +2095,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "4a4bf8d7f264adf0bde3a0b9af3451082167fa1d4193507bf3e828b577d4b794",
             "offset": 908,
@@ -2179,6 +2194,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "4a4bf8d7f264adf0bde3a0b9af3451082167fa1d4193507bf3e828b577d4b794",
             "offset": 908,
@@ -2289,6 +2305,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 604,
@@ -2424,6 +2441,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 906,
@@ -2534,6 +2552,7 @@
           {
             "role": "main",
             "session": null,
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 302,
@@ -2642,6 +2661,7 @@
           {
             "role": "main",
             "session": null,
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 604,
@@ -2826,6 +2846,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 604,
@@ -3036,6 +3057,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 604,
@@ -3155,6 +3177,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 302,
@@ -3271,6 +3294,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 604,
@@ -3410,6 +3434,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 906,
@@ -3491,6 +3516,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
             "offset": 302,
@@ -3513,6 +3539,507 @@
             "lastDispatchAgeMs": null
           }
         ],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
+      }
+    },
+    {
+      "name": "named-instance-and-unicast",
+      "doc": "ADR-0018 d3/d4 on the canvas's side: a NAMED mailbox (`mail digest --as laptop-a`) beside an unnamed window on the same role, a broadcast both may read, this mailbox's own unicast, and a SIBLING's unicast that neither may. The reducer must key the named cursor by its INSTANCE (the `instance` column on the advance, not the window's sessionId — keying on the session would model two cursors for one file and flag every second advance) and must mirror the recipient predicate: a mailbox reads its role's broadcast always plus its own `role@instance`, never a sibling's.",
+      "since": 0,
+      "exact": true,
+      "expectUncertain": [],
+      "before": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
+          "gen": 1,
+          "lines": 3,
+          "bytes": 886,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 886,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 301,
+            "terminated": true,
+            "hash": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
+            "envelope": {
+              "id": "m-01",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          },
+          {
+            "offset": 302,
+            "bytes": 291,
+            "terminated": true,
+            "hash": "3442fdc900ed8eaf10f6e03c51054e6030d72a93e4f50e1891293f0ac2d41213",
+            "envelope": {
+              "id": "u-a",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-a",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1"
+            },
+            "errors": []
+          },
+          {
+            "offset": 594,
+            "bytes": 291,
+            "terminated": true,
+            "hash": "406fa0b9f44fb6772f35a1aeee08b3435b6335fd7905439e19c8ef47b0584bb5",
+            "envelope": {
+              "id": "u-b",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-b",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "3442fdc900ed8eaf10f6e03c51054e6030d72a93e4f50e1891293f0ac2d41213"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [],
+        "presence": [],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
+      },
+      "trail": [
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-77\",\"data\":{\"role\":\"main\",\"offset\":886,\"delivered\":2,\"deliveredOffsets\":[0,302],\"held\":0,\"expired\":0,\"deliveries\":1,\"instance\":\"laptop-a\"}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.deliver\",\"dispatchId\":\"d-1\",\"sessionId\":\"s-77\",\"hookEvent\":\"UserPromptSubmit\",\"msg\":\"mail delivered into the recipient\\u0027s context\",\"data\":{\"role\":\"main\",\"seam\":\"ambient\",\"vehicle\":\"inject\",\"envelopeIds\":[\"m-01\",\"u-a\"],\"renderHash\":\"6d5f343c3a9b23cd6f942848c84ee5cbe09ea17419f7812e1c78c5045961c04e\",\"bytesInjected\":254,\"instance\":\"laptop-a\"}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.cursorAdvance\",\"sessionId\":\"s-1\",\"data\":{\"role\":\"main\",\"offset\":886,\"delivered\":1,\"deliveredOffsets\":[0],\"held\":0,\"expired\":0,\"deliveries\":1}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.deliver\",\"dispatchId\":\"d-2\",\"sessionId\":\"s-1\",\"hookEvent\":\"UserPromptSubmit\",\"msg\":\"mail delivered into the recipient\\u0027s context\",\"data\":{\"role\":\"main\",\"seam\":\"ambient\",\"vehicle\":\"inject\",\"envelopeIds\":[\"m-01\"],\"renderHash\":\"c7520fedd989e5dcccab0464cd6c16c4f96248b9424ab07b55292d286aaae7af\",\"bytesInjected\":149}}"
+      ],
+      "after": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
+          "gen": 1,
+          "lines": 3,
+          "bytes": 886,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 886,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 301,
+            "terminated": true,
+            "hash": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
+            "envelope": {
+              "id": "m-01",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          },
+          {
+            "offset": 302,
+            "bytes": 291,
+            "terminated": true,
+            "hash": "3442fdc900ed8eaf10f6e03c51054e6030d72a93e4f50e1891293f0ac2d41213",
+            "envelope": {
+              "id": "u-a",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-a",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1"
+            },
+            "errors": []
+          },
+          {
+            "offset": 594,
+            "bytes": 291,
+            "terminated": true,
+            "hash": "406fa0b9f44fb6772f35a1aeee08b3435b6335fd7905439e19c8ef47b0584bb5",
+            "envelope": {
+              "id": "u-b",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-b",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "3442fdc900ed8eaf10f6e03c51054e6030d72a93e4f50e1891293f0ac2d41213"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [
+          {
+            "role": "main",
+            "session": "laptop-a",
+            "named": true,
+            "gen": 1,
+            "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
+            "offset": 886,
+            "frontier": 886,
+            "deliveries": 1,
+            "lastDeliveredId": "u-a",
+            "reanchored": false,
+            "reanchorReason": null,
+            "pending": [],
+            "expired": [],
+            "skippedMalformed": 0
+          },
+          {
+            "role": "main",
+            "session": "s-1",
+            "named": false,
+            "gen": 1,
+            "head": "990615e1b1bd53cb70dcb0d68ee247598aa6ab7f81ce92c3506375a973953fb1",
+            "offset": 886,
+            "frontier": 886,
+            "deliveries": 1,
+            "lastDeliveredId": "m-01",
+            "reanchored": false,
+            "reanchorReason": null,
+            "pending": [],
+            "expired": [],
+            "skippedMalformed": 0
+          }
+        ],
+        "presence": [
+          {
+            "session": "s-1",
+            "roles": [
+              "main"
+            ],
+            "lastDispatchAgeMs": null
+          }
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
+      }
+    },
+    {
+      "name": "dead-mailbox-forwarded-and-reaped",
+      "doc": "The whole disposition, end to end (ADR-0018 d6, slices `watcher-dead-mailbox-rule` + `reaper-payloads`): a named mailbox holds mail nobody will ever read, the watcher raises a dead-mailbox nudge naming the ADDRESS, and the deterministic reaper forwards what was stranded to a live role and then reaps the standing. The reducer must fold the `mail.append` of the COPY with its `forwardedFrom` (which is what draws the dead→live link live rather than a snapshot later), the `mail.forward` row, and the `mail.reap` — after which the mailbox has no cursor at all, exactly as the after-snapshot reports.",
+      "since": 0,
+      "exact": true,
+      "expectUncertain": [],
+      "before": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "cf5433002c21aca1476a8fc41078e99868bc297c0e2ce2f682ed518f36b61645",
+          "gen": 1,
+          "lines": 2,
+          "bytes": 586,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 586,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 292,
+            "terminated": true,
+            "hash": "cf5433002c21aca1476a8fc41078e99868bc297c0e2ce2f682ed518f36b61645",
+            "envelope": {
+              "id": "m-01",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-a",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          },
+          {
+            "offset": 293,
+            "bytes": 292,
+            "terminated": true,
+            "hash": "fea779f2de3eef5d374e25311d2ea5ab0ad223f209d82ec89272b2824e775222",
+            "envelope": {
+              "id": "m-02",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-a",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "cf5433002c21aca1476a8fc41078e99868bc297c0e2ce2f682ed518f36b61645"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [
+          {
+            "role": "main",
+            "session": "laptop-a",
+            "named": false,
+            "gen": 1,
+            "head": "cf5433002c21aca1476a8fc41078e99868bc297c0e2ce2f682ed518f36b61645",
+            "offset": 293,
+            "frontier": 586,
+            "deliveries": 1,
+            "lastDeliveredId": "m-01",
+            "reanchored": false,
+            "reanchorReason": null,
+            "pending": [
+              {
+                "offset": 293,
+                "id": "m-02",
+                "priority": "ambient",
+                "ttlDeliveries": null,
+                "seenAt": null,
+                "opportunities": 0
+              }
+            ],
+            "expired": [],
+            "skippedMalformed": 0
+          }
+        ],
+        "presence": [
+          {
+            "session": "laptop-a",
+            "roles": [
+              "main"
+            ],
+            "lastDispatchAgeMs": null
+          }
+        ],
+        "deliveries": [],
+        "deliveriesComplete": false,
+        "closedBy": {},
+        "hopBudget": 6
+      },
+      "trail": [
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.nudge\",\"dispatchId\":\"n-1\",\"msg\":\"robot nudge raised: the reaper was woken about a dead mailbox\",\"data\":{\"role\":\"reaper\",\"envelopeIds\":[\"m-02\"],\"reason\":\"dead-mailbox main@laptop-a \\u00B7 1 stranded past quiet (2h\\u002B)\",\"budget\":{\"envelope\":1,\"perEnvelope\":2,\"roleHour\":1,\"perRoleHour\":4},\"address\":\"main@laptop-a\"}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"debug\",\"src\":\"mail\",\"evt\":\"mail.append\",\"data\":{\"id\":\"fwd-1\",\"to\":\"maintainer\",\"offset\":586,\"bytes\":331,\"from\":{\"agent\":\"reaper\",\"harness\":\"cli\"},\"kind\":\"status\",\"topic\":\"build\",\"priority\":\"ambient\",\"forwardedFrom\":{\"id\":\"m-02\",\"address\":\"main@laptop-a\"},\"ttlDeliveries\":3}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.forward\",\"msg\":\"stranded mail copied to a live address: the originals stay on the ledger\",\"data\":{\"role\":\"main\",\"to\":\"maintainer\",\"by\":\"reaper\",\"forwardedIds\":[\"m-02\"],\"instance\":\"laptop-a\"}}",
+        "{\"ts\":\"2026-08-15T12:00:00.000Z\",\"lvl\":\"info\",\"src\":\"mail\",\"evt\":\"mail.reap\",\"msg\":\"mailbox reaped: its standing is gone, its mail stays on the ledger\",\"data\":{\"role\":\"main\",\"pendingIds\":[\"m-02\"],\"instance\":\"laptop-a\",\"by\":\"reaper\"}}"
+      ],
+      "after": {
+        "dir": "<mail>",
+        "chain": {
+          "ok": true,
+          "head": "cf5433002c21aca1476a8fc41078e99868bc297c0e2ce2f682ed518f36b61645",
+          "gen": 1,
+          "lines": 3,
+          "bytes": 918,
+          "dirMode": "700",
+          "fileMode": "600",
+          "faults": []
+        },
+        "since": 0,
+        "sinceAligned": true,
+        "frontier": 918,
+        "trailEventId": null,
+        "lines": [
+          {
+            "offset": 0,
+            "bytes": 292,
+            "terminated": true,
+            "hash": "cf5433002c21aca1476a8fc41078e99868bc297c0e2ce2f682ed518f36b61645",
+            "envelope": {
+              "id": "m-01",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-a",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "errors": []
+          },
+          {
+            "offset": 293,
+            "bytes": 292,
+            "terminated": true,
+            "hash": "fea779f2de3eef5d374e25311d2ea5ab0ad223f209d82ec89272b2824e775222",
+            "envelope": {
+              "id": "m-02",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "intent-watcher",
+                "harness": "claude-code",
+                "session": "s-77"
+              },
+              "to": "main@laptop-a",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": null,
+              "ttlDeliveries": null,
+              "body": "opaque prose",
+              "prev": "cf5433002c21aca1476a8fc41078e99868bc297c0e2ce2f682ed518f36b61645"
+            },
+            "errors": []
+          },
+          {
+            "offset": 586,
+            "bytes": 331,
+            "terminated": true,
+            "hash": "295254e31b4e41bdd4daa4af4e4cfc8aa4e049b03840d86277bbd8ebf676c219",
+            "envelope": {
+              "id": "fwd-1",
+              "ts": "2026-08-12T19:00:00Z",
+              "from": {
+                "agent": "reaper",
+                "harness": "cli",
+                "session": null
+              },
+              "to": "maintainer",
+              "kind": "status",
+              "topic": "build",
+              "priority": "ambient",
+              "inReplyTo": null,
+              "hops": 0,
+              "replyTo": null,
+              "forwardedFrom": {
+                "id": "m-02",
+                "address": "main@laptop-a"
+              },
+              "ttlDeliveries": 3,
+              "body": "opaque prose",
+              "prev": "fea779f2de3eef5d374e25311d2ea5ab0ad223f209d82ec89272b2824e775222"
+            },
+            "errors": []
+          }
+        ],
+        "cursors": [],
+        "presence": [],
         "deliveries": [],
         "deliveriesComplete": false,
         "closedBy": {},
@@ -3684,6 +4211,7 @@
           {
             "role": "main",
             "session": "s-1",
+            "named": false,
             "gen": 1,
             "head": "757a6d5c972d40f2b2ad003121af80659dda54b744ba42c739383c64a4a4dac3",
             "offset": 608,

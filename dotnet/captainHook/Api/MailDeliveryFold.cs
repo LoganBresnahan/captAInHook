@@ -39,6 +39,13 @@ namespace CaptainHook.Api;
 public sealed record MailDeliveryLine(
     string Role,
     string? SessionId,
+    /// WHICH MAILBOX took it, when that is not the window that did the work
+    /// (ADR-0018 d3): the row's `instance` column, verbatim and absent when the
+    /// row carried none. Shipped rather than folded into `SessionId`, because
+    /// the picture needs both — the record joins to a CURSOR by the mailbox and
+    /// says which WINDOW read it — and because collapsing them here would be
+    /// this file deriving something, which is exactly what it does not do.
+    string? Instance,
     string? DispatchId,
     string? HookEvent,
     string Seam,
@@ -180,8 +187,8 @@ public static class MailDeliveryFold
                 && b.TryGetInt64(out var bv)) bytes = bv;
 
             return new MailDeliveryLine(
-                role, Str(root, "sessionId"), Str(root, "dispatchId"), Str(root, "hookEvent"),
-                seam, vehicle, ids, Str(data, "renderHash"), bytes, Str(root, "ts"));
+                role, Str(root, "sessionId"), Str(data, "instance"), Str(root, "dispatchId"),
+                Str(root, "hookEvent"), seam, vehicle, ids, Str(data, "renderHash"), bytes, Str(root, "ts"));
         }
         catch (JsonException) { return null; }
     }

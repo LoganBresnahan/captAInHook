@@ -159,7 +159,12 @@ public sealed record MailDto(
 /// for a sessionless reader), `Ts` the wall-clock stamp the line carries; the
 /// browser uses it for display only, never for control flow.
 public sealed record MailDeliveryDto(
-    string Role, string? Session, string? DispatchId, string? HookEvent,
+    string Role, string? Session,
+    /// The mailbox the pickup moved, when that is not the window (ADR-0018 d3).
+    /// Null on every record a pre-ADR-0018 reader has ever seen, and on every
+    /// unnamed one since.
+    string? Instance,
+    string? DispatchId, string? HookEvent,
     string Seam, string Vehicle,
     IReadOnlyList<string> EnvelopeIds,
     string? RenderHash, long? BytesInjected, string? Ts);
@@ -223,7 +228,15 @@ public sealed record MailForwardedFromDto(string Id, string Address);
 /// `Reanchored` means THIS read distrusted the file on disk (`ReanchorReason`
 /// names which rule), so everything retained for the role is pending again.
 public sealed record MailCursorDto(
-    string Role, string? Session, int Gen, string? Head, long Offset, long Frontier, long Deliveries,
+    string Role, string? Session,
+    /// Is this mailbox one an operator DECLARED (`mail digest --as <name>`), or
+    /// a window's own ephemeral one (ADR-0018 d3)? The key alone cannot say —
+    /// it is a name in the first case and a session id in the second — so this
+    /// is read from the registrations, by the same `MailDigest.MailboxOf` the
+    /// watcher's dead-mailbox rule uses. A named mailbox is durable and gets a
+    /// sub-lane; an unnamed one dies with its window, and contributes no
+    /// presence because a name is not a session.
+    bool Named, int Gen, string? Head, long Offset, long Frontier, long Deliveries,
     string? LastDeliveredId, bool Reanchored, string? ReanchorReason,
     IReadOnlyList<MailPendingDto> Pending, IReadOnlyList<MailPendingDto> Expired,
     int SkippedMalformed);
