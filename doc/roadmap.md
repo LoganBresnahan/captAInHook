@@ -2307,6 +2307,31 @@ run live*. The framework underneath is what exists today.
   tree. With no `reaper` payload installed a `reaper` rule can only log
   `unserved`, so `reaper-payloads` is what makes the rule that already ships
   mean anything (`doc/dogfood/2026-08-19-the-robot-channel.md`).
+  Slices landed: `mail-status-per-instance` (2026-08-26; phase 4, slice 8 — the
+  human channel counts a MAILBOX, not a role, and the finding is that it already
+  did. The row was planned to fold into the `instance-registration` /
+  `plan-unicast` commit series and it did exactly that: slice 3 made the cursor
+  key the instance and `MailStatus` follow it, slice 5 made a named mailbox read
+  its own unicast and the bar count it. So this slice's work was VERIFICATION —
+  every clause of the row checked against what ships, one clause at a time —
+  rather than a second implementation of a count that exists, which is the same
+  refusal ADR-0016 N8 makes about "pending". What the check found: the count
+  follows `ReadableMailboxes`' addresses and not the window's cursor
+  (`NamedRegistration_CountsTheInstancesMailbox_NotTheWindows`), a qualified
+  line is named by the full address a sender would use
+  (`TwoMailboxes_AreNamedByTheirFullAddress`), a named box's unicast is in the
+  number and a sibling's is not, and an unnamed window is reachable at
+  `role@<session>` and counts what lands there. The one clause with no test was
+  the row's last three words — **no second flag** — so it got one:
+  `Status_RefusesAnInstanceFlag_TheMailboxIsTheRegistrationsOwn`, because a bar
+  that could be TOLD which mailbox to count could be told the wrong one, and the
+  registration is the only place that already knows which cursor this window's
+  digest will really read. `MailStatusTests` 36 → 37; suite 1514 → 1515 green
+  twice. Docs: the ADR row ticked with the as-built story and its stale `RoleOf`
+  corrected to `MailDigest.MailboxOf` (lifted when `role-kind-inference` became
+  its second caller), and `doc/flow/mailbox-bus.md` § the human channel — whose
+  diagram caption still said "one line per role" and whose ground-truth row
+  still carried a test count with a note admitting it had not been re-measured.)
   Slices landed: `watcher-dead-mailbox-rule` (2026-08-18; phase 3 — the OTHER
   half of d6, and the half that decides nothing: detection. The ADR-0017 brain
   grows a second pass, and it exists because the first one deliberately looks

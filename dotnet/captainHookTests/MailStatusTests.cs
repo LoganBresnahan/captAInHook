@@ -410,6 +410,27 @@ public class MailStatusTests
         Assert.Equal(["📬 2"], w.Run(session: "s-78"));
     }
 
+    /// The instance is LEARNED, never passed: `mail status` grew no `--as` of
+    /// its own, because a bar that could be told which mailbox to count could
+    /// be told the wrong one — and the registration is the only place that
+    /// already knows which cursor this window's digest will actually read.
+    [Fact]
+    public void Status_RefusesAnInstanceFlag_TheMailboxIsTheRegistrationsOwn()
+    {
+        using var w = new StatusWorld();
+        w.Register(NamedDigest("mail-main", "main", "laptop-a"));
+        w.Policy();
+        w.Send("m-1", "main");
+
+        var (exit, lines, err) = w.RunFull(argv: ["--as", "laptop-b"]);
+        Assert.Equal(1, exit);
+        Assert.Empty(lines);
+        Assert.Contains("unexpected argument '--as'", err);
+
+        // ...and with no argument at all it counts the one the handler names.
+        Assert.Equal(["📬 1"], w.Run(session: "s-77"));
+    }
+
     [Fact]
     public void AnUngrammaticalRegistration_ContributesNoMailbox()
     {
