@@ -2283,7 +2283,7 @@ run live*. The framework underneath is what exists today.
   against the maintainer's own bus, and in a sandbox for the two-role and
   policy-denied renderings.)
 
-- [ ] **23. Instance addressing + the reaper** —
+- [x] **23. Instance addressing + the reaper** —
   [ADR-0018](adr/0018-instance-addressing.md) (Proposed 2026-08-17).
   `to: role` stays broadcast; `to: role@instance` is unicast to one durable
   mailbox named by its registration (`mail digest --as`); cursor key becomes
@@ -2307,6 +2307,39 @@ run live*. The framework underneath is what exists today.
   tree. With no `reaper` payload installed a `reaper` rule can only log
   `unserved`, so `reaper-payloads` is what makes the rule that already ships
   mean anything (`doc/dogfood/2026-08-19-the-robot-channel.md`).
+  Slices landed: `docs-instance-addressing` (2026-08-26; phase 6, slice 12, the
+  close — and the sweep earned its slice by re-measuring rather than by writing.
+  **It found the phase-5 e2e RACY**: green alone, red in the full suite, because
+  the watcher is fed by a trail TAIL — the row for an append the test had already
+  awaited can reach it AFTER the deregistration, and an evaluation carried by
+  that late row finds a complete corpse holding incomplete mail; the reaper
+  forwards the two it can see, reaps, and the third envelope lands at a mailbox
+  with no standing left (`forwardedIds` came back 2 of 3). The corpse is now
+  finished BEFORE its registration goes and the trigger is a poke addressed to a
+  role with no cursor and no rule, so whichever evaluation carries the verdict,
+  the corpse it finds is the one the test built. **Five test counts had drifted**
+  since the slices that wrote them — `MailStoreTests` 51→52, `MailDigestTests`
+  83→84, `MailApiTests` 31→33, `WireJsonlTests` 23→24, `MailUnicastRoutingTests`
+  31→34 — all re-measured from the runner's own trx, which is the reproduce
+  command the flow doc prints two lines above the table. **Three shipped
+  `web/src` files carried a raw NUL byte** as a composite-key separator
+  (`mailCanvas.ts`, `mail.test.ts`, `mail.skeptic.test.ts`): `file` calls them
+  data and `grep` silently skips them as binary, so every mechanical check —
+  including this sweep's own — had been passing over them: three symbols
+  `canvas-instances` names in its Ground truth (`MailForwardLink`,
+  `buildForwards`, `buildThreads`) read as MISSING until the byte was fixed, and
+  they had been there all along. Replaced with the
+  `\0` escape, byte-identical at runtime, web units 294 green. Every path and
+  symbol in both Ground truth tables verified to resolve, the one exception being
+  `mayReap`, which the ADR names as deliberately not built. Docs:
+  `doc/flow/mailbox-bus.md` gains § *An address survives the whole loop* (the
+  live chain as a diagram, the two mailboxes that are NOT corpses, and what
+  becomes of mail that arrives after a reap — neither lost nor a corpse: no
+  cursor, so condition (i) excludes it, and whoever next declares that address
+  anchors at 0 and reads it); ADR-0018 flips **Proposed → Accepted** with a
+  Ground truth row of its own; ADR-0017 d8 was already marked simplified by
+  `answer-by-address`. Suite green twice at 1554. **Item 23 complete: 13 slices
+  planned, 13 built.**)
   Slices landed: `e2e-named-and-dead-instance` (2026-08-26; phase 5, slice 11 — the
   one chain a real DAEMON has to decide, and the last thing before the docs sweep.
   Every fact this item added has units and goldens; what nothing had run in one line

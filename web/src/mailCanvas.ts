@@ -684,7 +684,7 @@ function rank(c: MailCursorState): number {
 }
 
 export function cursorKey(c: { role: string; session: MailSession }): string {
-  return `${c.role} ${c.session ?? ""}`;
+  return `${c.role}\0${c.session ?? ""}`;
 }
 
 export function sessionLabel(session: MailSession): string {

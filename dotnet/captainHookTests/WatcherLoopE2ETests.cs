@@ -323,6 +323,17 @@ public class WatcherLoopE2ETests : IDisposable
         // not every reader having taken it.
         await SendAsync("m-box-02", $"{Corpse}@{Box}", StrandedUnicastBody);
 
+        // The last of the stranded mail, and it lands in BOTH boxes — which is
+        // what gives the sessionless reader pending mail of its own for the rule
+        // to decline to call a corpse. **Everything the box is holding must be
+        // holdable BEFORE the registration goes**: the watcher is fed by a trail
+        // TAIL, so the row for an append the test has already awaited may only
+        // reach it after the deregistration, and an evaluation carried by that
+        // late row would find a complete corpse holding incomplete mail — the
+        // reaper would forward what it saw, reap, and this envelope would arrive
+        // at a mailbox with no standing left. Deliver the corpse whole.
+        await SendAsync("m-cast-02", Corpse, "and one more nobody is reading");
+
         // Nothing is a corpse yet: a DECLARED mailbox holding mail is a mailbox
         // waiting, which is the whole of d6's condition (ii).
         Assert.DoesNotContain(log.Events, e => e.Evt == "mail.nudge");
@@ -333,10 +344,11 @@ public class WatcherLoopE2ETests : IDisposable
 
         // One append to evaluate on — the daemon's watcher is fed by the trail,
         // so a rule that became true while nothing was being written waits for
-        // the next row (`MailWatcher`'s feed, not a timer). It lands in BOTH
-        // boxes, which is what gives the sessionless reader pending mail of its
-        // own for the rule to decline to call a corpse.
-        await SendAsync("m-cast-02", Corpse, "and one more nobody is reading");
+        // the next row (`MailWatcher`'s feed, not a timer). It is addressed to a
+        // role with no cursor and no rule, so it is a POKE and nothing else:
+        // whichever evaluation it carries, the corpse it finds is the one the
+        // lines above finished building.
+        await SendAsync("m-poke-01", "nobody", "a row for the tail to carry");
 
         // --- the watcher finds the corpse, alone -----------------------------
         await PollUntilAsync(() => Task.FromResult(log.Events.Any(e => e.Evt == "mail.nudge")),
