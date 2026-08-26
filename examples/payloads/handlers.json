@@ -65,6 +65,19 @@
       }
     },
     {
+      "name": "reaper",
+      "command": "/home/oof/captAInHook/examples/payloads/reaper-deterministic.sh",
+      "events": ["mail-nudge"],
+      "mode": "oneshot",
+      "failMode": "open",
+      "budgetMs": 10000,
+      "env": {
+        "REAPER_DISPOSITION": "forward-all-to-role",
+        "REAPER_FORWARD_TO": "maintainer",
+        "CAPTAINHOOK_BIN": "/home/oof/.captainHook/bin/captainHook"
+      }
+    },
+    {
       "name": "mail-watcher-alpha",
       "command": "/home/oof/captAInHook/examples/payloads/starter-mail-watcher.sh",
       "events": ["Stop"],

@@ -2307,6 +2307,44 @@ run live*. The framework underneath is what exists today.
   tree. With no `reaper` payload installed a `reaper` rule can only log
   `unserved`, so `reaper-payloads` is what makes the rule that already ships
   mean anything (`doc/dogfood/2026-08-19-the-robot-channel.md`).
+  Slices landed: `reaper-payloads` (2026-08-26; phase 4, slice 9 — the detection
+  half built in `watcher-dead-mailbox-rule` finally has hands, and what they do
+  is what an OPERATOR wrote rather than what a model decided. The LLM reaper was
+  withdrawn 2026-08-20; the deterministic fallback is what ships, and building it
+  turned up a mechanism the plan had not costed: drop is a reap and hold is
+  nothing, but **forward had nowhere to happen** — a shell payload cannot compose
+  an envelope, which is `mail send`'s founding sentence rather than a new
+  argument, so a reaper building JSON with `sed` would have been the shell-script
+  alternative ADR-0016 rejected in a hat. Hence `captainHook mail forward
+  <address> --to <address>`: a NEW envelope per stranded one, carrying
+  `forwardedFrom` as the only link, with `kind`/`topic`/`priority`/`body` and
+  `replyTo` riding (d4: the answer belongs to the asker, not the reaper),
+  `inReplyTo` dropped and the depth restarting at 0 (the stated cost of a stored
+  depth), and the TTL taken from the TARGET — fresh at a live mailbox, null when
+  it is unicast. Idempotent on (source, target), because the caller is
+  unattended: it only reaps when the forward SUCCEEDED, so a partial run is
+  retried by the next nudge and the alternative to skipping what already went is
+  doubling somebody's mail. **The slice also answered d6's open authority
+  question by construction rather than by deciding it** — what made "the reaper
+  reads bodies addressed to others" hard was a MODEL reading them in order to
+  judge them, and this reaper is BLIND: bodies are copied ledger-to-ledger inside
+  the engine and the payload only ever sees a count, so there is no `mayReap`
+  list and scope stays the watcher's `reaper` rule rather than a second
+  allow-list to drift out of step with the first. The payload
+  (`examples/payloads/reaper-deterministic.sh`) takes its disposition from data —
+  `forward-all-to-role` + `REAPER_FORWARD_TO`, `drop-all`, or `hold` — with **no
+  default**, because disposing of a member's mail merely because a payload was
+  installed is the silent consent `watch.json` exists to prevent, and it keeps
+  `turn-claude.sh`'s event guard for a sharper reason: on a hook event this would
+  reap mailboxes on somebody's keystrokes. Order is d6's own and is the safety
+  property — forward, THEN reap; a failed forward leaves the standing intact so
+  the box stays a candidate, where reaping anyway removes the one thing that
+  makes anybody look at it again. 32 tests — `MailForwardTests` (21),
+  `ReaperPayloadTests` (10, including one run against the REAL engine and store)
+  and the `mail.forward` cross-emitter golden; suite 1515 → 1547 green twice.
+  Docs: `doc/flow/mailbox-bus.md` § *Disposing of one* + its ground-truth row,
+  ADR-0018's plan row, Ground truth row and status header, and the payloads
+  README.)
   Slices landed: `mail-status-per-instance` (2026-08-26; phase 4, slice 8 — the
   human channel counts a MAILBOX, not a role, and the finding is that it already
   did. The row was planned to fold into the `instance-registration` /

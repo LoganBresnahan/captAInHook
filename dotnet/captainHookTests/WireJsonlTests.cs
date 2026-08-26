@@ -199,6 +199,38 @@ public class WireJsonlTests
             wire);
     }
 
+    /// `mail.forward` (ADR-0018 d6, slice `reaper-payloads`) — the row that says
+    /// somebody moved ANOTHER mailbox's mail. One row per run rather than one
+    /// per envelope: each copy already writes its own `mail.append`, and what
+    /// those rows cannot show is whose corpse the mail came out of. The source
+    /// is spelled in the advance's two columns (`role`, `instance` when named)
+    /// and the target as a single `to`, because that is literally what the
+    /// copies' `to` became. `skippedIds` is absent on a first run — it appears
+    /// only when a re-run found copies already made, which is the one thing a
+    /// reader would otherwise mistake for "there was nothing there".
+    [Fact]
+    public void MailForward_IdenticalBytes_NamesTheCorpseAndWhereItWent()
+    {
+        var (fsharp, wire) = RenderBoth("info", "mail", "mail.forward",
+            msg: "stranded mail copied to a live address: the originals stay on the ledger",
+            data: new Dictionary<string, object>
+            {
+                ["role"] = "main",
+                ["to"] = "maintainer",
+                ["by"] = "reaper",
+                ["forwardedIds"] = new List<string> { "m-02", "m-03" },
+                ["instance"] = "laptop-a",
+                ["skippedIds"] = new List<string> { "m-01" },
+            });
+
+        Assert.Equal(fsharp, wire);
+        Assert.Equal(
+            """
+            {"ts":"2026-07-06T03:04:05.789Z","lvl":"info","src":"mail","evt":"mail.forward","msg":"stranded mail copied to a live address: the originals stay on the ledger","data":{"role":"main","to":"maintainer","by":"reaper","forwardedIds":["m-02","m-03"],"instance":"laptop-a","skippedIds":["m-01"]}}
+            """,
+            wire);
+    }
+
     /// `mail.nudge` (ADR-0017 d10, slice `nudge-state-and-trail`) — the row that
     /// says a robot turn was WOKEN. A nudge is a trail line and never an
     /// envelope (mail about mail would recurse), and this is the line the Mail

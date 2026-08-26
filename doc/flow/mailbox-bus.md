@@ -921,8 +921,70 @@ alone.
 
 Not here yet: the reducer does not fold `mail.reap` — it lands as the
 forward-compatibility `unknown-event` note, since the picture cannot place a
-reap before it models instances at all (`canvas-instances`). The `reaper` role's
-payloads and its authority are `reaper-payloads`', still open in ADR-0018 d6.
+reap before it models instances at all (`canvas-instances`).
+
+## Disposing of one: `mail forward` and the deterministic reaper (d6, `reaper-payloads`)
+
+Reaping ends a mailbox's standing. It says nothing about the mail that was
+stranded in it, and d6's answer to that is a member's judgement — forward, drop
+or hold — not a rule in the engine. What ships is the DETERMINISTIC half: the
+LLM reaper was withdrawn 2026-08-20 (ADR-0017 § Scope amendment) because a model
+disposing of other members' mail is agent orchestration, so the reaper that
+exists reads a rule an operator wrote.
+
+Drop needs no mechanism (it is a reap) and hold needs none (it is nothing).
+Forward needed one, because **a shell payload cannot compose an envelope** —
+which is `mail send`'s founding sentence, not a new argument: the strictness
+lives in tested C# exactly so senders need no jq. So the forward is a verb.
+
+```
+   captainHook mail forward main@laptop-a --to maintainer --by reaper
+             │
+             ├─ who is forwarding? ── the sender declaration, else --by, else REFUSE
+             │        (this puts somebody else's mail on a live lane; a copy from
+             │         a sender nobody can name is the defect N6 just ended)
+             │
+             ├─ flock the cursor ── read ONCE ──▶ what is pending  +  what was
+             │        (released before                already forwarded to this
+             │         the first append)              target
+             │
+             └─ per stranded envelope, a NEW one appended through the store:
+                    forwardedFrom {id, address}      ← the only link
+                    kind · topic · priority · body   ← ride
+                    replyTo                          ← rides (d4: the answer is
+                                                      the asker's, not the reaper's)
+                    inReplyTo: null, hops: 0         ← a forward starts a chain
+                    ttl: the TARGET's                ← fresh at a live mailbox,
+                                                      null when it is unicast
+                  … then one mail.forward {role, instance?, to, by, forwardedIds,
+                    skippedIds?}
+```
+
+**It is blind, and that is the answer to d6's open authority question.** The
+reaper is the bus's first cross-mailbox reader, and what made that a hard
+question was a MODEL reading other members' bodies in order to judge them.
+Nothing reads a body here: bodies are copied ledger-to-ledger inside the engine,
+and what the payload gets back is a count. A postal worker, not a reader.
+
+**Re-running it does not duplicate.** An envelope already forwarded from this
+mailbox to this target is skipped, recognized by `forwardedFrom.id` + `to` — the
+only two facts a re-run would repeat. That matters because the caller is
+unattended: the payload reaps only when the forward SUCCEEDED, so a partial run
+will be retried by the next nudge, and without the skip every retry would double
+somebody's mail. Forwarding one corpse to two different roles in two runs is
+still two forwards, which is why the target is half the key.
+
+The payload is `examples/payloads/reaper-deterministic.sh`, registered on
+`mail-nudge` like any turn payload and gated twice over: a `watch.json` rule for
+the `reaper` role is the consent, and `REAPER_DISPOSITION` in its entry's env is
+the rule (`forward-all-to-role` + `REAPER_FORWARD_TO`, `drop-all`, or `hold`).
+**There is no default disposition** — an unset one refuses loudly, because a
+payload that disposed of somebody's mail merely because it was installed is
+silent consent, the thing `watch.json` exists to prevent. **Order is the safety
+property, and it is d6's own:** forward, THEN reap. A failed forward leaves the
+standing intact, so the box stays a candidate and the next nudge retries;
+reaping first would remove the one thing that makes anybody look at that mailbox
+again, right after failing to pass its mail on.
 
 ## The robot channel: rules, and the nudge as an ordinary event (ADR-0017 d5/d7)
 
@@ -1448,6 +1510,7 @@ prose, not ground truth.
 | `MailSend.Run` (the universal write path; stamps `ts`, `hops`, and a declared `from`) | `dotnet/captainHook/Mail/MailSend.cs` |
 | A DECLARED SENDER (ADR-0017 N6 amendment, slice `turn-provenance`) — a spawning payload states who the process is, in three env vars, before the model it wakes exists; the two write verbs enforce it: a stated value that agrees stands, one that disagrees is REFUSED with nothing written, an absent `session` is stamped. Not declared ⇒ nothing happens, which is every CLI sender. The stamp is `turn-<dispatchId>`, the dispatch the nudge ran under — never a window, because a woken turn has none | `MailSenderDeclaration` (`Agent`/`Harness`/`Session`, `AgentEnv`/`HarnessEnv`/`SessionEnv` = `CAPTAINHOOK_MAIL_FROM_{AGENT,HARNESS,SESSION}`, `None`, `Declares`, `FromEnvironment`, `Resolve`) in `dotnet/captainHook/Mail/MailSenderDeclaration.cs`; applied in `MailSend.Run` (before the thread lookup — the cheaper refusal) and `MailAsk.Run` (over its derivation); declared by `examples/payloads/turn-claude.sh`, which also names the `from` in the prompt so an obedient model never trips the refusal. Pinned by `dotnet/captainHookTests/MailTurnProvenanceTests.cs` (10), two `MailAskTests` cases (32 in that file now), two real-process cases in `TurnPayloadTests.cs`, and the whole-loop assertion in `WatcherLoopE2ETests.cs` (`turn-<the nudge's own dispatchId>`) |
 | REAPING a mailbox (ADR-0018 d6, slice `reap-verb`) — `captainHook mail reap <address> [--by <address>]`: removes ONE mailbox's cursor under the same per-cursor flock `Advance` takes, never unlinking the lock file, and writes `mail.reap`. Standing only: the store is read, never written, and the mailbox's history stays on the chain. Does not judge deadness (the watcher detects, the reaper disposes); idempotent (already gone ⇒ exit 0); exit 1 only for a bad argument or a busy lock. The row spells the mailbox `role` + `instance` (write-when-named), not a joined `address` — one spelling per trail (N8) — and is written AFTER the delete | `MailReap` (`Run`, `TryParseArgs`, `LogReap`) in `dotnet/captainHook/Mail/MailReap.cs`, routed from `Program.cs`'s `mail` switch; the lock is `MailStore.TryLock` (`Mail/MailStore.cs`), the stranded list is `MailCursors.Pending(address, hookSession: null)` (`Mail/MailCursor.cs`). Pinned by `dotnet/captainHookTests/MailReapTests.cs` (19 — the byte-identical ledger, first-contact redelivery, idempotence creating nothing, the surviving lock file, the refusal under a held lock with no false record, the commit point a broken stdout cannot undo, the two row shapes, expired-is-not-stranded, and the argument refusals) and the `mail.reap` golden in `WireJsonlTests`. The reducer does NOT fold it yet — `canvas-instances` |
+| FORWARDING what a corpse held + the DETERMINISTIC REAPER (ADR-0018 d6, slice `reaper-payloads`) — `captainHook mail forward <address> --to <address> [--by <address>]`: appends a NEW envelope per stranded one, carrying `forwardedFrom {id, address}`; kind/topic/priority/body and `replyTo` ride, `inReplyTo` is dropped and `hops` restarts at 0, the TTL is the TARGET's (null when it is unicast). Idempotent on (source, target) — an id already forwarded there is skipped. One `mail.forward` row per run, never per envelope. The originals are untouched: the store is read for the pending set and appended to for the copies, and nothing is ever rewritten. The sender is REQUIRED (declaration, else `--by`), self-forward is refused, nothing-to-move is exit 0 so the caller can go on and reap. The payload picks the disposition from data and NEVER reads a body | `MailForward` (`Run`, `AlreadyForwarded`, `LogForward`, `TryParseArgs`, `MintId`) in `dotnet/captainHook/Mail/MailForward.cs`, routed from `Program.cs`'s `mail` switch; the pending set is `MailCursors.Pending(address, hookSession: null, lines)` under `MailStore.TryLock` on the cursor's own lock, the copies go through `MailStore.Append`, the sender through `MailSenderDeclaration.Resolve` (`mail ask`'s rule, one of the two sources being mandatory here). The payload is `examples/payloads/reaper-deterministic.sh` (`REAPER_DISPOSITION` = `forward-all-to-role` + `REAPER_FORWARD_TO` / `drop-all` / `hold`; no default), registered on `mail-nudge` in `examples/payloads/handlers.json`. Pinned by `dotnet/captainHookTests/MailForwardTests.cs` (21 — the copy and what rides, the TTL theory, ledger order, expired-is-not-forwarded, the skip and the per-target key, the two nothing-to-move outcomes, the sender refusals, self-forward, the argument table, and the two trail rows), `dotnet/captainHookTests/ReaperPayloadTests.cs` (10 — the verbs per disposition against a stub engine, a failed forward that does NOT reap, the refusals, and one real run against the REAL engine and store), and the `mail.forward` golden in `WireJsonlTests`. The reducer does NOT fold `mail.forward` — `canvas-instances` draws the dead→live link |
 | verb routing (`Mode.MailSend`, `mail <subverb>` on the argv contract) | `dotnet/captainHook/Program.cs`; `captainHookWire/` argv contract; refused by the shim |
 | `Stop`/`SubagentStop` declaring `decide` + the top-level block shape | `dotnet/captainHook/harnesses/claude-code.json`; `DecidesAtTopLevel`/`TopLevelDecision` in `dotnet/captainHook/Core/Harness.cs` — see [hook-dispatch.md](hook-dispatch.md) and platform.md § The Stop block shape |
 | swarm scoping (handler × project rules, pre-fan-out exclusion) | `dotnet/captainHook/Core/DispatchPolicy.cs`; `Dispatcher.DispatchAsync(excludedHandlers)` — see [dispatch-policy.md](dispatch-policy.md) |

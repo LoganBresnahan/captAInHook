@@ -75,6 +75,11 @@ switch (inv.Mode)
         // (ADR-0018 d6) is a WRITE verb over standing rather than mail: it
         // removes one mailbox's cursor and says so on the trail, and it reads
         // no stdin because a reap is performed on an address, not by a window.
+        // `forward` (ADR-0018 d6, slice `reaper-payloads`) is the other half of
+        // a disposition: it COPIES what a dead mailbox still holds to a live
+        // address, carrying `forwardedFrom`, so a deterministic reaper never
+        // has to compose an envelope in shell — which is the same reason `send`
+        // exists at all.
         // `watch --once` (ADR-0017 d4) runs the watcher's brain once and PRINTS
         // its verdict — verification of the rules, never a schedule; the
         // in-daemon actor is what runs the brain for real.
@@ -87,6 +92,7 @@ switch (inv.Mode)
             "digest" => CaptainHook.Mail.MailDigest.Run(args[2..], Console.In, Console.Out, Console.Error),
             "status" => CaptainHook.Mail.MailStatus.Run(args[2..], Console.In, Console.Out, Console.Error),
             "reap" => CaptainHook.Mail.MailReap.Run(args[2..], Console.Out, Console.Error),
+            "forward" => CaptainHook.Mail.MailForward.Run(args[2..], Console.Out, Console.Error),
             "watch" => CaptainHook.Mail.MailWatch.Run(args[2..], Console.In, Console.Out, Console.Error),
             "ask" => CaptainHook.Mail.MailAsk.Run(args[2..], Console.In, Console.Out, Console.Error),
             _ => CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error),
