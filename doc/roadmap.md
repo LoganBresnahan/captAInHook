@@ -2307,6 +2307,45 @@ run live*. The framework underneath is what exists today.
   tree. With no `reaper` payload installed a `reaper` rule can only log
   `unserved`, so `reaper-payloads` is what makes the rule that already ships
   mean anything (`doc/dogfood/2026-08-19-the-robot-channel.md`).
+  Slices landed: `e2e-named-and-dead-instance` (2026-08-26; phase 5, slice 11 — the
+  one chain a real DAEMON has to decide, and the last thing before the docs sweep.
+  Every fact this item added has units and goldens; what nothing had run in one line
+  is a named mailbox reading its own unicast, that mailbox's registration going away,
+  and the daemon's own watcher finding the corpse and dispatching the SHIPPED reaper
+  at it. It rides ADR-0017's stub harness with the stub REMOVED — no turn payload is
+  registered at all, because a deterministic reaper is a shell script reading an
+  operator's rule, so the whole exercise spends process startup and nothing else.
+  **The canvas half of the row was mostly pinned already** by `canvas-instances` (two
+  engine-generated goldens, plus `mail.spec.ts` over a seed carrying a declared
+  mailbox, a corpse, a forward and a reap, in both browser engines), so re-asserting
+  it here would have been a second copy of a claim rather than a new one — but
+  checking that clause by clause rather than assuming it found the one piece the
+  BROWSER never said: the forward link and the corpse's nudge mark were asserted
+  there, the GREYED LANE only in the reducer units and the golden. Two lines in
+  `mail.spec.ts` close it (the track drawn alive before the poke reads `data-dead`
+  after it; its live siblings do not). The C# chain is the rest of what was missing. **The corpse is made the way a corpse
+  is really made:** the `--as` registration is REMOVED from `handlers.json` mid-test —
+  the single difference between a mailbox waiting and a mailbox stranded (d6 ii) —
+  and the watcher picks it up through the `StatGated` re-read it already had. Then
+  forward, THEN reap, asserted in that order off the trail; three copies each carrying
+  `forwardedFrom`; the originals still addressed to the box they died in; and the
+  rescue in the asker's very next prompt — the UNICAST included, which is mail that
+  was readable at exactly one address in the world until a reaper moved it to a live
+  one. **The two mailboxes it proves are NOT corpses carry as much of the slice as the
+  one that is**: `maintainer@ci-box`, addressed on the ledger with no cursor standing
+  for it (condition i), and the SESSIONLESS reader — anchored exactly the way
+  `turn-claude.sh` anchors it and holding the corpse's own broadcast, so instance-ness
+  is the only thing separating them. That is plan risk (a′) — a robot's per-turn
+  cursor must never read as a dead human window — with a live assertion instead of a
+  note. One mechanism the plan never had to name and the test did: a digest with
+  nothing to hand over writes no cursor, so the turn-shaped stand-in has to DELIVER to
+  exist, which is also what makes a `ttlDeliveries` above 1 load-bearing here — one
+  reader taking a broadcast is not every reader having taken it. Sandbox mail dir,
+  sandbox HOME, throwaway rendezvous, `FakeClock`, `PollUntilAsync` only, never
+  `~/.captainHook`. `WatcherLoopE2ETests` 1 → 2 and two assertions in `mail.spec.ts`; suite 1553 → 1554
+  green twice, the mail spec green in both browser engines. Docs:
+  the flow doc's ground-truth row for the live chain, ADR-0018's plan row and a
+  Ground truth row of its own.)
   Slices landed: `canvas-instances` (2026-08-26; phase 4, slice 10 — the PICTURE
   learns addresses. Until this the Mail canvas knew roles and sessions, which is
   the bus item 20 built, so every fact item 23 added was invisible or drawn

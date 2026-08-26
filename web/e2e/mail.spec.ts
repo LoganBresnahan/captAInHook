@@ -410,6 +410,16 @@ test.describe("mail", () => {
     await expect(mail.locator('[data-lane="archivist"] [data-nudge]')).toHaveCount(1);
     await expect(mail.locator('[data-lane="builder"] [data-nudge]')).toHaveCount(0);
 
+    // …and that same nudge is what makes the CORPSE read dead (ADR-0018 phase
+    // 5): deadness is the watcher's verdict arriving on the stream, never a
+    // rule the browser invented from a quiet cursor (N8), so the track that
+    // was drawn alive before the poke is drawn dead after it — in a real
+    // browser, which is the half the reducer's goldens cannot show.
+    await expect(mail.locator('[data-track][data-address="reviewer@retired-box"]'))
+      .toHaveAttribute("data-dead", "yes");
+    await expect(mail.locator('[data-lane="reviewer"] [data-track][data-dead]'))
+      .toHaveCount(1);                               // the sibling windows stay alive
+
     // And being poked about mail is not having read it: the nudged envelope's
     // own standing is untouched, and its detail card says what the poke cost.
     await mail.locator('[data-lane="reviewer"] [data-nudged]').first().click();
