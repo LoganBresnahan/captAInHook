@@ -88,7 +88,7 @@ the rule language, no-drift, poison-and-advance reload — in
 ## The shim's warm path (ADR-0004, in progress)
 
 In shim mode (`hook <event>` without `--no-daemon`) the binary first tries the
-content-identity socket (`Core/ShimClient.cs`): connect + forward the framed
+content-identity socket (`captainHookWire/ShimClient.cs`): connect + forward the framed
 request (the shim-minted dispatchId, event, harness, raw stdin bytes
 verbatim), relay the framed response (stdout bytes byte-identically, trace to
 stderr, exit code). Only the pre-delivery phase carries a shim deadline
@@ -287,11 +287,11 @@ relocated.
 
 | what | where |
 |---|---|
-| mode selection (`Mode`, `Invocation.Parse`) | `dotnet/captainHook/Core/Cli.cs` |
-| `ForwardOutcome`, `ShimClient.TryForwardAsync` (warm path, at-most-once boundary) | `dotnet/captainHook/Core/ShimClient.cs` |
-| `Frame`, `HookRequest`/`HookResponse` (wire codec) | `dotnet/captainHook/Core/Frame.cs` |
-| `ContentIdentity`, `RendezvousPaths`, `DaemonRendezvous` (lock/bind) | `dotnet/captainHook/Core/Rendezvous.cs`, `Core/DaemonRendezvous.cs` |
-| `DaemonSpawner` (detached spawn on fallback) | `dotnet/captainHook/Core/DaemonSpawner.cs` |
+| mode selection (`Mode`, `Invocation.Parse`) | `dotnet/captainHookWire/Cli.cs` |
+| `ForwardOutcome`, `ShimClient.TryForwardAsync` (warm path, at-most-once boundary) | `dotnet/captainHookWire/ShimClient.cs` |
+| `Frame`, `HookRequest`/`HookResponse` (wire codec) | `dotnet/captainHookWire/Frame.cs` |
+| `ContentIdentity`, `RendezvousPaths`, `DaemonRendezvous` (lock/bind) | `dotnet/captainHookWire/Rendezvous.cs` — and `DaemonRendezvous` alone in `dotnet/captainHook/Core/DaemonRendezvous.cs`, since holding the lock is the HOST's job and the shim only ever reads the paths |
+| `DaemonSpawner` (detached spawn on fallback) | `dotnet/captainHookWire/DaemonSpawner.cs` |
 | `DaemonHost` (serve loop, daemon-side pipeline), `ReloadingHarnessRegistry` | `dotnet/captainHook/Core/DaemonHost.cs`, `Core/Harness.cs` |
 | dispatch policy gate (the front door — resolve/evaluate/short-circuit, both paths, hot reload) | [dispatch-policy.md](dispatch-policy.md); `Core/DispatchPolicy.cs`, `HookRun.PolicyGateFor` |
 | `Doctor` (reaper: PID-reuse guard + path lineage), `DoctorVerdict` | `dotnet/captainHook/Core/Doctor.cs` |
