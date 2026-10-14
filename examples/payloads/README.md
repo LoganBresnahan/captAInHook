@@ -74,7 +74,7 @@ coupling — one copy of each script, never a drifting duplicate — but it mean
 change here is a change to what the GUI hands users. The GUI never writes these
 files: it shows the script, tells you where to save it, and installs the entry
 behind the verbatim confirm. The maintainer's dogfood payloads (`git-orient`,
-`deploy-guard`, `session-pulse`, `doc-pointer`, `orient-brief`) are deliberately
+`deploy-guard`, `session-pulse`, `doc-pointer`, `orient-brief`, `agent-shell-history`) are deliberately
 NOT templates — they encode one person's workflow.
 
 ## The wire, in one glance
