@@ -2,6 +2,31 @@
 
 Running list — jot ideas here, promote to DESIGN.md / real tasks when they firm up.
 
+## Mail bus — the shelved reshaping (2026-10-14; the bus is FROZEN, ADR-0016)
+
+Not a plan. Kept so the thinking is not lost if the bus is ever unfrozen.
+
+- **The diagnosis.** ADR-0018 d3 keys a window's mailbox to its session id.
+  Session ids never come back, so a closed window's mailbox is never read again
+  (the "corpses") and every new window is a never-read mailbox: first contact
+  anchors at offset 0 and it receives the whole retained ledger. Both symptoms
+  come from role mail being *copied into* per-window mailboxes. The reaper
+  (d6) exists only to tend those copies.
+- **The reshaping.** Two kinds of recipient, two kinds of mailbox. A
+  *session* keeps its own mailbox (`role@<session>`) for mail meant for that
+  window only; if it never comes back, the mail sits inert and nobody tends
+  it. A *role* gets ONE shared mailbox: one bookmark that all windows holding
+  the role read, so the first window to deliver consumes it. Role mail waits for
+  whoever comes next and is read once. No reaper, no dead-mailbox detection,
+  no departure messages (SessionEnd is best-effort anyway).
+- **Open question.** Whether the role's shared mailbox is the existing
+  sessionless cursor (`cursor.R..json`, which `turn-claude.sh` reads) or a
+  separate key. Sharing it would let a robot turn and a human window consume
+  each other's mail.
+- **The sharper question underneath.** Is mail ever meant for someone who
+  is not online? If not, the durable backlog can go entirely and the bus
+  is just "live sessions warn each other" with a short TTL.
+
 ## Figuring out auto-updates to my development process
 
 - [ ] skills

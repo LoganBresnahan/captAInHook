@@ -11,6 +11,12 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
+- **Mail bus FROZEN 2026-10-14** — owner decision; see ADR-0016's status
+  line. Items 20–23 (bus, Mail view, watcher, addressing + reaper) stay
+  built and green and get no new slices. The reshaping drafted the same day
+  (a session's own mailbox plus one shared mailbox per role, no reaper) is
+  shelved in `doc/scratch.md` § Mail bus, not proposed.
+
 - [x] **24. A guard that cannot see does not approve — the shell is whatever
   the host calls it** — [ADR-0019](adr/0019-canonical-tool-kind.md)
   (**Rejected** 2026-10-12). moby's `run_shell` walked past `deploy-guard.sh`'s

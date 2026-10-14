@@ -1,6 +1,14 @@
 # ADR-0016 — The mailbox bus: cross-harness agent communication over lifecycle hooks
 
-**Status:** Accepted *(2026-08-12; owner accept, same day as drafting from the
+**Status:** Accepted, **FROZEN 2026-10-14** *(owner decision: the bus
+stays built, tested and green, and gets no new work. The project's purpose
+was restated that day as **provenance**: recording who did what in an
+agent's loop. A signal bus between agents is orchestration, which is the
+"brain" side of that line, and in seven weeks the bus had carried one real
+exchange. Not deprecated and not removed: revisit when a real need for
+agent-to-agent messaging shows up, starting from the shelved reshaping in
+`doc/scratch.md` § Mail bus, if it is ever unfrozen. ADR-0017 and ADR-0018 are
+frozen with it.)* *(2026-08-12; owner accept, same day as drafting from the
 owner's design sessions of 2026-08-11/12. Nothing here is implemented yet —
 build order below, decomposed via `/adr-plan`.)* *(Amended 2026-08-15 —
 decision 14, the observation surface: a read-only mail endpoint + the Mail
