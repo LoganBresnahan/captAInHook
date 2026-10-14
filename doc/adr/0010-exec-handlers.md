@@ -57,8 +57,21 @@ its lessons are imported wholesale (§ Pattern lineage).
    the child and receives an effect back — a hook multiplexer, dogfooding its
    own protocol on both faces.
    - **stdin**: one JSON envelope —
-     `{"v":1,"dispatchId":"…","event":{"type":"…","sessionId":…,"cwd":…,"payload":{…}}}`
+     `{"v":1,"dispatchId":"…","event":{"type":"…","harness":…,"sessionId":…,"cwd":…,"payload":{…}}}`
      — the engine's *normalized* event, not the raw harness JSON.
+     *(2026-10-14 amendment — `event.harness`: the name of the harness spec
+     that parsed the event (`claude-code`, a user override's `name`,
+     `internal` for MailNudge), written after `type`, omitted when absent.
+     `payload` is the host's raw bytes, so a payload reading it has to know
+     whose field names it is reading, and until now nothing on the wire said.
+     The first consumers are post-tool-use payloads that attribute or log a
+     tool call by harness. Additive under d3's must-ignore rule, so `v` stays
+     1. Landing it surfaced one in-tree violation of that rule: `mail digest`,
+     itself an exec-wire child, refused unknown envelope fields, so the new
+     field would have silently stopped all mail delivery. It now ignores
+     them and refuses only duplicates. Pinned by `ExecWireTests`
+     (`Envelope_Harness_FollowsType_AndIsOmittedWhenAbsent`), `HarnessTests`
+     and `MailDigestTests` (`AnAdditiveEnvelopeField_IsIgnored_NotRefused`).)*
    - **stdout**: the answer is the **first complete JSON object**, from a
      CLOSED grammar mirroring the effect set:
      `{"effect":"inject","text":…}` · `{"effect":"decide","verdict":"allow|deny|ask","reason":…}`

@@ -390,12 +390,37 @@ public class MailDigestRequestTests
     [InlineData("""{"v":2,"dispatchId":"d","event":{"type":"Stop"}}""")]
     [InlineData("""{"v":1,"dispatchId":"d"}""")]
     [InlineData("""{"v":1,"dispatchId":"d","event":{"type":""}}""")]
-    [InlineData("""{"v":1,"dispatchId":"d","event":{"type":"Stop"},"extra":1}""")]
     [InlineData("""{"v":1,"dispatchId":"d","dispatchId":"e","event":{"type":"Stop"}}""")]
     public void AnythingTheEncoderWouldNotWrite_IsMalformed(string line)
     {
         Assert.Null(MailDigest.TryParseRequest(line, out var errors));
         Assert.NotEmpty(errors);
+    }
+
+    /// ADR-0010 d3's must-ignore rule, which the digest once broke: it refused
+    /// unknown envelope fields, so the engine adding `event.harness` within v1
+    /// would have stopped every delivery. An additive field, at either level,
+    /// parses as if it were absent.
+    [Theory]
+    [InlineData("""{"v":1,"dispatchId":"d","event":{"type":"Stop","harness":"claude-code","sessionId":"s1"}}""")]
+    [InlineData("""{"v":1,"dispatchId":"d","event":{"type":"Stop","sessionId":"s1","someFutureField":{"x":1}},"extra":1}""")]
+    public void AnAdditiveEnvelopeField_IsIgnored_NotRefused(string line)
+    {
+        var req = MailDigest.TryParseRequest(line, out var errors);
+
+        Assert.Empty(errors);
+        Assert.Equal(new DigestRequest("d", "Stop", "s1"), req);
+    }
+
+    /// The real encoder's output, harness and all, is a digest request.
+    [Fact]
+    public void TheEncodersEnvelope_WithHarness_IsADigestRequest()
+    {
+        using var payload = JsonDocument.Parse("""{"prompt":"hi"}""");
+        var line = ExecWire.Envelope(
+            new HookEvent("UserPromptSubmit", "s1", "/w", payload.RootElement.Clone(), Harness: "claude-code"), "d9");
+
+        Assert.Equal(new DigestRequest("d9", "UserPromptSubmit", "s1"), MailDigest.TryParseRequest(line, out _));
     }
 }
 

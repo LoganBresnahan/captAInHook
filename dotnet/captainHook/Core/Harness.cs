@@ -259,7 +259,8 @@ public static class Harness
             Type: name,
             SessionId: payload.TryGetProperty(spec.Request.SessionIdField, out var sid) ? sid.GetString() : null,
             Cwd: payload.TryGetProperty(spec.Request.CwdField, out var cwd) ? cwd.GetString() : null,
-            Payload: payload);
+            Payload: payload,
+            Harness: spec.Name);
     }
 
     /// kebab-case (cavemem style) -> PascalCase (host style).

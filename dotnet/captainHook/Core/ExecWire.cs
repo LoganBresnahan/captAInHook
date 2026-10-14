@@ -31,7 +31,7 @@ public abstract record ExecAnswer
 /// decision 2). Engine-side codec for both directions:
 ///
 ///   stdin  (us → child):  one single-line JSON envelope
-///     {"v":1,"dispatchId":"…","event":{"type":"…","sessionId":"…","cwd":"…","payload":{…}}}
+///     {"v":1,"dispatchId":"…","event":{"type":"…","harness":"…","sessionId":"…","cwd":"…","payload":{…}}}
 ///   stdout (child → us):  one JSON object from the CLOSED answer grammar
 ///     {"effect":"inject","text":…} | {"effect":"decide","verdict":"allow|deny|ask","reason":…}
 ///     {"effect":"replace","text":…} | {"effect":"noop"}
@@ -64,9 +64,10 @@ public static class ExecWire
         new HashSet<string> { "effect", "dispatchId" };
 
     /// Encode the envelope the child receives on stdin: one line, compact,
-    /// deterministic field order (v, dispatchId, event{type, sessionId, cwd,
-    /// payload}). Absent sessionId/cwd are OMITTED, not null (the WireJsonl
-    /// omit-null precedent). The payload is re-written compact through the
+    /// deterministic field order (v, dispatchId, event{type, harness,
+    /// sessionId, cwd, payload}). Absent harness/sessionId/cwd are OMITTED,
+    /// not null (the WireJsonl omit-null precedent). `harness` is additive
+    /// within v1 (ADR-0010 d3's must-ignore rule; 2026-10-14 amendment). The payload is re-written compact through the
     /// writer, so caller-side formatting can never smuggle a raw newline into
     /// the line-framed stream.
     public static string Envelope(HookEvent e, string dispatchId)
@@ -80,6 +81,7 @@ public static class ExecWire
             w.WritePropertyName("event");
             w.WriteStartObject();
             w.WriteString("type", e.Type);
+            if (e.Harness is not null) w.WriteString("harness", e.Harness);
             if (e.SessionId is not null) w.WriteString("sessionId", e.SessionId);
             if (e.Cwd is not null) w.WriteString("cwd", e.Cwd);
             w.WritePropertyName("payload");

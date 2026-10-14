@@ -29,6 +29,20 @@ public class ExecWireTests
             line);
     }
 
+    /// `event.harness` (ADR-0010 d2, 2026-10-14 amendment): additive within v1,
+    /// written right after `type`, omitted (not null) when the event has none.
+    [Fact]
+    public void Envelope_Harness_FollowsType_AndIsOmittedWhenAbsent()
+    {
+        var e = new HookEvent("PostToolUse", "sess-1", "/w",
+            Payload("""{"tool_name":"Edit"}"""), Harness: "claude-code");
+
+        Assert.Equal(
+            """{"v":1,"dispatchId":"h1","event":{"type":"PostToolUse","harness":"claude-code","sessionId":"sess-1","cwd":"/w","payload":{"tool_name":"Edit"}}}""",
+            ExecWire.Envelope(e, "h1"));
+        Assert.DoesNotContain("harness", ExecWire.Envelope(e with { Harness = null }, "h1"));
+    }
+
     [Fact]
     public void Envelope_AbsentSessionAndCwd_OmittedNotNull()
     {

@@ -303,7 +303,7 @@ public static class MailDigest
                 return null;
             }
 
-            CheckFields(root, EnvelopeFields, "", errs);
+            CheckDuplicates(root, "", errs);
 
             if (!root.TryGetProperty("v", out var v)
                 || v.ValueKind != JsonValueKind.Number || !v.TryGetInt32(out var ver) || ver != ExecWire.Version)
@@ -323,7 +323,7 @@ public static class MailDigest
                 errs.Add("'event' is required and must be an object");
             else
             {
-                CheckFields(ev, EventFields, "event.", errs);
+                CheckDuplicates(ev, "event.", errs);
                 if (!ev.TryGetProperty("type", out var t)
                     || t.ValueKind != JsonValueKind.String
                     || string.IsNullOrWhiteSpace(type = TryReadString(t)))
@@ -339,11 +339,6 @@ public static class MailDigest
             return errs.Count > 0 ? null : new DigestRequest(dispatchId!, type!, sessionId);
         }
     }
-
-    private static readonly IReadOnlySet<string> EnvelopeFields =
-        new HashSet<string> { "v", "dispatchId", "event" };
-    private static readonly IReadOnlySet<string> EventFields =
-        new HashSet<string> { "type", "sessionId", "cwd", "payload" };
 
     /// The pure planner (d5). `verbs` is the recipient spec's declared effect
     /// kinds for the event being dispatched — null when the spec does not
@@ -840,15 +835,17 @@ public static class MailDigest
             ? """{"effect":"noop"}"""
             : $$"""{"effect":"noop","dispatchId":"{{JsonEncodedText.Encode(dispatchId)}}"}""";
 
-    private static void CheckFields(
-        JsonElement obj, IReadOnlySet<string> known, string prefix, List<string> errs)
+    /// Duplicates are refused (ambiguous — System.Text.Json would keep one);
+    /// UNKNOWN fields are ignored. The digest is an exec-wire child like any
+    /// other, and ADR-0010 d3's must-ignore rule is what lets the engine add an
+    /// envelope field within v1 (`event.harness`, 2026-10-14) without breaking
+    /// it. Refusing unknowns here once meant an additive field would have
+    /// silently stopped all mail delivery.
+    private static void CheckDuplicates(JsonElement obj, string prefix, List<string> errs)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var prop in obj.EnumerateObject())
-        {
             if (!seen.Add(prop.Name)) errs.Add($"duplicate field '{prefix}{prop.Name}'");
-            else if (!known.Contains(prop.Name)) errs.Add($"unknown field '{prefix}{prop.Name}'");
-        }
     }
 
     /// The deferred-unescape guard (doc/scratch.md's pending consolidation).

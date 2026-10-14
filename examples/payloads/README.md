@@ -82,8 +82,12 @@ NOT templates — they encode one person's workflow.
 The engine sends one compact envelope line per dispatch on **stdin**:
 
 ```json
-{"v":1,"dispatchId":"…","event":{"type":"PreToolUse","sessionId":"…","cwd":"…","payload":{…}}}
+{"v":1,"dispatchId":"…","event":{"type":"PreToolUse","harness":"claude-code","sessionId":"…","cwd":"…","payload":{…}}}
 ```
+
+`payload` is the host's raw hook JSON, so its field names are the host's;
+`harness` names which host that is. A payload must **ignore envelope fields it
+does not know**: new ones are added within `v:1` (ADR-0010 d3).
 
 The payload answers with exactly one line on **stdout** from the closed
 grammar (`inject` / `decide` / `replace` / `noop`). A **resident** child first

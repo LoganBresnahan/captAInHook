@@ -474,6 +474,9 @@ public class RequestParsingTests
         Assert.Equal("ToolDone", e.Type);
         Assert.Equal("s9", e.SessionId);
         Assert.Equal("/tmp/work", e.Cwd);
+        // The event names the spec that parsed it — what `event.harness` on
+        // the exec-wire envelope carries (ADR-0010 d2, 2026-10-14 amendment).
+        Assert.Equal("synthetic", e.Harness);
     }
 
     [Fact]

@@ -3,7 +3,13 @@ using System.Text.Json;
 namespace CaptainHook.Core;
 
 /// A normalized lifecycle event from the agent host.
-public sealed record HookEvent(string Type, string? SessionId, string? Cwd, JsonElement Payload);
+/// `Harness` is the name of the spec that parsed the event (`claude-code`,
+/// a user override's name, `internal` for MailNudge) — null only for events a
+/// test constructs by hand. It rides the exec-wire envelope as `event.harness`
+/// (ADR-0010 d2, 2026-10-14 amendment) so a payload can tell which host's raw
+/// `payload` it is reading.
+public sealed record HookEvent(
+    string Type, string? SessionId, string? Cwd, JsonElement Payload, string? Harness = null);
 
 public enum Verdict { Allow, Deny, Ask }
 public enum FailMode { Open, Closed }
