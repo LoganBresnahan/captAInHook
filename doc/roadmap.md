@@ -11,6 +11,17 @@ run live*. The framework underneath is what exists today.
 
 ## Now
 
+- [x] **24. A guard that cannot see does not approve — the shell is whatever
+  the host calls it** — [ADR-0019](adr/0019-canonical-tool-kind.md)
+  (**Rejected** 2026-10-12). moby's `run_shell` walked past `deploy-guard.sh`'s
+  `"tool_name":"Bash"` gate and was *allowed* — a guard that could not see
+  reading as a guard that saw. ADR-0019 proposed a harness-spec tool-kind map
+  stamped into the payload's environment; rejected for the smaller fix: the
+  guard drops its tool-name filter and inspects every call's content (the
+  live path + a mutation verb), so no host's name can open or close it.
+  Pinned by `DeployGuardTests`. Known gap, unchanged: the verb list is
+  shell-shaped, so an edit-tool write into the live tree is still allowed.
+
 - [x] **21. The Mail view — watch the bus live, read-only** — item 20 built
   the bus; nothing shows it. Per **ADR-0016 d14** (amended 2026-08-15): a
   sixth GUI view whose body is a zoomable SVG canvas drawing the *mechanism*

@@ -12,10 +12,15 @@
 # in every session denied". Flip the entry to failMode:"closed" once the
 # trail shows it behaving.
 #
-# Matching is a raw-line heuristic, no JSON parser: only the Bash tool, and
-# only when a mutation verb AND the live path both appear in the envelope.
-# A false "ask" is cheap (one extra confirmation); the verdict is never
-# deny, so the guard cannot brick a session.
+# Matching is a raw-line heuristic, no JSON parser: EVERY tool call is
+# inspected, and it asks when a mutation verb AND the live path both appear
+# in the envelope. There is deliberately no tool-name filter: a gate keyed on
+# one host's name for its shell ("Bash") read another host's ("run_shell") as
+# not-my-business and answered allow without looking (ADR-0019). Known gap,
+# unchanged by that: the verb list is shell-shaped, so a file-editing tool
+# writing into the live tree carries no verb and is allowed. A false "ask" is
+# cheap (one extra confirmation); the verdict is never deny, so the guard
+# cannot brick a session.
 
 field() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'; }
 
@@ -23,9 +28,6 @@ IFS= read -r envelope
 id=$(field "$envelope" dispatchId)
 
 allow() { printf '{"effect":"decide","verdict":"allow","dispatchId":"%s"}\n' "$id"; exit 0; }
-
-# Not a shell command → none of our business.
-case $envelope in *'"tool_name":"Bash"'*) ;; *) allow ;; esac
 
 # The live tree not mentioned → allow.
 case $envelope in *'.captainHook/bin'*) ;; *) allow ;; esac

@@ -138,8 +138,8 @@ Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
 `sh`, driven end-to-end through the daemon by `DemoPayloadTests`. Five more
 run as LIVE dogfood on the maintainer's own hooks: `git-orient.sh` (oneshot,
 SessionStart — once-per-session git bearing), `deploy-guard.sh` (oneshot,
-PreToolUse — `Decide(ask)` when a shell command would mutate
-`~/.captainHook/bin`), `session-pulse.sh` (oneshot, Stop — per-turn activity
+PreToolUse — `Decide(ask)` when any tool call — whatever the host names it — would mutate
+`~/.captainHook/bin`; pinned by `DeployGuardTests`), `session-pulse.sh` (oneshot, Stop — per-turn activity
 ledger), `doc-pointer.sh` (resident, PreToolUse — warm ground-truth index,
 injects keep-docs-in-sync reminders), and `orient-brief.sh` (oneshot,
 SessionStart — LLM-backed "since last time" brief via `claude -p`, 30min
