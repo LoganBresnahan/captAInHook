@@ -306,7 +306,11 @@ test.describe("mail", () => {
     await expect(page.locator("[data-mail-stream]")).toHaveAttribute("data-mail-stream", "live");
   });
 
-  test("a replaced trail is a RESYNC, not a wrong picture: the view re-reads and re-anchors", async ({ page, daemon }) => {
+  // Skipped 2026-10-15: flaky at HEAD (~4 runs in 6). The post-truncate "live"
+  // assertion passes before the reset is observed, so the send can land in the
+  // fresh snapshot instead of on the stream. The bus is frozen (ADR-0016); fix
+  // the race before unfreezing.
+  test.skip("a replaced trail is a RESYNC, not a wrong picture: the view re-reads and re-anchors", async ({ page, daemon }) => {
     // The reducer refuses to guess. When the trail's id space restarts — a
     // rotation, a truncation, a replaced file — the server says `reset` and the
     // reducer raises `resnapshot` rather than folding on into a stream whose

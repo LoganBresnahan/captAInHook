@@ -9,7 +9,9 @@ exchange. Not deprecated and not removed: revisit when a real need for
 agent-to-agent messaging shows up, starting from the shelved reshaping in
 `doc/scratch.md` § Mail bus, if it is ever unfrozen. ADR-0017 and ADR-0018 are
 frozen with it. Since 2026-10-15 the GUI's Mail view is off the nav and
-reachable only at `/ui?all`, per the ADR-0015 d1 amendment.)* *(2026-08-12; owner accept, same day as drafting from the
+reachable only at `/ui?all`, per the ADR-0015 d1 amendment. Two flaky tests
+are skipped rather than fixed: `MailExactlyOnceRaceTests.SendersRacingTwoDigests_EveryEnvelopeDeliversExactlyOnce`
+and the e2e "a replaced trail is a RESYNC". Fix both before unfreezing.)* *(2026-08-12; owner accept, same day as drafting from the
 owner's design sessions of 2026-08-11/12. Nothing here is implemented yet —
 build order below, decomposed via `/adr-plan`.)* *(Amended 2026-08-15 —
 decision 14, the observation surface: a read-only mail endpoint + the Mail
