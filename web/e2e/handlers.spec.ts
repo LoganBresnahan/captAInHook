@@ -137,7 +137,11 @@ test.describe("handlers editor", () => {
   test("template gallery: pick → script shown → pre-filled form → install → row", async ({ page, daemon }) => {
     // ADR-0015 d3, end to end. The gallery is CLIENT-SIDE: no API verb writes a
     // script, so what this proves is that the curated metadata reaches the form
-    // and the ordinary install path takes it from there.
+    // and the ordinary install path takes it from there. The gallery is off
+    // unless ?all (ADR-0015, 2026-10-15 amendment), so reload with it.
+    await page.goto(daemon.urlAll);
+    await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
+    await gotoView(page, "handlers");
     await page.locator("[data-gallery-toggle]").click();
     const card = page.locator('[data-template="starter-decide"]');
     await expect(card).toBeVisible();

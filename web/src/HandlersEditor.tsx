@@ -39,6 +39,8 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
   const setPolicy = useStore((s) => s.setPolicy);
   const status = useStore((s) => s.status);
   const harnesses = useStore((s) => s.harnesses);
+  // The template gallery is off unless `?all` (ADR-0015, 2026-10-15 amendment).
+  const showHidden = useStore((s) => s.showHidden);
 
   const [form, setForm] = useState<FormState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -119,7 +121,7 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
       if (!resp.ok) { setToggleErr(`policy read failed (HTTP ${resp.status})`); return; }
       const pdto = (await resp.json()) as { raw: string | null; etag: string | null; state: string };
       if (pdto.state === "malformed") {
-        setToggleErr("dispatch.json is malformed — fix it in the policy editor first");
+        setToggleErr("dispatch.json is malformed — fix the file (or the Policy view, under /ui?all) first");
         return;
       }
       const text = togglePolicyText(pdto.raw, name, disable);
@@ -177,7 +179,7 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
                       // F3: a malformed policy means the daemon denies ALL —
                       // an on/off badge computed over unreadable rules would
                       // lie in either direction. Say so instead.
-                      ? <span className="muted" data-toggle-unavailable title="dispatch.json is malformed — the daemon is denying everything; fix it in the policy editor">—</span>
+                      ? <span className="muted" data-toggle-unavailable title="dispatch.json is malformed — the daemon is denying everything; fix the file (or the Policy view, under /ui?all)">—</span>
                       : state === "scoped"
                       ? <span className="muted" title="scoped dispatch.json rules mention this handler first — enablement depends on event/project/session; no clean off-switch">scoped</span>
                       : (
@@ -216,13 +218,18 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
             <button data-install disabled={busy}
                     onClick={() => { setNotice(null); setForm({ entry: EMPTY_ENTRY, originalName: null }); setGallery(false); }}>
               + install
-            </button>{" "}
-            <button data-gallery-toggle disabled={busy}
-                    onClick={() => { setNotice(null); setGallery(!gallery); }}>
-              {gallery ? "Hide templates" : "Start from a template"}
             </button>
+            {showHidden && (
+              <>
+                {" "}
+                <button data-gallery-toggle disabled={busy}
+                        onClick={() => { setNotice(null); setGallery(!gallery); }}>
+                  {gallery ? "Hide templates" : "Start from a template"}
+                </button>
+              </>
+            )}
           </p>
-          {gallery && (
+          {showHidden && gallery && (
             <TemplateGallery
               onUse={(entry) => {
                 setNotice(null);

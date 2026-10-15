@@ -47,6 +47,16 @@ down per test; there is no persistent seeded preview).
    view whose body is a zoomable SVG canvas rather than a panel. The decision
    holds unchanged: one view at a time, a `view` slice, no router, no
    graph/canvas library; the canvas's `viewBox` is just more store state.)*
+   *(Amended 2026-10-15, owner decision: the clickable surface is trimmed to
+   what the geex provenance work uses. **Mail** (the bus is frozen, ADR-0016)
+   and **Policy** (the maintainer setup has no dispatch rules to edit) come
+   off the nav, and the `internal` harness, which carries only the bus's
+   `MailNudge`, comes off the Harnesses view. Hidden, not removed: the islands
+   still mount, their e2e specs still run, and `/ui?all` brings everything
+   back. `?all` is a query parameter, not part of the fragment, because the
+   `#t=` scrub owns the fragment and keeps `location.search`. The list is
+   `HIDDEN_VIEWS` / `HIDDEN_HARNESSES` in `web/src/store.ts`. The Handlers
+   view's on/off toggle still writes `dispatch.json` through `PUT /policy`.)*
 
 2. **A real token system, polished-terminal direction.** Type scale (mono for
    data, a UI face for chrome), spacing scale, radii, and semantic colors —
@@ -74,6 +84,9 @@ down per test; there is no persistent seeded preview).
    - The gallery and install form surface **per-event allowed effect verbs
      from `HarnessesDto.events`** — data the client already fetches and
      nothing displays today.
+   *(Amended 2026-10-15, with d1's amendment: the gallery's toggle is hidden
+   unless `/ui?all`. None of its generic starters are part of the geex
+   setup. The refusal of a script-write verb is unchanged.)*
 
 4. **Policy becomes a structured rule builder with a raw-JSON toggle.** Rows
    (event / handler / project / session / decision) compose to the exact

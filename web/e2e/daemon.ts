@@ -38,6 +38,9 @@ export type Daemon = {
   token: string;
   /** /ui with the token in the fragment — the exact handoff URL (ADR-0008 d3). */
   url: string;
+  /** `url` plus `?all`: the hidden views, harnesses and template gallery shown
+   * (ADR-0015, 2026-10-15 amendment) — for the specs that drive them. */
+  urlAll: string;
   /** The isolated trail file; a spec appends JSONL here and the SSE tail streams it. */
   trailPath: string;
   /** The isolated dispatch policy path; PUT /policy edits THIS, never the live one. */
@@ -295,6 +298,7 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
     port: ready.port,
     token: ready.token,
     url: `http://127.0.0.1:${ready.port}/ui#t=${ready.token}`,
+    urlAll: `http://127.0.0.1:${ready.port}/ui?all#t=${ready.token}`,
     trailPath,
     dispatchPath,
     handlersPath,

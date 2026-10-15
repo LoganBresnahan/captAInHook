@@ -5,7 +5,7 @@
 // dropped), and the client cap counts what it evicts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { foldMail, foldTrace, TRACE_CAP, type TraceEntry } from "./store.ts";
+import { foldMail, foldTrace, navViews, showHiddenFrom, TRACE_CAP, VIEWS, type TraceEntry } from "./store.ts";
 import { seedMail } from "./mail.ts";
 import type { MailDto } from "./api.gen.ts";
 
@@ -100,4 +100,16 @@ test("foldMail: a gap and a reset reach the reducer and ask for a fresh snapshot
   assert.equal(reset.resnapshot?.reason, "reset");
   // This is the whole resync trigger: the reducer, not the driver, is what
   // decides the picture can no longer be trusted.
+});
+
+test("the nav hides HIDDEN_VIEWS unless shown, keeping VIEWS order", () => {
+  assert.deepEqual(navViews(false), ["trace", "handlers", "harnesses", "status"]);
+  assert.deepEqual(navViews(true), [...VIEWS]);
+});
+
+test("?all — and only ?all — in the query reveals hidden things", () => {
+  assert.equal(showHiddenFrom("?all"), true);
+  assert.equal(showHiddenFrom("?x=1&all"), true);
+  assert.equal(showHiddenFrom(""), false);
+  assert.equal(showHiddenFrom("?alls"), false);
 });

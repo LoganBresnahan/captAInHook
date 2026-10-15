@@ -77,6 +77,24 @@ export type SessionState = "none" | "checking" | "live" | "dead";
 export const VIEWS = ["trace", "mail", "handlers", "policy", "harnesses", "status"] as const;
 export type View = (typeof VIEWS)[number];
 
+/** Views that still exist but are off the nav (ADR-0015, 2026-10-15
+ * amendment): Mail because the bus is frozen (ADR-0016 status note), Policy
+ * because the maintainer setup has no dispatch rules to edit. Their islands
+ * still mount and their e2e specs still run — `/ui?all` puts them back. */
+export const HIDDEN_VIEWS: ReadonlySet<View> = new Set<View>(["mail", "policy"]);
+
+/** Harnesses off the Harnesses view by the same amendment: `internal` exists
+ * only to carry the frozen bus's MailNudge event. */
+export const HIDDEN_HARNESSES: ReadonlySet<string> = new Set(["internal"]);
+
+/** The nav's buttons, in VIEWS order. */
+export const navViews = (showHidden: boolean): View[] =>
+  VIEWS.filter((v) => showHidden || !HIDDEN_VIEWS.has(v));
+
+/** `?all` in the page URL reveals everything hidden. The query, not the
+ * fragment: the `#t=` scrub owns the fragment and keeps `location.search`. */
+export const showHiddenFrom = (search: string): boolean => new URLSearchParams(search).has("all");
+
 /** Human labels for the nav — the only place a view's display name lives. */
 export const VIEW_LABELS: Record<View, string> = {
   trace: "Trace",
@@ -158,6 +176,9 @@ export type MailStreamState = "idle" | "live" | "retrying" | "stalled" | "resync
 export type Store = {
   // which screen is on (ADR-0015 d1) — the whole of navigation
   view: View;
+  /** `?all` was in the URL: hidden views, harnesses and the template gallery
+   * are shown. Set once at bootstrap (main.tsx). */
+  showHidden: boolean;
   // one slice per screen (decision 1's table)
   trace: TraceEntry[];
   traceTruncated: number;
@@ -184,6 +205,7 @@ export type Store = {
   foldFrame: (frame: SseFrame) => void;
 
   setView: (v: View) => void;
+  setShowHidden: (v: boolean) => void;
 
   // fetch-result setters — plain state lands, no logic
   setStatus: (s: StatusDto) => void;
@@ -259,6 +281,7 @@ export function foldMail(mail: MailState, frame: SseFrame, atMs: number): MailSt
 
 export const useStore = create<Store>((set) => ({
   view: "trace",
+  showHidden: false,
   trace: [],
   traceTruncated: 0,
   status: null,
@@ -281,6 +304,7 @@ export const useStore = create<Store>((set) => ({
     }),
 
   setView: (view) => set({ view }),
+  setShowHidden: (showHidden) => set({ showHidden }),
 
   setStatus: (status) =>
     set((s) => ({

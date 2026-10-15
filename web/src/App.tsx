@@ -1,10 +1,11 @@
 import { useEffect } from "react";
 import { apiFetch, clearToken } from "./auth.ts";
-import { useStore, VIEWS, VIEW_LABELS } from "./store.ts";
+import { navViews, useStore, VIEW_LABELS } from "./store.ts";
 import type { StatusDto } from "./api.gen.ts";
 
 // The nav island (ADR-0008 d8, restructured by ADR-0015 d1): the persistent
-// left sidebar — brand, the five view buttons, and the session line — and still
+// left sidebar — brand, the view buttons (minus HIDDEN_VIEWS unless `?all`),
+// and the session line — and still
 // the OWNER of the session lifecycle: the one fetch that turns `checking` into
 // `live` (the bearer works) or `dead` (401/403 — a cutover rotated the token;
 // ADR-0008 d4's no-self-heal, because the browser cannot re-read the 0600
@@ -18,6 +19,7 @@ import type { StatusDto } from "./api.gen.ts";
 export function Nav() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  const showHidden = useStore((s) => s.showHidden);
   const session = useStore((s) => s.session);
   const stream = useStore((s) => s.stream);
   const setSession = useStore((s) => s.setSession);
@@ -45,7 +47,7 @@ export function Nav() {
       </div>
 
       <nav className="nav" aria-label="Views">
-        {VIEWS.map((v) => (
+        {navViews(showHidden).map((v) => (
           <button
             key={v}
             type="button"

@@ -20,7 +20,7 @@ test.describe("mail", () => {
   test.beforeEach(async ({ page, daemon }) => {
     seedFiles(daemon);
     seedMail(daemon);
-    await page.goto(daemon.url);
+    await page.goto(daemon.urlAll);
     await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
     await gotoView(page, "mail");
     // Wait for the BUS, not just the island: until the first snapshot lands the

@@ -24,6 +24,28 @@ test.describe("navigation", () => {
     await expect(page.locator('[data-nav="trace"]')).not.toHaveAttribute("aria-current", "page");
   });
 
+  test("hidden by default: no Mail or Policy in the nav, no internal harness, no template gallery", async ({ page }) => {
+    // ADR-0015, 2026-10-15 amendment: the frozen bus and the unused editors
+    // stay built but off the clickable surface.
+    await expect(page.locator("[data-nav]")).toHaveText(["Trace", "Handlers", "Harnesses", "Status"]);
+    await gotoView(page, "harnesses");
+    await expect(page.locator("[data-harness]")).toHaveCount(1);
+    await expect(page.locator('[data-harness="claude-code"]')).toBeVisible();
+    await gotoView(page, "handlers");
+    await expect(page.locator("[data-install]")).toBeVisible();
+    await expect(page.locator("[data-gallery-toggle]")).toHaveCount(0);
+  });
+
+  test("?all puts every hidden view, harness and the gallery back", async ({ page, daemon }) => {
+    await page.goto(daemon.urlAll);
+    await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
+    await expect(page.locator("[data-nav]")).toHaveText(["Trace", "Mail", "Handlers", "Policy", "Harnesses", "Status"]);
+    await gotoView(page, "harnesses");
+    await expect(page.locator('[data-harness="internal"]')).toBeVisible();
+    await gotoView(page, "handlers");
+    await expect(page.locator("[data-gallery-toggle]")).toBeVisible();
+  });
+
   test("the SSE stream survives a view switch: lines arriving off-screen are all there on return", async ({ page, daemon }) => {
     // Anchor: the stream is live, and one line has made the whole round trip.
     await expect(page.locator('[data-stream="live"]')).toBeVisible();

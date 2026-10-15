@@ -109,7 +109,8 @@ test.describe("stream health — two subscriptions on one URL", () => {
     // daemon's openStreams sat at 1 under a page showing both views. apiFetch
     // sends `cache: "no-store"` for exactly this; the pin is engine-agnostic
     // and the Firefox project is the one that would fail without it.
-    await page.goto(daemon.url);
+    await page.goto(daemon.urlAll);   // Mail is off the nav unless ?all
+
     await expect(page.locator('[data-stream="live"]')).toBeVisible();
     await page.locator('[data-nav="mail"]').click();
     await expect(page.locator('[data-mail-stream="live"]')).toBeVisible();

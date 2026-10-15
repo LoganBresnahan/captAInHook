@@ -61,7 +61,12 @@ the ecosystem tool rather than a bespoke bus.
 console rail lists the six views (Trace — the landing view — Mail, Handlers,
 Policy, Harnesses, Status; the sixth arrived with ADR-0016 d14 and cost the
 navigation nothing but two entries in `VIEWS`/`VIEW_LABELS`, which is the whole
-point of a store field over a router); clicking one writes `view`, and every screen island returns
+point of a store field over a router). The rail shows `navViews(showHidden)`:
+since 2026-10-15 Mail and Policy are in `HIDDEN_VIEWS` and off the rail, and
+the Harnesses view drops the `internal` harness (`HIDDEN_HARNESSES`). Loading
+`/ui?all` sets the store's `showHidden` at bootstrap and puts them back, along
+with the template gallery's toggle (ADR-0015 d1/d3, 2026-10-15 amendments).
+Clicking a view writes `view`, and every screen island returns
 `null` unless `view` names it, so the region holds exactly one screen. The gate
 sits AFTER each island's hooks, so a hidden island keeps polling and comes back
 current instead of blank — and, because rendering null does not unmount, the
@@ -162,7 +167,8 @@ the daemon's OWN reported paths: the handlers.json directory first, the shim's
 deploy home second, nothing third — a wrong absolute path would be accepted by
 the daemon and silently never run), and pre-fills the install form. The
 verbatim confirm still gates the write. **ADR-0011's provenance trigger stays
-unfired.**
+unfired.** Since 2026-10-15 the gallery's toggle renders only under `/ui?all`.
+Without it, `+ install` is the only way in (ADR-0015 d3 amendment).
 
 Template text is single-sourced from `examples/payloads/` through Vite `?raw`
 (`templateScripts.ts` is the only file that touches it — `templates.ts` stays
@@ -505,7 +511,7 @@ the engine — and the config's one retry stays for genuine contention.
 | `uiDir` wiring (defaults beside the executables) | `dotnet/captainHook/Core/DaemonHost.cs` |
 | frontend project (React+Vite+Zustand, `base:'/ui/'`, outDir→ `ui/`) | `web/vite.config.ts`, `web/package.json`, `web/index.html` |
 | token bootstrap (fragment→sessionStorage→scrub→bearer) | `web/src/auth.ts` (`bootstrapToken`, `apiFetch`, `currentToken`, `clearToken`) |
-| the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `foldMail`, `SseFrame`, `MailStreamState`, `PolicyVerdict`, `TRACE_CAP`; navigation: `view`, `setView`, `VIEWS`, `VIEW_LABELS`) |
+| the one store + fold reducer + contracts | `web/src/store.ts` (`useStore`, `foldTrace`, `foldMail`, `SseFrame`, `MailStreamState`, `PolicyVerdict`, `TRACE_CAP`; navigation: `view`, `setView`, `VIEWS`, `VIEW_LABELS`; hiding: `HIDDEN_VIEWS`, `HIDDEN_HARNESSES`, `navViews`, `showHiddenFrom`, `showHidden`; pinned by `store.test.ts` and `nav.spec.ts`) |
 | SSE fetch client (protocol layer + reconnect) | `web/src/sse.ts` (`splitRecords`, `parseRecord`, `recordToFrame`, `runEventStream`, `startEventStream`; `initialCursor` opens a stream at a given position rather than "from now"; `stallMs`/`timer` the watchdog and its seam, `DEFAULT_STALL_MS`, `stallWindowMs`, `"stalled"` in `StreamState`) |
 | stream telemetry + the honest empty state | `web/src/store.ts` (`StreamStats`, `emptyStreamStats`, `noteFrame`, `noteState`, `pinServed`, `streamStats`, `mailStreamStats`), `web/src/streamHealth.ts` (`emptyTraceReason` — filtered/stalled/retrying/idle/quiet/**starved**), `web/src/tick.ts` (`useTick`), `format.ts` (`agoLabel`); `TracePanel` `.trace-stats[data-frames][data-connects]`, `[data-trace-empty=<kind>]`; `MailPanel` `.mail-stream-stats`; pinned by `streamHealth.test.ts`, the watchdog by `sse.test.ts` + `mailStream.test.ts` |
 | same-URL concurrency (Firefox cache lock) | `web/src/auth.ts` `apiFetch` sends `cache: "no-store"` on every call; `stream-health.spec.ts` "two subscriptions on one URL"; daemon knob `ApiHost.ResolveHeartbeat` / `CAPTAINHOOK_SSE_HEARTBEAT_MS` (`Program.cs`; `ApiHostTests.ResolveHeartbeat`) |

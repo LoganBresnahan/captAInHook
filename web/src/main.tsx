@@ -8,7 +8,7 @@ import { PolicyPanel } from "./PolicyPanel.tsx";
 import { TracePanel } from "./TracePanel.tsx";
 import { MailPanel } from "./MailPanel.tsx";
 import { bootstrapToken } from "./auth.ts";
-import { useStore } from "./store.ts";
+import { showHiddenFrom, useStore } from "./store.ts";
 import { startEventStream } from "./sse.ts";
 import { startMailStream } from "./mailStream.ts";
 import "./styles.css";
@@ -23,6 +23,7 @@ import "./styles.css";
 // the session from OUTSIDE the tree (below) — an app-level concern, not an
 // island's.
 useStore.getState().setSession(bootstrapToken() !== null ? "checking" : "none");
+useStore.getState().setShowHidden(showHiddenFrom(location.search));
 
 const mount = (id: string, node: React.ReactNode) => {
   const el = document.getElementById(id);

@@ -6,7 +6,7 @@ import { test, expect, gotoView } from "./fixtures.ts";
 // still succeeds (a stale/blind write would 412).
 test.describe("policy editor", () => {
   test("edit → save → written, then save again with the adopted ETag → written", async ({ page, daemon }) => {
-    await page.goto(daemon.url);
+    await page.goto(daemon.urlAll);
     await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
     await gotoView(page, "policy");
     const island = page.locator('[data-island="policy"]');
@@ -30,7 +30,7 @@ test.describe("policy editor", () => {
   });
 
   test("an invalid policy is refused with the daemon's own violations, nothing written", async ({ page, daemon }) => {
-    await page.goto(daemon.url);
+    await page.goto(daemon.urlAll);
     await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
     await gotoView(page, "policy");
     const island = page.locator('[data-island="policy"]');
@@ -47,7 +47,7 @@ test.describe("policy editor", () => {
 // instead of being silently rewritten.
 test.describe("policy rule builder", () => {
   test.beforeEach(async ({ page, daemon }) => {
-    await page.goto(daemon.url);
+    await page.goto(daemon.urlAll);
     await expect(page.locator('.session-line[data-session="live"]')).toBeVisible();
     await gotoView(page, "policy");
   });

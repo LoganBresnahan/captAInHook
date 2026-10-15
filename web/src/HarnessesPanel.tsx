@@ -1,4 +1,4 @@
-import { useStore } from "./store.ts";
+import { HIDDEN_HARNESSES, useStore } from "./store.ts";
 import { useApiJson } from "./api.ts";
 import { verbColumns, verbsLabel, effectLandsOn } from "./templates.ts";
 import type { HarnessesDto } from "./api.gen.ts";
@@ -18,6 +18,7 @@ export function HarnessesPanel() {
   const view = useStore((s) => s.view);
   const session = useStore((s) => s.session);
   const harnesses = useStore((s) => s.harnesses);
+  const showHidden = useStore((s) => s.showHidden);
   const setHarnesses = useStore((s) => s.setHarnesses);
   useApiJson<HarnessesDto>("/api/v1/harnesses", setHarnesses);
 
@@ -33,7 +34,7 @@ export function HarnessesPanel() {
         can still run a payload; it just cannot change the turn.
       </p>
       <ul className="harnesses">
-        {harnesses.harnesses.map((h) => (
+        {harnesses.harnesses.filter((h) => showHidden || !HIDDEN_HARNESSES.has(h.name)).map((h) => (
           <li key={h.name} data-harness={h.name}>
             <div className="harness-head">
               <strong>{h.name}</strong>
