@@ -651,6 +651,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 
 [data-editor="handlers"] tr[data-enabled-state="disabled"] td { opacity: 0.5; }
 [data-editor="handlers"] td button { padding: var(--s-1) var(--s-2); font-size: var(--fs-xs); }
+/* The payload's path under the entry name: secondary, and allowed to wrap
+   anywhere so a deep path never pushes the table wider than the card. */
+.entry-command {
+  display: block;
+  margin-top: var(--s-1);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+  background: none;   /* a caption, not an inline code chip */
+  border: 0;
+  padding: 0;
+}
 
 .entry-form {
   border: 1px solid var(--border);

@@ -159,7 +159,15 @@ export function HandlersSection({ dto }: { dto: HandlersDto }) {
               return (
                 <tr key={`${e.name}/${i}`} data-expected={e.name} data-registered={e.registered}
                     data-enabled-state={state}>
-                  <td>{e.name}</td>
+                  <td>
+                    {e.name}
+                    {/* Where the payload actually lives: the entry's command,
+                        straight from handlers.json (absent when the file did
+                        not parse — no guessing). */}
+                    {entry !== null && (
+                      <code className="entry-command" data-entry-command={e.name}>{entry.command}</code>
+                    )}
+                  </td>
                   <td>{e.events.join(", ")}</td>
                   <td>{e.mode ?? "—"}</td>
                   <td>{e.failMode ?? "—"}</td>

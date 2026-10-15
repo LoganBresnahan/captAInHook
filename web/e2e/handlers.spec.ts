@@ -63,6 +63,8 @@ test.describe("handlers editor", () => {
     const row = page.locator('[data-expected="greeter"]');
     await expect(row).toHaveAttribute("data-registered", "false");
     await expect(row).toContainText("pending");
+    // The row says where the payload lives: the entry's command, verbatim.
+    await expect(row.locator('[data-entry-command="greeter"]')).toHaveText("/bin/sh");
     // Fire a real hook → the reconcile runs → the next poll shows it live.
     daemon.fireHook("user-prompt-submit");
     await expect(page.locator('[data-expected="greeter"][data-registered="true"]'))
