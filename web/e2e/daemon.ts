@@ -188,6 +188,9 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
     // `mail digest` children inherit this name through ExecHandler's env
     // allowlist, so a payload cannot read the operator's real mailbox either.
     CAPTAINHOOK_MAIL_DIR: mailDir,
+    // The mail watcher's rules too: unset, a production daemon reads the
+    // operator's live ~/.captainHook/watch.json. Absent here = zero nudges.
+    CAPTAINHOOK_WATCH_FILE: join(sandbox, "watch.json"),
   };
   // Capture the daemon's own stderr so a startup failure is diagnosable, not
   // a blind "api.json never appeared". Stderr is chatty in a dev run; the

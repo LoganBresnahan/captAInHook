@@ -143,7 +143,12 @@ test.describe("stream health — the stall watchdog", () => {
     await page.goto(daemon.url);
     await expect(page.locator('[data-stream="live"]')).toBeVisible();
     daemon.appendTrail({ ts: new Date().toISOString(), lvl: "info", src: "e2e", evt: "before.freeze", dispatchId: "f0f0f0f0" });
-    const lines = page.locator('[data-island="trace"] [data-trace="line"]');
+    // Count only THIS test's lines: the daemon's own trail rides the same
+    // stream, and the mail watcher's first `watch.evaluate` (one poll after
+    // start) lands inside the freeze and arrives with the thaw. A replayed
+    // `before.freeze` would still make the count 3.
+    const lines = page.locator('[data-island="trace"] [data-trace="line"]')
+      .filter({ hasText: /before\.freeze|after\.thaw/ });
     await expect(lines).toHaveCount(1);
 
     // Freeze: the daemon stops writing anything, heartbeats included. The
