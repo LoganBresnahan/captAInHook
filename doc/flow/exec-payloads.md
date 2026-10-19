@@ -139,7 +139,8 @@ Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
 run as LIVE dogfood on the maintainer's own hooks: `git-orient.sh` (oneshot,
 SessionStart — once-per-session git bearing), `deploy-guard.sh` (oneshot,
 PreToolUse — `Decide(ask)` when any tool call — whatever the host names it — would mutate
-`~/.captainHook/bin`; pinned by `DeployGuardTests`), `session-pulse.sh` (oneshot, Stop — per-turn activity
+the live install — the versioned `~/.local/share/captainhook` layout and its `~/.local/bin` links
+(ADR-0020), or the legacy `~/.captainHook/bin`; pinned by `DeployGuardTests`), `session-pulse.sh` (oneshot, Stop — per-turn activity
 ledger), `doc-pointer.sh` (resident, PreToolUse — warm ground-truth index,
 injects keep-docs-in-sync reminders), and `orient-brief.sh` (oneshot,
 SessionStart — LLM-backed "since last time" brief via `claude -p`, 30min

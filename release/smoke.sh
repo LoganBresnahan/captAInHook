@@ -3,8 +3,9 @@
 #
 #   release/smoke.sh
 #
-# Run after install.sh, in a throwaway HOME (CI: a fresh runner; locally: a
-# sandbox). Reads the same env install.sh does (CAPTAINHOOK_INSTALL_DIR,
+# Run after install.sh, in a THROWAWAY HOME (CI: a fresh runner; locally: a
+# sandbox) — it writes ~/.claude/settings.json and ~/.captainHook/handlers.json,
+# so it refuses a home that already has either. Reads the same env install.sh does (CAPTAINHOOK_INSTALL_DIR,
 # CAPTAINHOOK_BIN_DIR) and needs XDG_RUNTIME_DIR either unset (→ ~/.captainHook)
 # or short — Unix socket paths cap at ~104 bytes.
 #
@@ -46,6 +47,15 @@ wait_for() {  # wait_for <seconds> <command...>
   return 1
 }
 
+# This script WRITES $HOME/.claude/settings.json and $HOME/.captainHook/
+# handlers.json. Under a real home that would replace the user's own — so a
+# home that already has either is refused, before anything is written.
+for f in "$HOME/.claude/settings.json" "$HOME/.captainHook/handlers.json"; do
+  if [ -e "$f" ]; then
+    printf 'smoke: refusing to run: %s exists — this HOME is not a throwaway one (run it under a fresh, empty HOME)\n' "$f" >&2
+    exit 2
+  fi
+done
 [ -x "$SHIM" ] && [ -x "$ENGINE" ] || fail "no installed captainShim/captainHook under $BIN_DIR"
 [ ! -e "$RUNDIR" ] || [ -z "$(ls "$RUNDIR"/captaind-*.pid 2>/dev/null)" ] || fail "a daemon is already running in $RUNDIR — use a fresh HOME"
 export CAPTAINHOOK_IDLE_MS="$IDLE_MS"
