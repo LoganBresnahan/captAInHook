@@ -16,11 +16,13 @@ are as-of-write-time and can drift. When in doubt, read the code.
   commits + roadmap + docs. Run it first in a fresh window.
 - **`/shipshape`** — verifies the repo is in order (tests / docs / logging). Run
   before commits. It *proposes* fixes; it does not apply them unless asked.
-- **`/deploy`** — ships the current build (ALL FOUR artifacts: native
-  `captainShim` + single-file `captainHook` engine + committed `ui/` + the
-  pinned `bosun` spawn wrapper, staged and swapped together) to the live hook
-  installation `~/.captainHook/bin` and verifies the daemon warm path. The
-  ONLY sanctioned way to touch the live deployment; needs the suite green twice.
+- **`/deploy`** — ships the current build as a release in miniature
+  (ADR-0020): `release/package.sh` builds the archive a tag would publish,
+  `release/install.sh --archive` installs it into
+  `~/.local/share/captainhook/versions/<v>` behind the `~/.local/bin`
+  `captainShim`/`captainHook` links, then it verifies the daemon warm path.
+  The ONLY sanctioned way to touch the live deployment; needs the suite green
+  twice. Rollback: `install.sh --rollback`.
 
 ## Architecture in one breath
 
@@ -170,6 +172,7 @@ ADR in the body. End every commit with a `Co-Authored-By: Claude <model>` traile
   (wire lib), `CaptainHook.Shim` (AOT shim), `CaptainHook.Actors` (F#)
 - env vars: `CAPTAINHOOK_LOG`, `CAPTAINHOOK_LOG_STDERR`, `CAPTAINHOOK_HARNESS_DIR`, `CAPTAINHOOK_DISPATCH_FILE`, `CAPTAINHOOK_HANDLERS_FILE`, `CAPTAINHOOK_WATCH_FILE`, `CAPTAINHOOK_PROBE`, `CAPTAINHOOK_COLDSTART`, `CAPTAINHOOK_IDLE_MS`, `CAPTAINHOOK_API_PORT`, `CAPTAINHOOK_ASK_TOOL_TIMEOUT_S`, `CAPTAINHOOK_MAIL_FROM_AGENT` / `_HARNESS` / `_SESSION` (a spawning payload declaring who the process is), `CAPTAINHOOK_SSE_HEARTBEAT_MS` (test knob)
 - runtime home: `~/.captainHook/` — JSONL logs in `logs/`, user harness overrides in `harnesses/`; daemon rendezvous files (socket/lock/pid) in `$XDG_RUNTIME_DIR/captainHook/` when set, else here
+- install home: `~/.local/share/captainhook/` (lowercase; `versions/<v>/`, `payloads/`, `previous`) behind the `~/.local/bin` links — overridable via `CAPTAINHOOK_INSTALL_DIR` / `CAPTAINHOOK_BIN_DIR` (installer only, ADR-0020)
 
 ⚠ `~/.captainHook/` is the **same tree the live-deployed hook uses.** A dev run or a
 test that writes the real sinks pollutes your actual logs — tests swap the `Log` sink
