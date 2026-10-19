@@ -80,8 +80,14 @@ jobs:
           export HOME="$RUNNER_TEMP/home"
           mkdir -p "$HOME"
           sh release/install.sh --archive "$PWD/dist/captainhook-${{ steps.version.outputs.version }}-${{ matrix.asset }}.tar.gz"
-          sh release/smoke.sh | tee "$RUNNER_TEMP/smoke.txt"
+          # No pipe: the smoke's exit status IS the step's. (`smoke | tee`
+          # under the default `bash -e` reported tee's status — a darwin-x64
+          # FAIL rode green from v0.1.0 until 0.1.1's checks caught it.)
+          rc=0
+          sh release/smoke.sh > "$RUNNER_TEMP/smoke.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/smoke.txt"
           echo "### ${{ matrix.asset }}: $(tail -1 "$RUNNER_TEMP/smoke.txt")" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       - uses: actions/upload-artifact@v4
         with:
