@@ -1104,6 +1104,21 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [ ] **26. A runtime dir too long for a socket should still get a daemon** —
+  found in the v0.1.0 post-release check (2026-10-19). With an
+  `XDG_RUNTIME_DIR` (or a home, on macOS) long enough that
+  `captaind-<id>.sock` overflows sun_path (~104 bytes), the shim refuses the
+  rendezvous and every hook collapses in-process: the hook still answers, but
+  no daemon ever starts. The reason is in the trail (`shim.rendezvousUnavailable`,
+  path and byte count), but not anywhere a user looks. Real-world runtime dirs
+  are short, so this is an edge case. The candidate fix is the pharos shape: when the
+  preferred dir would overflow, fall back to a short per-uid dir
+  (`/tmp/captainhook-<uid>`, created 0700, owner- and mode-checked before
+  use), with doctor and `captainHook version` naming the dir in use. It
+  touches the rendezvous contract (ADR-0004 d3's directory rule), so it
+  needs an ADR-0004 amendment, and the shim and engine must agree on the
+  same fallback (it lives in the wire lib, `RendezvousPaths`).
+
 - [x] **4. Daemon topology** — long-lived `captaind` + thin per-event shim
   (DESIGN.md's split). ⚠ Fires ADR-0001's revisit trigger: re-evaluate
   Akka.NET vs the hand-rolled layer *before* building on either → an ADR.
