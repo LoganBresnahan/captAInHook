@@ -49,6 +49,13 @@ public class TimeoutClassificationTests
         Assert.IsType<Effect.Noop>(r1.Merged);                       // fail-open degrade
         Assert.Contains("TIMEOUT(cancelled)", r1.Trace.Render());    // classified, not generic
 
+        // The cancellation reply lands BEFORE the reply-then-crash restart
+        // finishes swapping the mailbox: a second dispatch sent into that
+        // window is (correctly) "abandoned", not the behavior under test. Wait
+        // for the fresh worker — its factory re-ran — first.
+        await PollUntilAsync(() => Task.FromResult(Volatile.Read(ref built) >= 2),
+            TimeSpan.FromSeconds(10), "worker restarted after the honored cancel");
+
         var r2 = await dispatcher.DispatchAsync(Ev());
         Assert.Contains("TIMEOUT(cancelled)", r2.Trace.Render());
 

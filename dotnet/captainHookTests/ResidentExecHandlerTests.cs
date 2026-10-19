@@ -30,6 +30,14 @@ public class ResidentExecHandlerTests : IDisposable
         _tmp.Dispose();
     }
 
+    // Readiness/cancel tests pass an explicit, generous grace (the
+    // classification-test seam, ClassificationTests): with the default — 10%
+    // of a few-hundred-ms budget, floored at 100ms — a loaded macOS runner
+    // delivered the handler's honored-cancel reply after the window, and the
+    // dispatcher read it as a wedge. What these tests pin is the HANDLER's
+    // answer to its budget, not the grace sizing.
+    private static readonly TimeSpan Grace = TimeSpan.FromSeconds(5);
+
     private static HookEvent Ev(string type = "UserPromptSubmit") => new(
         type, "s-res", Cwd: null, JsonDocument.Parse("""{"prompt":"hi"}""").RootElement.Clone());
 
@@ -140,7 +148,7 @@ public class ResidentExecHandlerTests : IDisposable
             """ + "\n" + EchoServer;
         var reg = new Registry().On("UserPromptSubmit", "slowboot",
             () => Res(script, extra: gate), FailMode.Open, TimeSpan.FromMilliseconds(400));
-        var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5));
+        var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5), grace: Grace);
 
         // Not ready: fail-open Noop + exec.notReady, and NO kill/restart.
         var r1 = await dispatcher.DispatchAsync(Ev(), "warm0001");
@@ -166,7 +174,7 @@ public class ResidentExecHandlerTests : IDisposable
         using var captured = new CapturedLog();
         var reg = new Registry().On("UserPromptSubmit", "gate",
             () => Res("exec sleep 300", FailMode.Closed), FailMode.Closed, TimeSpan.FromMilliseconds(300));
-        var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5));
+        var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5), grace: Grace);
 
         var r = await dispatcher.DispatchAsync(Ev(), "deny0001");
         var deny = Assert.IsType<Effect.Decide>(r.Merged);
@@ -306,7 +314,7 @@ public class ResidentExecHandlerTests : IDisposable
             """ + "\n" + EchoServer;
         var reg = new Registry().On("UserPromptSubmit", "wedger",
             () => Res(script, extra: flag), FailMode.Open, TimeSpan.FromMilliseconds(500));
-        var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5));
+        var dispatcher = new Dispatcher(reg, TimeSpan.FromSeconds(5), grace: Grace);
 
         await PollUntilAsync(() => Task.FromResult(captured.Events.Any(e => e.Evt == "exec.ready")),
             TimeSpan.FromSeconds(10), "gen1 ready");
