@@ -117,7 +117,10 @@ layer (the Akka re-evaluation below).
      no group/other bits and owner rwx (0700). Absent is fine — nothing can
      be listening there; the daemon creates it 0700 and re-checks AFTER the
      create, so a dir someone else made in between is refused, never
-     adopted, and a loose one is never chmodded. A refused dir keeps the
+     adopted, and a loose one is never chmodded; that create also runs a
+     layout-free second proof (an exclusive create + delete of a probe file,
+     which only the owner of a 0700 dir can do), once per daemon, never on
+     the shim's per-hook path. A refused dir keeps the
      pre-amendment behavior — no daemon, hooks collapse — with the reason in
      `shim.rendezvousUnavailable` / `daemon.rendezvousFailed`. It is
      implemented once, in the wire lib (`RendezvousPaths.ChooseRuntimeDir`,

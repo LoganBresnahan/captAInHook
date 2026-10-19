@@ -85,10 +85,21 @@ public static class ShortRuntimeDir
     {
         try { Directory.CreateDirectory(dir, DirMode); }
         catch (Exception ex) { return $"cannot create '{dir}': {ex.Message}"; }
-        var refusal = Check(dir, uid);
-        if (refusal is null && !Directory.Exists(dir))
-            return $"'{dir}' vanished after it was created";
-        return refusal;
+        if (Check(dir, uid) is { } refusal) return refusal;
+        // A second, layout-free proof, once per daemon (never on the shim's
+        // per-hook path): an exclusive create + delete inside a 0700 dir
+        // succeeds only for its owner (or root, whose own dir it then is).
+        // lstat stays the primary check — it reads owner and mode in one
+        // atomic call, where a mode-then-write probe alone could race a
+        // stranger's chmod.
+        var probe = System.IO.Path.Combine(dir, ".probe-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write)) { }
+            File.Delete(probe);
+        }
+        catch (Exception ex) { return $"cannot write in '{dir}': {ex.Message}"; }
+        return null;
     }
 
     // ---- lstat(2) ---------------------------------------------------------
