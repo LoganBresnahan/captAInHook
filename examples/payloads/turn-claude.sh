@@ -70,6 +70,14 @@ BIN="${CAPTAINHOOK_BIN:-${HOME}/.captainHook/bin/captainHook}"
 # A turn changes NOTHING about the loop it was dispatched from — there is no
 # loop; the nudge came from the daemon. `internal.json` declares no effects, so
 # anything else here would be downgraded and warned about anyway.
+# GNU `timeout` is coreutils — stock macOS has none, and without it the model
+# never ran there (the first macOS CI run). perl's alarm survives exec, so the
+# child is SIGALRM'd at the deadline; perl ships with macOS.
+with_timeout() {  # with_timeout <seconds> <cmd> [args…]
+  if command -v timeout >/dev/null 2>&1; then timeout "$@"
+  else perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$@"; fi
+}
+
 noop() { printf '{"effect":"noop"}\n'; exit 0; }
 
 # Good enough for the two fields this payload reads by hand: a role and a
@@ -212,7 +220,7 @@ ALLOWED="${TURN_ALLOWED_TOOLS:-Read,Grep,Glob,Bash(${BIN} mail send:*)}"
 # header) — keep it. The child's stdout goes to STDERR on purpose: our stdout is
 # the exec wire and carries exactly one JSON line, which is the noop below.
 printf '%s' "$prompt" \
-  | timeout "$TIMEOUT_S" "$MODEL_CMD" -p --setting-sources "" --allowedTools "$ALLOWED" >&2 2>&1 \
+  | with_timeout "$TIMEOUT_S" "$MODEL_CMD" -p --setting-sources "" --allowedTools "$ALLOWED" >&2 2>&1 \
   || printf 'turn-claude: the turn exited nonzero or timed out — its mail is already delivered\n' >&2
 
 noop

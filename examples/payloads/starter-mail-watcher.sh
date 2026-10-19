@@ -113,10 +113,18 @@ Write at most two sentences telling them what to re-check before they act on
 their stale reads. Be concrete and terse. No preamble, no sign-off."
 # ---------------------------------------------------------------------------
 
+# GNU `timeout` is coreutils — stock macOS has none, and without it the model
+# never ran there (the first macOS CI run). perl's alarm survives exec, so the
+# child is SIGALRM'd at the deadline; perl ships with macOS.
+with_timeout() {  # with_timeout <seconds> <cmd> [args…]
+  if command -v timeout >/dev/null 2>&1; then timeout "$@"
+  else perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$@"; fi
+}
+
 # --setting-sources "" is the REENTRANCY GUARD (see the header). -p is
 # non-interactive: one prompt in, one answer out, no session.
 answer=$(printf '%s' "$prompt" \
-  | timeout "$TIMEOUT_S" "$MODEL_CMD" -p --setting-sources "" 2>/dev/null)
+  | with_timeout "$TIMEOUT_S" "$MODEL_CMD" -p --setting-sources "" 2>/dev/null)
 
 answer=$(printf '%s' "$answer" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 if [ -n "$answer" ]; then

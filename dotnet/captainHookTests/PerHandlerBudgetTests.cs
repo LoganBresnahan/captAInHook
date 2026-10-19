@@ -36,14 +36,23 @@ public class PerHandlerBudgetTests
         // Default 10s; the handler declares 150ms and honors its token. The
         // dispatch must resolve on the HANDLER's window (fail-open Noop),
         // never burning the default.
+        //
+        // The first call answers at once: it warms the worker, so the timed
+        // dispatch measures the budget, not actor start-up. Cold, a loaded
+        // runner can fail to even DEQUEUE inside 150ms + grace — classified,
+        // correctly, as "backlogged", not the "cancelled" this test is about
+        // (macos-14 CI, 2026-10-19).
+        var calls = 0;
         var reg = new Registry().On("UserPromptSubmit",
             new TestHandler("tight", async (_, ctx) =>
             {
+                if (Interlocked.Increment(ref calls) == 1) return new Effect.Inject("warm");
                 await Task.Delay(TimeSpan.FromSeconds(30), ctx.Ct);   // never completes
                 return new Effect.Inject("unreachable");
             }),
             budget: TimeSpan.FromMilliseconds(150));
         var dispatcher = new Dispatcher(reg, budget: TimeSpan.FromSeconds(10));
+        Assert.IsType<Effect.Inject>((await dispatcher.DispatchAsync(Ev())).Merged);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var r = await dispatcher.DispatchAsync(Ev());
