@@ -43,15 +43,11 @@ public sealed class DaemonRendezvous : IDisposable
     {
         // 0700: the rendezvous directory is per-user private — it is the trust
         // root for the 0600 socket, pidfile, and api.json token (ADR-0004 d3,
-        // ADR-0007 d6). CreateDirectory's mode applies ONLY when it creates the
-        // dir; the log layer (WireJsonl) may have already made ~/.captainHook at
-        // the umask default (0755) on an earlier hook, and the mode arg is then
-        // silently ignored — so tighten explicitly afterwards, or a co-located
-        // user could traverse in and read the trail. Best-effort: a chmod
-        // failure must not cost the user their daemon.
-        const UnixFileMode dirMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-        Directory.CreateDirectory(paths.RuntimeDir, dirMode);
-        try { File.SetUnixFileMode(paths.RuntimeDir, dirMode); } catch { /* not ours to tighten / odd FS */ }
+        // ADR-0007 d6). The wire lib owns the rule so the shim and the engine
+        // cannot disagree: the preferred dir is created and tightened, the
+        // short per-uid dir is created and then PROVEN ours (it throws when it
+        // is not — the daemon exits, hooks keep collapsing).
+        paths.EnsureRuntimeDir();
 
         FileStream held;
         try

@@ -85,8 +85,13 @@ public static class Doctor
         if (self is null) { try { self = ContentIdentity.Current; } catch { /* dev tree: no loose DLLs */ } }
         // The DIRECTORY only: doctor reads pidfiles, it binds no socket, so the
         // sun_path cap Resolve enforces is not its to trip over. (It used to
-        // resolve a probe socket here and crash on a long home path.)
-        var dir = runtimeDir ?? RendezvousPaths.DefaultRuntimeDir();
+        // resolve a probe socket here and crash on a long home path.) The
+        // choice is the shim's and the daemon's (ADR-0004 d3, amended
+        // 2026-10-19); a short dir that is not proven ours is never read —
+        // its pidfiles would steer which processes doctor signals.
+        var choice = runtimeDir is null ? RendezvousPaths.ChooseRuntimeDir() : null;
+        if (choice?.Refusal is not null) return [];
+        var dir = runtimeDir ?? choice!.Dir;
         // Covers the daemon's 10s drain PLUS its child phase (ADR-0010 N6:
         // TERM→2s grace→KILL + reap beat + the 1s cut window run after the
         // drain deadline; worst case ≈ 14.5s) with real headroom — a doctor

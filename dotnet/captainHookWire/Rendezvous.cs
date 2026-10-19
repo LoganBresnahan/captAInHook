@@ -82,12 +82,14 @@ public static class ContentIdentity
 
 /// Where a given build's daemon and shims meet: socket, lock, pid, and the
 /// management-API discovery file, all carrying the content-identity version in
-/// their names. Resolution is a PURE FUNCTION of the environment — the shim is
-/// per-invocation with no memory and no side channel to the daemon, so both
-/// sides must *compute* the identical path; probe-until-fits or any stateful
-/// negotiation is unsound by construction (doc/platform.md). Nothing here
-/// touches the filesystem: creating the directory and binding are the
-/// lock-holder's business (lock-bind-rendezvous slice).
+/// their names. The directory CHOICE is a pure function of the environment —
+/// the shim is per-invocation with no memory and no side channel to the
+/// daemon, so both sides must *compute* the identical path; probe-until-fits
+/// or any stateful negotiation is unsound by construction (doc/platform.md).
+/// The one filesystem read is the short dir's trust check (ShortRuntimeDir):
+/// it never changes WHICH dir is chosen, only whether it may be used.
+/// Creating the directory and binding are the lock-holder's business
+/// (DaemonRendezvous, through EnsureRuntimeDir).
 public sealed record RendezvousPaths(
     string Version, string RuntimeDir, string SocketPath, string LockPath, string PidPath, string ApiJsonPath)
 {
@@ -96,12 +98,31 @@ public sealed record RendezvousPaths(
     /// a path that works here works everywhere.
     public const int MaxSocketPathBytes = 103;
 
+    /// Why the short per-uid dir was chosen over the preferred one; null when
+    /// the preferred dir is in use (or the dir was passed explicitly).
+    public string? ShortDirReason { get; init; }
+
     /// Resolve for this process. `runtimeDir`/`version` overrides are for
-    /// tests; production callers take the environment's answer.
+    /// tests; production callers take the environment's answer. An explicit
+    /// `runtimeDir` is used as given — the short-dir fallback is a property of
+    /// the DEFAULT choice only.
     public static RendezvousPaths Resolve(string? runtimeDir = null, string? version = null)
     {
         version ??= ContentIdentity.Current;
-        var dir = runtimeDir ?? DefaultRuntimeDir();
+        string dir;
+        string? shortReason = null;
+        if (runtimeDir is not null) dir = runtimeDir;
+        else
+        {
+            var choice = ChooseRuntimeDir();
+            // Refused short dir: the caller's existing catch keeps today's
+            // behavior — no daemon, the hook collapses — and logs this text.
+            if (choice.Refusal is not null)
+                throw new InvalidOperationException(
+                    $"{choice.ShortDirReason}; the short dir is refused: {choice.Refusal}");
+            dir = choice.Dir;
+            shortReason = choice.ShortDirReason;
+        }
 
         var socket = Path.Combine(dir, $"captaind-{version}.sock");
         var bytes = Encoding.UTF8.GetByteCount(socket);
@@ -120,13 +141,61 @@ public sealed record RendezvousPaths(
             version, dir, socket,
             Path.Combine(dir, $"captaind-{version}.lock"),
             Path.Combine(dir, $"captaind-{version}.pid"),
-            Path.Combine(dir, $"captaind-{version}.api.json"));
+            Path.Combine(dir, $"captaind-{version}.api.json"))
+        { ShortDirReason = shortReason };
     }
 
-    /// $XDG_RUNTIME_DIR/captainHook when set (Linux/systemd: short by
-    /// construction, per-user 0700 tmpfs — the idiomatic home for runtime
-    /// state), else ~/.captainHook (macOS/Windows never set XDG; their home
-    /// paths are short). "Is it set?" is itself the deterministic branch.
+    /// Make the runtime dir exist, owner-only, before the lock is taken. The
+    /// preferred dir is created 0700 and tightened best-effort (the log layer
+    /// may have made ~/.captainHook at the umask default first). The short
+    /// dir is never tightened: it is created 0700 and then PROVEN ours, and a
+    /// directory that fails the proof throws — it is shared ground, and
+    /// adopting one someone else made would hand them the socket.
+    public void EnsureRuntimeDir()
+    {
+        if (ShortDirReason is not null)
+        {
+            if (ShortRuntimeDir.Ensure(RuntimeDir, ShortRuntimeDir.Uid) is { } refusal)
+                throw new InvalidOperationException($"the short dir is refused: {refusal}");
+            return;
+        }
+        // CA1416: POSIX-only, like the socket this directory exists to hold.
+#pragma warning disable CA1416
+        const UnixFileMode dirMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Directory.CreateDirectory(RuntimeDir, dirMode);
+        try { File.SetUnixFileMode(RuntimeDir, dirMode); } catch { /* not ours to tighten / odd FS */ }
+#pragma warning restore CA1416
+    }
+
+    /// The longest socket file name a production identity produces
+    /// (`captaind-` + 12 hex + `.sock`): the choice measures the preferred dir
+    /// against it, so it never depends on which version is asking.
+    private const string WorstCaseSocketName = "captaind-000000000000.sock";
+
+    /// The runtime dir this environment uses, and why (ADR-0004 d3, amended
+    /// 2026-10-19). Production reads XDG_RUNTIME_DIR, the home dir and the
+    /// effective uid; doctor and `captainHook version` print the answer.
+    public static RuntimeDirChoice ChooseRuntimeDir() =>
+        ChooseRuntimeDir(DefaultRuntimeDir(), ShortRuntimeDir.Uid, ShortRuntimeDir.DefaultBase);
+
+    /// The pure core plus the trust check: `preferred` when a socket fits in
+    /// it, else `<shortBase>/captainhook-<uid>` with the reason — and, for the
+    /// short dir only, `Refusal` when it exists but is not proven ours.
+    public static RuntimeDirChoice ChooseRuntimeDir(string preferred, uint uid, string shortBase)
+    {
+        var bytes = Encoding.UTF8.GetByteCount(Path.Combine(preferred, WorstCaseSocketName));
+        if (bytes <= MaxSocketPathBytes) return new RuntimeDirChoice(preferred, null, null);
+
+        var dir = ShortRuntimeDir.PathFor(uid, shortBase);
+        var reason = $"a socket under '{preferred}' would be {bytes} bytes, over the {MaxSocketPathBytes}-byte sun_path cap";
+        return new RuntimeDirChoice(dir, reason, ShortRuntimeDir.Check(dir, uid));
+    }
+
+    /// The PREFERRED dir: $XDG_RUNTIME_DIR/captainHook when set (Linux/systemd:
+    /// short by construction, per-user 0700 tmpfs — the idiomatic home for
+    /// runtime state), else ~/.captainHook (macOS never sets XDG; home paths
+    /// are short). "Is it set?" is itself the deterministic branch. When a
+    /// socket would not fit in it, ChooseRuntimeDir falls back to the short dir.
     public static string DefaultRuntimeDir()
     {
         var xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
@@ -134,4 +203,16 @@ public sealed record RendezvousPaths(
             ? Path.Combine(xdg, "captainHook")
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".captainHook");
     }
+}
+
+/// Which runtime dir is in use. `ShortDirReason` non-null ⇒ the short per-uid
+/// dir was chosen, and why; `Refusal` non-null ⇒ that dir exists but is not
+/// proven ours, so no daemon may use it (hooks collapse, as before the fallback).
+public sealed record RuntimeDirChoice(string Dir, string? ShortDirReason, string? Refusal)
+{
+    /// The human line doctor and `captainHook version` print.
+    public string Describe() =>
+        ShortDirReason is null ? Dir
+        : Refusal is null ? $"{Dir} (short dir: {ShortDirReason})"
+        : $"{Dir} REFUSED — {Refusal} ({ShortDirReason}); hooks run without a daemon";
 }

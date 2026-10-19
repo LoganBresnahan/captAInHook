@@ -105,6 +105,29 @@ layer (the Akka re-evaluation below).
      probe-until-fits is unsound by construction. A resolved socket path
      over the ~104-byte sun_path cap is a clear error naming the escape
      hatch (set `XDG_RUNTIME_DIR`), hit at resolve time, not bind time.
+     *(Amended 2026-10-19, roadmap item 26: that error meant no daemon ever
+     started — every hook collapsed, and the only signal was a trail line.
+     Now, when a socket under the preferred dir would exceed 103 bytes
+     (measured against the worst-case name `captaind-<12 hex>.sock`, so the
+     choice never depends on which version asks), the runtime dir is the
+     short per-uid `/tmp/captainhook-<uid>` instead. The CHOICE stays a pure
+     function of the environment (+ the effective uid). What is new is a
+     trust check, because `/tmp` is shared ground: the dir is used only if
+     `lstat` shows a real directory (not a symlink), owned by this uid, with
+     no group/other bits and owner rwx (0700). Absent is fine — nothing can
+     be listening there; the daemon creates it 0700 and re-checks AFTER the
+     create, so a dir someone else made in between is refused, never
+     adopted, and a loose one is never chmodded. A refused dir keeps the
+     pre-amendment behavior — no daemon, hooks collapse — with the reason in
+     `shim.rendezvousUnavailable` / `daemon.rendezvousFailed`. It is
+     implemented once, in the wire lib (`RendezvousPaths.ChooseRuntimeDir`,
+     `ShortRuntimeDir`), so the shim, daemon, doctor and `ui` cannot
+     disagree; `captainHook version` and `doctor` print the dir in use and
+     why. Not `$TMPDIR`: it is per-process environment the shim and daemon
+     need not share, and on macOS its own length is unbounded. Owner needs
+     `lstat(2)` — the BCL exposes no file owner — read with pinned per-RID
+     struct offsets and cross-checked against `File.GetUnixFileMode` on
+     every call, so a wrong layout refuses instead of trusting.)*
      `<ver>` is a short hash of the binary's **content identity**: the
      ModuleVersionIds of all application assemblies in the app directory.
      Deliberately *not* the informational version — an uncommitted dev

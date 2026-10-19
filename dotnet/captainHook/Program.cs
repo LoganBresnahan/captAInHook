@@ -110,6 +110,8 @@ switch (inv.Mode)
     case Mode.Doctor:
     {
         // Human command, not hook mode: the report goes to stdout on purpose.
+        // First line: WHERE the daemons meet, and why when it is the short dir.
+        Console.WriteLine($"doctor: rendezvous dir {RendezvousPaths.ChooseRuntimeDir().Describe()}");
         var verdicts = await Doctor.RunAsync();
         // doctor-orphans (ADR-0010 phase 8): a second entity class — resident
         // children that outlived their daemon. Report-only; never signals them.

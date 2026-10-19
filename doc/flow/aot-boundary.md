@@ -75,7 +75,9 @@ The same duplication rule covers the WRITE, not just the render: both
 emitters append through their own libc `O_APPEND` writer (`PosixTrail`,
 mirrored in `Logging.fs`) because no BCL append path sets `O_APPEND` and
 the leaf may not reference the wire lib. A P/Invoke is AOT-native — this
-is not a rule-2 violation — but the two copies must stay in step, and
+is not a rule-2 violation (`ShortRuntimeDir`'s `lstat`/`geteuid` are the
+wire lib's other two, single-copy: the F# lib never resolves a rendezvous
+dir) — but the two copies must stay in step, and
 `TrailAppendTests` drives BOTH across one file to say so.
 That now includes the file's **permissions**. Neither copy can pass a mode
 to `open(2)` (the two-argument form is deliberate — Apple arm64 passes a

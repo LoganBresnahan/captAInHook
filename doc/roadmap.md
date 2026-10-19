@@ -1104,7 +1104,7 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
-- [ ] **26. A runtime dir too long for a socket should still get a daemon** —
+- [x] **26. A runtime dir too long for a socket should still get a daemon** —
   found in the v0.1.0 post-release check (2026-10-19). With an
   `XDG_RUNTIME_DIR` (or a home, on macOS) long enough that
   `captaind-<id>.sock` overflows sun_path (~104 bytes), the shim refuses the
@@ -1118,6 +1118,12 @@ run live*. The framework underneath is what exists today.
   touches the rendezvous contract (ADR-0004 d3's directory rule), so it
   needs an ADR-0004 amendment, and the shim and engine must agree on the
   same fallback (it lives in the wire lib, `RendezvousPaths`).
+  **Shipped (v0.1.1):** exactly that shape — ADR-0004 d3's 2026-10-19
+  amendment. `RendezvousPaths.ChooseRuntimeDir` + `ShortRuntimeDir` (lstat
+  owner/mode proof; a refusal keeps the old collapse, logged); `version` and
+  `doctor` name the dir and why; `ShortRuntimeDirTests` (boundary, every
+  refusal, end to end under a long XDG_RUNTIME_DIR) and the release smoke's
+  long-path step on all four RIDs.
 
 - [x] **4. Daemon topology** — long-lived `captaind` + thin per-event shim
   (DESIGN.md's split). ⚠ Fires ADR-0001's revisit trigger: re-evaluate

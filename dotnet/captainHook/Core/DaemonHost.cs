@@ -54,6 +54,7 @@ public static class DaemonHost
         try
         {
             paths = pathsOverride ?? RendezvousPaths.Resolve();
+            paths.EnsureRuntimeDir();   // a refused short dir ends here, logged, exit 1
         }
         catch (Exception ex)
         {
@@ -107,15 +108,16 @@ public static class DaemonHost
         // Listening ⟺ ready: the first connect a shim ever makes against this
         // daemon already finds warm workers.
         using var listener = rv.BindWhenWarm();
-        Log.Info("daemon", "daemon.listening", new LogFields
+        var listening = new Dictionary<string, object>
         {
-            Data = new Dictionary<string, object>
-            {
-                ["socket"] = paths.SocketPath,
-                ["version"] = paths.Version,
-                ["pid"] = Environment.ProcessId,
-            },
-        });
+            ["socket"] = paths.SocketPath,
+            ["version"] = paths.Version,
+            ["pid"] = Environment.ProcessId,
+        };
+        // The short per-uid dir is a fallback someone will want explained
+        // (ADR-0004 d3, amended 2026-10-19): say why, on the line that names the socket.
+        if (paths.ShortDirReason is not null) listening["shortDir"] = paths.ShortDirReason;
+        Log.Info("daemon", "daemon.listening", new LogFields { Data = listening });
 
         // Management API (ADR-0007): a loopback HttpListener beside this UDS
         // serve loop, started only when a port arrives — and only now, after

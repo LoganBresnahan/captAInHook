@@ -130,11 +130,14 @@ public class RendezvousPathsTests
         }
     }
 
-    // Doctor needs only the DIRECTORY: a runtime dir too long for a socket
-    // must not crash it (it used to resolve a probe socket and abort, exit
-    // 134, from install.sh under a long sandbox HOME).
+    // A runtime dir too long for a socket used to mean no daemon at all; it
+    // now means the short per-uid dir (ADR-0004 d3, amended 2026-10-19 —
+    // ShortRuntimeDirTests has the boundary, the refusals and the end to end).
+    // Doctor still needs only the DIRECTORY: handed a long one it must not
+    // crash (it once resolved a probe socket and aborted, exit 134, from
+    // install.sh under a long sandbox HOME).
     [Fact]
-    public async Task Doctor_UnderARuntimeDirTooLongForASocket_RunsAndReportsNothing()
+    public async Task UnderARuntimeDirTooLongForASocket_ResolveLandsInTheShortDir_AndDoctorDoesNotCrash()
     {
         var original = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         var longDir = "/tmp/chk-" + new string('x', 120);
@@ -142,8 +145,10 @@ public class RendezvousPathsTests
         {
             Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", longDir);
             Assert.Equal(Path.Combine(longDir, "captainHook"), RendezvousPaths.DefaultRuntimeDir());
-            Assert.Throws<InvalidOperationException>(() => RendezvousPaths.Resolve(version: "v"));
-            Assert.Empty(await CaptainHook.Core.Doctor.RunAsync());
+            var paths = RendezvousPaths.Resolve(version: "v");
+            Assert.Equal(ShortRuntimeDir.PathFor(ShortRuntimeDir.Uid), paths.RuntimeDir);
+            Assert.NotNull(paths.ShortDirReason);
+            Assert.Empty(await CaptainHook.Core.Doctor.RunAsync(Path.Combine(longDir, "captainHook")));
         }
         finally
         {

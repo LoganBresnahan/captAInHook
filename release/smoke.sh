@@ -6,14 +6,15 @@
 # Run after install.sh, in a THROWAWAY HOME (CI: a fresh runner; locally: a
 # sandbox) — it writes ~/.claude/settings.json and ~/.captainHook/handlers.json,
 # so it refuses a home that already has either. Reads the same env install.sh does (CAPTAINHOOK_INSTALL_DIR,
-# CAPTAINHOOK_BIN_DIR) and needs XDG_RUNTIME_DIR either unset (→ ~/.captainHook)
-# or short — Unix socket paths cap at ~104 bytes.
+# CAPTAINHOOK_BIN_DIR) and XDG_RUNTIME_DIR (unset → ~/.captainHook).
 #
 # Proves, in order: the links resolve to the real versioned folder; install-hooks
 # writes a settings file (a temp one under this HOME); a cold hook spawns the
 # daemon; a warm hook is answered by it; a shipped payload runs through bosun
-# from its payloads/ link; zero wire skew; doctor sees a healthy daemon; and the
-# daemon idle-exits on its own. Prints the cold-hook latency. Exit 0 = pass.
+# from its payloads/ link; zero wire skew; doctor sees a healthy daemon; the
+# daemon idle-exits on its own; and, under an XDG_RUNTIME_DIR too long for a
+# socket, a daemon still comes up — in the short per-uid dir
+# /tmp/captainhook-<uid> (ADR-0004 d3). Prints the hook latencies. Exit 0 = pass.
 set -eu
 
 INSTALL_DIR=${CAPTAINHOOK_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/captainhook}
@@ -21,8 +22,6 @@ BIN_DIR=${CAPTAINHOOK_BIN_DIR:-$HOME/.local/bin}
 SHIM=$BIN_DIR/captainShim
 ENGINE=$BIN_DIR/captainHook
 TRAIL=$HOME/.captainHook/logs/captainHook.jsonl
-RUNDIR=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/captainHook}
-RUNDIR=${RUNDIR:-$HOME/.captainHook}
 IDLE_MS=${SMOKE_IDLE_MS:-6000}
 
 pass() { printf 'smoke: ok    %s\n' "$*"; }
@@ -57,8 +56,15 @@ for f in "$HOME/.claude/settings.json" "$HOME/.captainHook/handlers.json"; do
   fi
 done
 if [ ! -x "$SHIM" ] || [ ! -x "$ENGINE" ]; then fail "no installed captainShim/captainHook under $BIN_DIR"; fi
-[ ! -e "$RUNDIR" ] || [ -z "$(ls "$RUNDIR"/captaind-*.pid 2>/dev/null)" ] || fail "a daemon is already running in $RUNDIR — use a fresh HOME"
 export CAPTAINHOOK_IDLE_MS="$IDLE_MS"
+# Where the daemon meets its shims: ASK the engine — the choice (preferred dir,
+# or the short per-uid one when a socket would not fit) is the wire lib's, and
+# a script that recomputed it would drift from it.
+rundir() { "$ENGINE" version | sed -n 's/^rendezvous  *//p' | sed 's/ (short dir:.*//; s/ REFUSED .*//'; }
+RUNDIR=$(rundir)
+[ -n "$RUNDIR" ] || fail "captainHook version names no rendezvous dir"
+id=$("$ENGINE" version | sed -n 's/^identity *//p')
+[ ! -e "$RUNDIR/captaind-$id.pid" ] || fail "a daemon of this build is already running in $RUNDIR — stop it, or use a fresh HOME"
 
 # 1. the link resolved to the REAL versioned folder (AppContext.BaseDirectory)
 base=$("$ENGINE" version | sed -n 's/^base *//p')
@@ -96,7 +102,7 @@ case $out in *'"hookEventName":"UserPromptSubmit"'*) ;; *) fail "cold hook print
 [ "$(count shim.spawnDaemon)" -ge 1 ] || fail "cold hook did not spawn a daemon"
 pass "cold hook answered in ${COLD_MS}ms (fallback + spawnDaemon)"
 
-has_pid() { ls "$RUNDIR"/captaind-*.pid >/dev/null 2>&1; }
+has_pid() { [ -e "$RUNDIR/captaind-$id.pid" ]; }
 wait_for 30 has_pid || fail "the spawned daemon never wrote its pidfile in $RUNDIR"
 
 # 4. warm hook: answered by the daemon over the socket
@@ -127,11 +133,40 @@ pass "zero shim.wireSkew"
 # 7. doctor sees the daemon as healthy and reaps nothing
 doc=$("$ENGINE" doctor)
 printf '%s\n' "$doc" | grep -q 'healthy' || fail "doctor did not report a healthy daemon: $doc"
-pass "doctor: $(printf '%s\n' "$doc" | head -1)"
+pass "$(printf '%s\n' "$doc" | grep healthy | head -1)"
 
 # 8. idle exit: no traffic for CAPTAINHOOK_IDLE_MS ⇒ the daemon leaves by itself
 gone() { ! has_pid && [ "$(count daemon.idleExit)" -ge 1 ]; }
 wait_for $(( IDLE_MS / 1000 + 30 )) gone || fail "the daemon did not idle-exit within $((IDLE_MS / 1000 + 30))s"
 pass "daemon idle-exited after ${IDLE_MS}ms without traffic"
+
+# 9. a runtime dir too long for a socket still gets a daemon: the short dir
+# (roadmap item 26). Everything resolves it alike — version, the shim, the
+# daemon, doctor — so each one is asked.
+LONG=$HOME/xdg-runtime-dir-long-enough-that-a-socket-path-under-it-overflows-sun-path-on-every-platform-we-ship
+SHORT=/tmp/captainhook-$(id -u)
+if [ -e "$SHORT/captaind-$id.pid" ]; then fail "a daemon of this build already runs in $SHORT — stop it first"; fi
+v=$(XDG_RUNTIME_DIR=$LONG "$ENGINE" version | sed -n 's/^rendezvous *//p')
+case $v in "$SHORT (short dir:"*) ;; *) fail "version does not name the short dir under a long XDG_RUNTIME_DIR: '$v'" ;; esac
+spawns=$(count shim.spawnDaemon); answers=$(count shim.answered)
+t0=$(now_ms)
+out=$(printf '{"prompt":"smoke-long","session_id":"smoke"}' | XDG_RUNTIME_DIR=$LONG "$SHIM" hook user-prompt-submit 2>/dev/null)
+LONG_COLD_MS=$(( $(now_ms) - t0 ))
+case $out in *'"hookEventName":"UserPromptSubmit"'*) ;; *) fail "long-path cold hook printed no effect: '$out'" ;; esac
+[ "$(count shim.spawnDaemon)" -gt "$spawns" ] || fail "long-path cold hook did not spawn a daemon"
+short_pid() { [ -e "$SHORT/captaind-$id.pid" ]; }
+wait_for 30 short_pid || fail "no daemon pidfile appeared in $SHORT"
+[ -n "$(find "$SHORT" -maxdepth 0 -type d -perm 700)" ] || fail "$SHORT is not a 0700 directory"
+long_answered() {
+  printf '{"prompt":"smoke-long-warm","session_id":"smoke"}' | XDG_RUNTIME_DIR=$LONG "$SHIM" hook user-prompt-submit >/dev/null 2>&1
+  [ "$(count shim.answered)" -gt "$answers" ]
+}
+wait_for 30 long_answered || fail "no warm hook was answered by the short-dir daemon"
+doc=$(XDG_RUNTIME_DIR=$LONG "$ENGINE" doctor)
+printf '%s\n' "$doc" | head -1 | grep -qF "rendezvous dir $SHORT (short dir:" || fail "doctor does not name the short dir: $doc"
+printf '%s\n' "$doc" | grep -q "captaind-$id: healthy" || fail "doctor did not find the short-dir daemon healthy: $doc"
+short_gone() { ! short_pid; }
+wait_for $(( IDLE_MS / 1000 + 30 )) short_gone || fail "the short-dir daemon did not idle-exit"
+pass "long XDG_RUNTIME_DIR: daemon in $SHORT (0700), cold ${LONG_COLD_MS}ms, warm answered, doctor names it, idle-exited"
 
 echo "smoke: PASS  cold=${COLD_MS}ms warm=${WARM_MS}ms  $(uname -s)/$(uname -m)"

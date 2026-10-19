@@ -29,6 +29,9 @@ public static class VersionVerb
         stdout.WriteLine($"identity    {identity}");
         stdout.WriteLine($"base        {baseDir}");
         stdout.WriteLine($"rid         {RuntimeInformation.RuntimeIdentifier}");
+        // Where this build's daemon and shims meet (ADR-0004 d3): the short
+        // per-uid dir, and why, when the preferred one is too long for a socket.
+        stdout.WriteLine($"rendezvous  {RendezvousPaths.ChooseRuntimeDir().Describe()}");
         return 0;
     }
 
