@@ -3,8 +3,11 @@
 # The digests live HERE, in this repo: checking a download against a manifest
 # fetched from the same release only proves the download finished. This file
 # says "these exact bytes". release/package.sh and /deploy both read it.
-# tag: v0.1.0   (released 2026-08-11, https://github.com/LoganBresnahan/bosun)
-f0076e2c9039e5348b6ad9052fbc7fe27b53a1040e8f0c17a40dfb90f9a668f8  bosun-aarch64-linux
-4617e989c5befba9487362ccb9be6fa7a58fddb6d51c830c06c10bd1ad230320  bosun-aarch64-macos
-b8d5b70f6f9df5cfa0b35baf0145fe776d161f52f22149fd6838a99a178bfa1f  bosun-x86_64-linux
-fe726bee7f0c12d43894144ac2904914c3ef7720bb2a3f9f3fb6fbc3f3065a04  bosun-x86_64-macos
+# tag: v0.2.0   (released 2026-10-19, https://github.com/LoganBresnahan/bosun)
+# v0.2.0 is the Rust port, built natively per target (v0.1.0's cross-compiled
+# x86_64-macos bytes segfaulted under the engine on Intel Macs). Digests below
+# computed here from the downloaded assets; they match its SHA256SUMS.
+9ab24f96dc0275c3bb80eb8315ec2d1932271aea0c4c470e393e9555df0495b8  bosun-aarch64-linux
+779ee659224148c2603f66d975b6a0f8152344889038a213b13e61e0fe86747b  bosun-aarch64-macos
+ccf2c7c3c52c0ff1c6106d3c30d720246812420b9fd07826d97cc3d61a35ea41  bosun-x86_64-linux
+15c99107a3b443f0faa7e925906091945503f88471700431d6d37a915ded489f  bosun-x86_64-macos
