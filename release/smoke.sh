@@ -56,7 +56,7 @@ for f in "$HOME/.claude/settings.json" "$HOME/.captainHook/handlers.json"; do
     exit 2
   fi
 done
-[ -x "$SHIM" ] && [ -x "$ENGINE" ] || fail "no installed captainShim/captainHook under $BIN_DIR"
+if [ ! -x "$SHIM" ] || [ ! -x "$ENGINE" ]; then fail "no installed captainShim/captainHook under $BIN_DIR"; fi
 [ ! -e "$RUNDIR" ] || [ -z "$(ls "$RUNDIR"/captaind-*.pid 2>/dev/null)" ] || fail "a daemon is already running in $RUNDIR — use a fresh HOME"
 export CAPTAINHOOK_IDLE_MS="$IDLE_MS"
 

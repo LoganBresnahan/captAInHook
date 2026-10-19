@@ -78,7 +78,7 @@ public class UiVerbTests : IDisposable
         // powershell Start-Process (opens the Windows default browser, which
         // reaches 127.0.0.1 via WSL2 localhost forwarding).
         var url = "http://127.0.0.1:4665/ui#t=" + Token;
-        var (cmd, args) = UiVerb.LauncherCommand(url, isWsl: true);
+        var (cmd, args) = UiVerb.LauncherCommand(url, isWsl: true, isMac: false);
         Assert.Equal("powershell.exe", cmd);
         Assert.Contains("-NoProfile", args);
         // The URL (fragment and all) rides one Start-Process argument verbatim.
@@ -89,8 +89,16 @@ public class UiVerbTests : IDisposable
     public void LauncherCommand_PlainLinux_UsesXdgOpen()
     {
         // A non-WSL Linux desktop has a real xdg-open — unchanged.
-        var (cmd, args) = UiVerb.LauncherCommand("http://x/ui#t=abc", isWsl: false);
+        var (cmd, args) = UiVerb.LauncherCommand("http://x/ui#t=abc", isWsl: false, isMac: false);
         Assert.Equal("xdg-open", cmd);
+        Assert.Equal(["http://x/ui#t=abc"], args);
+    }
+
+    [Fact]
+    public void LauncherCommand_MacOS_UsesOpen()
+    {
+        var (cmd, args) = UiVerb.LauncherCommand("http://x/ui#t=abc", isWsl: false, isMac: true);
+        Assert.Equal("open", cmd);
         Assert.Equal(["http://x/ui#t=abc"], args);
     }
 

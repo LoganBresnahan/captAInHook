@@ -208,9 +208,9 @@ public class ExecHandlerTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => h.HandleAsync(Ev(), Ctx(ct: cts.Token)));
 
-        // The kill is best-effort-immediate; poll /proc for the death.
+        // The kill is best-effort-immediate; poll for the death.
         var pid = int.Parse((await File.ReadAllTextAsync(pidFile)).Trim());
-        await PollUntilAsync(() => Task.FromResult(!Directory.Exists($"/proc/{pid}")),
+        await PollUntilAsync(() => Task.FromResult(!TestUtil.Alive(pid)),
             TimeSpan.FromSeconds(10), "budget-killed child reaped");
     }
 
@@ -292,7 +292,7 @@ public class ExecHandlerTests
                 ["-c", """printf '{"effect":"inject","text":"%s"}\n' "$PWD" """],
                 cwd: configDir.FullName);
             var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(cwd: eventDir.FullName), Ctx()));
-            Assert.Equal(configDir.FullName, eff.Text);
+            Assert.Equal(TestUtil.RealPath(configDir.FullName), eff.Text);
         }
         finally { configDir.Delete(); eventDir.Delete(); }
     }
@@ -307,7 +307,7 @@ public class ExecHandlerTests
                 ["-c", """printf '{"effect":"inject","text":"%s"}\n' "$PWD" """],
                 cwd: "/no/such/dir/xyz");
             var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(cwd: eventDir.FullName), Ctx()));
-            Assert.Equal(eventDir.FullName, eff.Text);   // bad cwd never fails the spawn
+            Assert.Equal(TestUtil.RealPath(eventDir.FullName), eff.Text);   // bad cwd never fails the spawn
         }
         finally { eventDir.Delete(); }
     }
@@ -320,7 +320,7 @@ public class ExecHandlerTests
         {
             var h = Sh("""printf '{"effect":"inject","text":"%s"}\n' "$PWD" """);
             var eff = Assert.IsType<Effect.Inject>(await h.HandleAsync(Ev(cwd: dir.FullName), Ctx()));
-            Assert.Equal(dir.FullName, eff.Text);
+            Assert.Equal(TestUtil.RealPath(dir.FullName), eff.Text);
         }
         finally { dir.Delete(); }
     }

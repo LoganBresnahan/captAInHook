@@ -23,10 +23,12 @@ public class SpawnTests
             // -> empty, proving stdin is /dev/null, not our pipe). Read the
             // fd table via /proc/$$/fd — $(…) subshells see their OWN fd1 (the
             // substitution pipe), which is how the first cut of this probe
-            // fooled itself.
+            // fooled itself. macOS has no /proc: lsof answers the same question
+            // there ($$ inside $(…) is still the probe shell's pid).
             DaemonSpawner.Detached("/bin/sh", "-c",
+                "fdname() { readlink /proc/$$/fd/$1 2>/dev/null || lsof -a -p $$ -d $1 -Fn 2>/dev/null | sed -n 's/^n//p'; }; " +
                 "printf 'fd0=%s fd1=%s fd2=%s cwd=%s ppid=%s stdin=[%s]' " +
-                "\"$(readlink /proc/$$/fd/0)\" \"$(readlink /proc/$$/fd/1)\" \"$(readlink /proc/$$/fd/2)\" " +
+                "\"$(fdname 0)\" \"$(fdname 1)\" \"$(fdname 2)\" " +
                 $"\"$PWD\" \"$PPID\" \"$(cat)\" > {report}.tmp && mv {report}.tmp {report}");
 
             string? world = null;

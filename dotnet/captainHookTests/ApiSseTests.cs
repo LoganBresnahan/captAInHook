@@ -874,10 +874,17 @@ public class ApiSseHttpTests
         await client.OpenAsync(api.Port, api.Token);
 
         trail.Append("small", new string('x', 200 * 1024), "tail");   // > the 128KiB window
-        Assert.Equal("small", (await client.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value.Data);
-        var gap = await client.ReadFrameAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal("gap", gap!.Value.Event);
-        Assert.Equal("""{"dropped":1}""", gap.Value.Data);
+        // A SKIP gap is out-of-band and may surface ahead of lines still
+        // buffered (TrailTail's contract: "positional only" imprecision, the
+        // count exact) — so "small" and the gap arrive in either order, and
+        // the line after the monster is still delivered. Pinning one order
+        // passed on Linux by timing and failed on the first macOS run.
+        var first = (await client.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value;
+        var second = (await client.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value;
+        var pair = new[] { first, second };
+        Assert.Single(pair, f => f.Event != "gap" && f.Data == "small");
+        var gap = Assert.Single(pair, f => f.Event == "gap");
+        Assert.Equal("""{"dropped":1}""", gap.Data);
         Assert.Equal("tail", (await client.ReadFrameAsync(TimeSpan.FromSeconds(10)))!.Value.Data);
     }
 

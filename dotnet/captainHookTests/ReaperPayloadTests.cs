@@ -89,7 +89,7 @@ public class ReaperPayloadTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        psi.Environment["PATH"] = "/usr/bin:/bin";
+        psi.Environment["PATH"] = TestPath.Minimal;
         psi.Environment["HOME"] = _home;
         psi.Environment["CAPTAINHOOK_BIN"] = bin;
         psi.Environment["CAPTAINHOOK_MAIL_DIR"] = _mailDir;

@@ -53,6 +53,45 @@ internal sealed class TestHandler(
 
 internal static class TestUtil
 {
+    /// Is `pid` a live, non-zombie process? Linux reads /proc/<pid>/stat (a
+    /// Z-state leader awaiting its reap means the kill won); macOS has no
+    /// /proc, so `ps` answers the same question. The per-file /proc helpers
+    /// this replaces read "no /proc" as "dead" — every kill assertion passed
+    /// VACUOUSLY on macOS and every liveness assertion failed (first macOS CI
+    /// run, 2026-10-19).
+    public static bool Alive(int pid)
+    {
+        if (Directory.Exists("/proc/self"))
+        {
+            try
+            {
+                var stat = File.ReadAllText($"/proc/{pid}/stat");
+                return stat[stat.LastIndexOf(')') + 2] != 'Z';
+            }
+            catch (Exception) { return false; }
+        }
+        var psi = new System.Diagnostics.ProcessStartInfo("/bin/ps") { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in new[] { "-o", "stat=", "-p", pid.ToString() }) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        var state = p.StandardOutput.ReadToEnd().Trim();
+        p.WaitForExit();
+        return p.ExitCode == 0 && state.Length > 0 && state[0] != 'Z';
+    }
+
+    /// The path with every symlink resolved, as a child's `$PWD` reports it.
+    /// macOS's temp dir lives under /var, itself a link to /private/var, so a
+    /// child chdir'd to Path.GetTempPath() prints the /private form (the
+    /// first macOS CI run, 2026-10-19). `pwd -P` is the POSIX realpath.
+    public static string RealPath(string path)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true };
+        foreach (var a in new[] { "-c", "cd \"$1\" && pwd -P", "sh", path }) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        var real = p.StandardOutput.ReadToEnd().TrimEnd('\n');
+        p.WaitForExit();
+        return p.ExitCode == 0 && real.Length > 0 ? real : path;
+    }
+
     public static HookEvent Ev(string type = "UserPromptSubmit", string? sessionId = "s-test") =>
         new(type, sessionId, Cwd: null, Payload: JsonDocument.Parse("{}").RootElement);
 
@@ -151,4 +190,27 @@ internal sealed class FakeClock
     private long _nowMs;
     public long Now() => Interlocked.Read(ref _nowMs);
     public void Advance(TimeSpan by) => Interlocked.Add(ref _nowMs, (long)by.TotalMilliseconds);
+}
+
+/// The PATH a payload test hands its child: the system directories, plus the
+/// directory holding `jq` when the system has none of its own. Linux has jq
+/// in /usr/bin; a macOS host has it from Homebrew (/opt/homebrew/bin,
+/// /usr/local/bin) — so a hard-coded "/usr/bin:/bin" read as "jq missing"
+/// there and the payload under test fell to its no-jq exit (the first macOS
+/// CI run, 2026-10-19). Only jq's own directory is added, AFTER the system
+/// ones, so nothing else on the host (a real `claude`) leaks onto the
+/// child's PATH.
+internal static class TestPath
+{
+    public static readonly string Minimal = Build();
+
+    private static string Build()
+    {
+        const string system = "/usr/bin:/bin";
+        if (File.Exists("/usr/bin/jq") || File.Exists("/bin/jq")) return system;
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(':'))
+            if (dir.Length > 0 && File.Exists(Path.Combine(dir, "jq")))
+                return system + ":" + dir;
+        return system;
+    }
 }

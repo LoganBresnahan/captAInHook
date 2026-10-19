@@ -117,7 +117,7 @@ public class TurnPayloadTests : IDisposable
         };
         // The stub FIRST, so `command -v claude` can never reach a real one on
         // the developer's machine; without it, nothing named claude is on PATH.
-        psi.Environment["PATH"] = (withStubOnPath ? _stubDir + ":" : "") + "/usr/bin:/bin";
+        psi.Environment["PATH"] = (withStubOnPath ? _stubDir + ":" : "") + TestPath.Minimal;
         psi.Environment["HOME"] = _home;
         psi.Environment["CAPTAINHOOK_BIN"] = DogfoodInfra.EngineBin();
         psi.Environment["CAPTAINHOOK_MAIL_DIR"] = _mailDir;

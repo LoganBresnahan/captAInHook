@@ -69,15 +69,7 @@ public class HandlersHotReloadTests : IDisposable
         return reg;
     }
 
-    private static bool Alive(int pid)
-    {
-        try
-        {
-            var stat = File.ReadAllText($"/proc/{pid}/stat");
-            return stat[stat.LastIndexOf(')') + 2] != 'Z';
-        }
-        catch (Exception) { return false; }
-    }
+    private static bool Alive(int pid) => TestUtil.Alive(pid);
 
     private static bool TryPid(string body, out int pid)
     {

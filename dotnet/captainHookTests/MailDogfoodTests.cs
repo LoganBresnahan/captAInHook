@@ -134,7 +134,7 @@ public class MailWatcherReentrancyTests : IDisposable
         };
         // PATH puts the stub FIRST so `command -v claude` finds it; a real
         // claude on the developer's machine must never be reachable here.
-        psi.Environment["PATH"] = _stubDir + ":" + "/usr/bin:/bin";
+        psi.Environment["PATH"] = _stubDir + ":" + TestPath.Minimal;
         psi.Environment["HOME"] = _home;
         psi.Environment["MAIL_ROLE"] = "alpha";
         psi.Environment["MAIL_PEER"] = "beta";

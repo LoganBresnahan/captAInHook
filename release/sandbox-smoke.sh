@@ -36,7 +36,7 @@ echo "sandbox-smoke: host    $(uname -srm)"
 if command -v sw_vers >/dev/null 2>&1; then echo "sandbox-smoke: macOS   $(sw_vers -productVersion) ($(sw_vers -buildVersion))"; fi
 
 sh "$HERE/install.sh" --archive "$ARCHIVE" | grep -v '^    \|next:\|uninstall:' || true
-[ -L "$BIN/captainShim" ] && [ -L "$BIN/captainHook" ] || { echo "sandbox-smoke: FAIL  the bin links were not created" >&2; exit 1; }
+if [ ! -L "$BIN/captainShim" ] || [ ! -L "$BIN/captainHook" ]; then echo "sandbox-smoke: FAIL  the bin links were not created" >&2; exit 1; fi
 
 # The symlink → AppContext.BaseDirectory question, asked directly: the links
 # are FILE symlinks into versions/<v>/, and the engine must report that folder.
@@ -49,7 +49,7 @@ if [ "$(uname -s)" = Darwin ]; then
   v=$(readlink "$BIN/captainHook"); v=${v%/captainHook}
   for b in captainShim captainHook bosun; do
     sig=$(codesign -dv "$v/$b" 2>&1 | sed -n 's/^Signature=//p')
-    codesign -v "$v/$b" 2>/dev/null && ok=valid || ok=INVALID
+    if codesign -v "$v/$b" 2>/dev/null; then ok=valid; else ok=INVALID; fi
     q=$(xattr -p com.apple.quarantine "$v/$b" 2>/dev/null || echo none)
     echo "sandbox-smoke: sign    $b: signature=${sig:-?} ($ok), quarantine=$q"
   done
@@ -60,6 +60,6 @@ sh "$HERE/smoke.sh"
 # Leave nothing installed: hooks out of the temp settings, then the binaries.
 "$BIN/captainHook" install-hooks --remove --apply >/dev/null
 sh "$HERE/install.sh" --uninstall >/dev/null
-[ ! -e "$BIN/captainShim" ] && [ ! -e "$INSTALL/versions" ] || { echo "sandbox-smoke: FAIL  uninstall left files behind" >&2; exit 1; }
+if [ -e "$BIN/captainShim" ] || [ -e "$INSTALL/versions" ]; then echo "sandbox-smoke: FAIL  uninstall left files behind" >&2; exit 1; fi
 echo "sandbox-smoke: ok    uninstalled; the trail is kept at $HOME/.captainHook/logs/captainHook.jsonl"
 echo "sandbox-smoke: PASS  $(basename "$ARCHIVE") on $(uname -sm)"

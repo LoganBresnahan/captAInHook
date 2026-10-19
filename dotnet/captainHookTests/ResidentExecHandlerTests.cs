@@ -54,15 +54,7 @@ public class ResidentExecHandlerTests : IDisposable
                                        readinessTimeout: readiness);
     }
 
-    private static bool Alive(int pid)
-    {
-        try
-        {
-            var stat = File.ReadAllText($"/proc/{pid}/stat");
-            return stat[stat.LastIndexOf(')') + 2] != 'Z';
-        }
-        catch (Exception) { return false; }
-    }
+    private static bool Alive(int pid) => TestUtil.Alive(pid);
 
     private static int PongPid(Effect effect)
     {

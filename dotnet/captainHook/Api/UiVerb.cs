@@ -110,10 +110,13 @@ public static class UiVerb
     /// daemon binds 127.0.0.1, which Windows reaches via WSL2's localhost
     /// forwarding, so handing the URL to the Windows shell's `Start-Process`
     /// opens the real default browser — where a native `xdg-open` does nothing.
-    internal static (string Cmd, string[] Args) LauncherCommand(string url, bool isWsl)
+    /// `isMac` defaults to the host's answer; tests pin it so each branch is
+    /// asserted on every OS (the macOS CI run caught the Linux branches being
+    /// unreachable there).
+    internal static (string Cmd, string[] Args) LauncherCommand(string url, bool isWsl, bool? isMac = null)
     {
         if (OperatingSystem.IsWindows()) return ("cmd", ["/c", "start", "", url]);
-        if (OperatingSystem.IsMacOS()) return ("open", [url]);
+        if (isMac ?? OperatingSystem.IsMacOS()) return ("open", [url]);
         if (isWsl) return ("powershell.exe", ["-NoProfile", "-Command", $"Start-Process '{url}'"]);
         return ("xdg-open", [url]);
     }

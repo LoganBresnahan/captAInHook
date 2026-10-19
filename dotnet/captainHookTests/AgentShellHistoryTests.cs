@@ -45,7 +45,7 @@ public class AgentShellHistoryTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        psi.Environment["PATH"] = "/usr/bin:/bin";
+        psi.Environment["PATH"] = TestPath.Minimal;
         psi.Environment["HOME"] = _tmp.Path;
         psi.Environment["AGENT_HISTORY_FILE"] = _history;
         using var p = Process.Start(psi)!;

@@ -54,7 +54,7 @@ sha256() {
 PIN=$ROOT/release/bosun.sha256
 BOSUN_TAG=$(sed -n 's/^# tag: \(v[0-9.]*\).*/\1/p' "$PIN")
 BOSUN_SHA=$(awk -v f="bosun-$BOSUN_TARGET" '$2 == f { print $1 }' "$PIN")
-[ -n "$BOSUN_TAG" ] && [ -n "$BOSUN_SHA" ] || { echo "package.sh: no bosun pin for $BOSUN_TARGET in $PIN" >&2; exit 1; }
+if [ -z "$BOSUN_TAG" ] || [ -z "$BOSUN_SHA" ]; then echo "package.sh: no bosun pin for $BOSUN_TARGET in $PIN" >&2; exit 1; fi
 BOSUN_CACHE=${BOSUN_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/captainhook-bosun/$BOSUN_TAG}
 BOSUN_BIN=$BOSUN_CACHE/bosun-$BOSUN_TARGET
 if [ ! -f "$BOSUN_BIN" ] || [ "$(sha256 "$BOSUN_BIN")" != "$BOSUN_SHA" ]; then

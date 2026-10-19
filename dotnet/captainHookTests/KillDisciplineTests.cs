@@ -53,15 +53,7 @@ public class KillDisciplineTests
 
     /// /proc-based liveness that treats a zombie as dead: after a group kill
     /// the leader may sit unreaped for a beat, but Z-state means the kill won.
-    private static bool Alive(int pid)
-    {
-        try
-        {
-            var stat = File.ReadAllText($"/proc/{pid}/stat");
-            return stat[stat.LastIndexOf(')') + 2] != 'Z';
-        }
-        catch (Exception) { return false; }
-    }
+    private static bool Alive(int pid) => TestUtil.Alive(pid);
 
     // ---- kill mechanics -----------------------------------------------------
 

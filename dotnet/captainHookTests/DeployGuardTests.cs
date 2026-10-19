@@ -27,7 +27,7 @@ public class DeployGuardTests
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        psi.Environment["PATH"] = "/usr/bin:/bin";
+        psi.Environment["PATH"] = TestPath.Minimal;
         using var p = Process.Start(psi)!;
         await p.StandardInput.WriteLineAsync(envelope);
         p.StandardInput.Close();

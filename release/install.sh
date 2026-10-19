@@ -182,7 +182,7 @@ activate() {  # activate <version-dir> <version>
 if [ "$ROLLBACK" = 1 ]; then
   OLD=$(current_version)
   PREV=$(cat "$INSTALL_DIR/previous" 2>/dev/null || echo "")
-  [ -n "$PREV" ] && [ -f "$INSTALL_DIR/versions/$PREV/VERSION" ] || die "no previous version is installed to roll back to"
+  if [ -z "$PREV" ] || [ ! -f "$INSTALL_DIR/versions/$PREV/VERSION" ]; then die "no previous version is installed to roll back to"; fi
   "$INSTALL_DIR/versions/$PREV/captainHook" version </dev/null >/dev/null 2>&1 \
     || die "$INSTALL_DIR/versions/$PREV/captainHook does not run here — links left unchanged"
   activate "$INSTALL_DIR/versions/$PREV" "$PREV"
