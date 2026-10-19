@@ -17,15 +17,22 @@ run live*. The framework underneath is what exists today.
   (a session's own mailbox plus one shared mailbox per role, no reaper) is
   shelved in `doc/scratch.md` § Mail bus, not proposed.
 
-- [ ] **25. Public release v0.1.0 — archives, curl installer, consent-first
-  hook wiring** — [ADR-0020](adr/0020-release-archives-and-install.md). One
+- [x] **25. Public release v0.1.0 — archives, curl installer, consent-first
+  hook wiring** — [ADR-0020](adr/0020-release-archives-and-install.md).
+  **Shipped 2026-10-19** (tag `v0.1.0` on 2c40f57,
+  <https://github.com/LoganBresnahan/captAInHook/releases/tag/v0.1.0>). One
   archive per platform built natively in CI (linux x64/arm64, darwin
   arm64/x64), `install.sh` into the versioned `~/.local/share/captainhook`
-  layout behind `~/.local/bin` file symlinks, `captainHook install-hooks`
-  (dry-run diff by default, `--apply` after a backup), `captainHook version`,
-  a per-target smoke test before publishing and a post-release smoke test
-  from the public URL. `/deploy` becomes package + `install.sh --archive`.
-  Cross-app: geex and pharos ship the same convention in the same run.
+  layout behind `~/.local/bin` file symlinks (rollback, retention of current +
+  previous, no config edits), `captainHook install-hooks` (dry-run diff by
+  default, `--apply` after a backup), `captainHook version`, a per-target
+  smoke before publishing and a post-release smoke from the public URL — green
+  on all seven fresh runners (Ubuntu 22.04/24.04 x64+arm64, macOS 14/15 arm64,
+  macOS 15 Intel; cold hook 231–775ms, warm 24–74ms) and on an M1 under macOS
+  26.7.1 (426ms / 27ms). `/deploy` is now package + `install.sh --archive`.
+  The macOS suite's first runs found 25 failures — all Linux assumptions in
+  tests and payloads, none in the engine (ADR-0012 N2 discharged).
+  Cross-app: geex and pharos ship the same convention.
 
 - [x] **24. A guard that cannot see does not approve — the shell is whatever
   the host calls it** — [ADR-0019](adr/0019-canonical-tool-kind.md)

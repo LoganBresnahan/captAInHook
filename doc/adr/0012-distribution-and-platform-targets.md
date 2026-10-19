@@ -99,7 +99,16 @@ ADR-0010 made payloads user processes.
 - **N2 · macOS is unproven until the port lands + is exercised.** Decision 3 is
   scheduled work, not verified; platform.md's macOS entries stay "researched"
   until a real run flips them. Linux/WSL2 remains the only lived-in target
-  meanwhile.
+  meanwhile. **Discharged 2026-10-19 (ADR-0020):** the suite runs on macos-14
+  on every push — its first run there found 25 failures, every one a Linux
+  assumption in a test or a payload (GNU `timeout`, `/proc`, jq's PATH,
+  `/private/var`), none in the engine — and every release builds, installs
+  and smoke-tests native darwin-arm64 and darwin-x64 archives; a sandboxed
+  install passed on an M1 under macOS 26.7.1.
+- **N3 status (2026-10-19):** the macOS branches of `ChildRecords` and
+  `Doctor.DefaultIsOurs` now execute in the macos-14 suite on every push,
+  which is the cross-platform coverage N3 asked for; the weaker argv proof
+  noted at the code site is unchanged.
 - **N3 · `sysctl` is a second identity implementation to keep honest.** The
   pid-reuse guard's correctness now has two code paths; a cross-platform test
   (or a documented macOS smoke) must cover the `sysctl` branch, or it rots.

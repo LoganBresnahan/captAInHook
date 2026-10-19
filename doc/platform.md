@@ -7,9 +7,14 @@ re-audit checklist when a fact changes or a new OS becomes a target. Each entry
 names what leans on it, so nothing here is trivia.
 
 Verification status: **Linux/WSL2 is the lived-in target** — facts there are
-exercised by the test suite or observed live. **macOS is a committed target**
-(ADR-0012) pending the `/proc`→`sysctl` port; its entries are researched, not
-yet exercised — promote them to verified the day a real run touches them.
+exercised by the test suite or observed live. **macOS is a supported target,
+exercised in CI and on hardware since 2026-10-19 (ADR-0020):** the full suite
+runs on macos-14 on every push, every release builds and smoke-tests native
+darwin-arm64 (macos-14) and darwin-x64 (macos-15-intel) archives, and a
+sandboxed install of the CI-built arm64 archive passed on an M1 running macOS
+26.7.1 (cold hook 426ms, warm 27ms). macOS entries the suite or the smoke
+touches are verified; the rest stay marked researched until a run touches
+them.
 **Windows-native is out of scope** (ADR-0012): WSL2 is the Windows path.
 Windows entries below are kept as WSL2/AF_UNIX context, not a portability goal.
 
@@ -116,7 +121,7 @@ against the live daemon):
 
 | fact | detail | leaned on by |
 | --- | --- | --- |
-| A symlinked launch reports the REAL folder | Probe (a), 2026-10-19, linux-x64: launched through a directory symlink, a file symlink, or `$PATH`, both a Native AOT binary and a single-file self-contained one report the link's TARGET directory as `AppContext.BaseDirectory` and `Environment.ProcessPath` (both derive from `/proc/self/exe`, which the kernel resolves). The daemon's pidfile records the real path; bosun resolves from the versioned folder. **macOS: unverified on hardware** — asserted per run by the macos CI smoke (`captainHook version`'s `base` line). | The whole layout: identity, the skew guard, `ui/` and bosun all locate themselves through BaseDirectory, so `~/.local/bin/captainShim → versions/<v>/captainShim` must hand the binary its versioned folder, not `~/.local/bin`. |
+| A symlinked launch reports the REAL folder | Probe (a), 2026-10-19, linux-x64: launched through a directory symlink, a file symlink, or `$PATH`, both a Native AOT binary and a single-file self-contained one report the link's TARGET directory as `AppContext.BaseDirectory` and `Environment.ProcessPath` (both derive from `/proc/self/exe`, which the kernel resolves). The daemon's pidfile records the real path; bosun resolves from the versioned folder. **macOS: verified** the same day — the release smoke on macos-14 (arm64) and macos-15-intel asserts `captainHook version`'s `base` line per run, and a sandboxed install on an M1 under macOS 26.7.1 reported the versioned folder. | The whole layout: identity, the skew guard, `ui/` and bosun all locate themselves through BaseDirectory, so `~/.local/bin/captainShim → versions/<v>/captainShim` must hand the binary its versioned folder, not `~/.local/bin`. |
 | Replacing a directory symlink atomically is GNU-only | `mv -T tmp link` renames over the link; without `-T`, GNU AND BSD `mv` treat a symlink-to-directory destination as the directory and move `tmp` INSIDE it. BSD `mv` has no `-T`. A FILE symlink is replaced by `ln -s new tmp && mv -f tmp link` — plain rename(2) — on both. | Why the layout has no `current/` directory link: every entry (the two bin links, each payload) is its own file symlink. |
 | Deleting a version folder under its running daemon is safe | The daemon keeps running from the unlinked inodes (`/proc/<pid>/exe` reads `… (deleted)`); its socket keeps answering. The next `doctor` sees the binary path gone and drains it as `superseded — path now <gone>`. Probed 2026-10-19. POSIX unlink semantics — the same on macOS. | install.sh's prune of versions older than the previous one, and the doctor run that follows it. |
 | `curl … \| sh` has no script file, and stdin IS the script | `$0` is the shell's name, so a script cannot read its own text back (help must be inline); any command that reads stdin swallows the rest of the script. | install.sh prints help from a heredoc and runs every engine call with `</dev/null`. |
@@ -160,9 +165,10 @@ because the published docs describe a different shape (last row).
 
 | | Linux / WSL2 | macOS | Windows (native) |
 | --- | --- | --- | --- |
-| UDS + length cap | ✓ (108) — verified live | ✓ (104) — researched | ✓ 1803+ (~108) — researched |
+| UDS + length cap | ✓ (108) — verified live | ✓ (104) — verified (CI + M1 smoke: the socket under `~/.captainHook`) | ✓ 1803+ (~108) — researched |
 | `XDG_RUNTIME_DIR` | ✓ set | ✗ → fallback | ✗ → fallback |
 | Fallback `~/.captainHook` short enough | ✓ (guard covers container/network homes) | ✓ | ✓ |
 | Lock/unlink rendezvous as designed | ✓ | ✓ (POSIX) | ✗ — needs own audit |
-| Payload process groups at spawn | ✓ (bosun staged; `setsid(1)` in dev trees) | ✓ (bosun staged — ADR-0014; no `setsid(1)` to fall back on) | n/a |
-| Status (ADR-0012) | **lived-in target** | **committed target** — pending `/proc`→`sysctl` port | **out of scope** (WSL2 is the path) |
+| Payload process groups at spawn | ✓ (bosun staged; `setsid(1)` in dev trees) | ✓ (bosun in the archive — ADR-0014; smoke-verified `spawner=bosun` in its own group on macOS 14/15/26) | n/a |
+| Symlinked launch → real BaseDirectory | ✓ verified (probe a) | ✓ verified (release smoke on macos-14/15, M1 on macOS 26) | n/a |
+| Status (ADR-0012) | **lived-in target** | **supported** — suite + release smoke in CI, M1 sandbox run (ADR-0020) | **out of scope** (WSL2 is the path) |
