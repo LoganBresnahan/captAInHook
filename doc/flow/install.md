@@ -75,6 +75,17 @@ link, so it runs once per machine, not once per upgrade. `handlers.json`
 keeps literal absolute commands; shipped payloads are referenced through
 `…/captainhook/payloads/<f>`, which every install re-points.
 
+**Rollback is one switch.** `install.sh --rollback` points every link at the
+`previous` version and records the one it left as the new `previous`, so a
+second `--rollback` returns. Nothing is downloaded or pruned; the version
+rolled away from keeps its daemon until it idles out, exactly as after an
+upgrade.
+
+**Dev builds name the commit, not the identity.** `/deploy` packages
+`<release>-dev+<sha>`: SemVer build metadata names the archive and its folder
+but is not stamped into the assemblies, so a docs-only commit produces a new
+folder with the SAME content identity, and the warm daemon keeps serving.
+
 **Uninstall is two steps, in order.** `captainHook install-hooks --remove
 --apply` takes captAInHook out of the harness config (the binary is needed to
 do it); `install.sh --uninstall` then removes the links, payload links and
@@ -98,6 +109,7 @@ the shim link, because every hook would then fail to start.
 | archive builder | `release/package.sh` |
 | installer (install, upgrade, prune, uninstall) | `release/install.sh` |
 | per-target smoke test | `release/smoke.sh` |
+| a toolchain-free sandbox run (install → smoke → uninstall inside one directory; how a bare Mac is checked) | `release/sandbox-smoke.sh` |
 | bosun pin | `release/bosun.sha256` |
 | hook wiring | `dotnet/captainHook/Install/InstallHooksVerb.cs`, `UnifiedDiff.cs`; `InstallHooksTests`, `UnifiedDiffTests` |
 | where the install lives | `dotnet/captainHook/Install/VersionVerb.cs` |

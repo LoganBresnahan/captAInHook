@@ -92,7 +92,10 @@ keeps running from the unlinked inodes and the next doctor drains it as
    records `previous`, prunes every version older than the previous one, and
    runs the new engine's `doctor`. Re-running for the installed version does
    nothing unless `--force`. `--archive <path>` installs a local archive (the
-   same code path `/deploy` and CI use). It never edits shell rc files,
+   same code path `/deploy` and CI use); `--rollback` points the links back at
+   `previous` (and again to return). SemVer build metadata in a version
+   (`0.1.0-dev+<sha>`) names the folder but is not stamped into the
+   assemblies, so a dev build of unchanged code keeps its identity. It never edits shell rc files,
    `settings.json`, or `handlers.json`; it prints a PATH hint and the
    `install-hooks` next step instead. Retention is current + previous: the
    previous version's daemon is not reaped — no hook reaches it after the

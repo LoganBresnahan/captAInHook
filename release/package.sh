@@ -36,6 +36,11 @@ case $RID in
   *) echo "package.sh: unsupported rid '$RID'" >&2; exit 2 ;;
 esac
 
+# SemVer build metadata (+…) names the archive and its folder but is NOT
+# stamped into the assemblies: a dev build named 0.1.0-dev+<sha> must compute
+# the same identity as the previous commit's when the code did not change, or
+# every docs-only deploy would cost a cold hook (ADR-0004 d3).
+STAMP=${VERSION%%+*}
 NAME=captainhook-$VERSION-$OS-$ARCH
 STAGE=$OUT/$NAME
 rm -rf "$STAGE" "$OUT/$NAME.tar.gz"
@@ -68,11 +73,11 @@ fi
 # Single-file self-contained engine (ADR-0012 d2); the csproj keeps the four
 # app assemblies LOOSE beside it, because identity and the skew guard read them.
 dotnet publish "$ROOT/dotnet/captainHook/captainHook.csproj" -c Release -r "$RID" \
-  --self-contained -p:PublishSingleFile=true -p:Version="$VERSION" -o "$STAGE" -v q -nologo >&2
+  --self-contained -p:PublishSingleFile=true -p:Version="$STAMP" -o "$STAGE" -v q -nologo >&2
 SHIM_OUT=$OUT/.shim-$RID
 rm -rf "$SHIM_OUT"
 dotnet publish "$ROOT/dotnet/captainShim/captainShim.csproj" -c Release -r "$RID" \
-  -p:Version="$VERSION" -o "$SHIM_OUT" -v q -nologo >&2
+  -p:Version="$STAMP" -o "$SHIM_OUT" -v q -nologo >&2
 cp "$SHIM_OUT/captainShim" "$STAGE/captainShim"
 rm -rf "$SHIM_OUT"
 

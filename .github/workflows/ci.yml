@@ -12,9 +12,11 @@ on:
 permissions:
   contents: read
 
+# Cancel a superseded run from inside the workflow (the API sometimes refuses
+# to); never cancel a tag's run — that is a release.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   test:
@@ -40,8 +42,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: POSIX sh, linted
         run: |
-          shellcheck -s sh release/install.sh release/package.sh release/smoke.sh
-          for s in release/install.sh release/package.sh release/smoke.sh; do dash -n "$s"; done
+          shellcheck -s sh release/*.sh
+          for s in release/*.sh; do dash -n "$s"; done
 
   package-smoke:
     runs-on: ubuntu-22.04

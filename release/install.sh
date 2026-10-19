@@ -9,6 +9,7 @@
 #   --archive <tgz>  install a local archive built by release/package.sh
 #                    (verified against <tgz>.sha256 or a SHA256SUMS beside it, when present)
 #   --force          reinstall even if this version is already current
+#   --rollback       switch back to the previous version (again to return)
 #   --uninstall      remove the installed versions and links (config is kept)
 #   -h | --help
 #
@@ -44,6 +45,7 @@ captAInHook installer
     --version <v>    install this release (default: the latest)
     --archive <tgz>  install a local archive built by release/package.sh
     --force          reinstall even if this version is already current
+    --rollback       switch back to the previous version (and again to return)
     --uninstall      remove the installed versions and links (config is kept)
   env: CAPTAINHOOK_INSTALL_DIR (default ${XDG_DATA_HOME:-~/.local/share}/captainhook)
        CAPTAINHOOK_BIN_DIR     (default ~/.local/bin)
@@ -55,12 +57,14 @@ WANT_VERSION=""
 ARCHIVE=""
 FORCE=0
 UNINSTALL=0
+ROLLBACK=0
 while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; WANT_VERSION=${2#v}; shift 2 ;;
     --archive) [ $# -ge 2 ] || die "--archive needs a path"; ARCHIVE=$2; shift 2 ;;
     --force) FORCE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --rollback) ROLLBACK=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option '$1' (try --help)" ;;
   esac
@@ -140,6 +144,54 @@ if [ "$UNINSTALL" = 1 ]; then
   exit 0
 fi
 
+# Point every link at one installed version: the two bin entries, then one
+# FILE symlink per shipped payload (flat — ADR-0020 d6), dropping payload links
+# the version no longer ships. Refuses to clobber anything that is not ours.
+activate() {  # activate <version-dir> <version>
+  mkdir -p "$BIN_DIR"
+  for e in $ENTRIES; do
+    if [ -e "$BIN_DIR/$e" ] || [ -L "$BIN_DIR/$e" ]; then
+      if [ ! -L "$BIN_DIR/$e" ]; then die "$BIN_DIR/$e exists and is not a symlink — not overwriting it"; fi
+      case $(readlink "$BIN_DIR/$e") in
+        "$INSTALL_DIR"/versions/*) ;;
+        *) [ "$FORCE" = 1 ] || die "$BIN_DIR/$e points elsewhere ($(readlink "$BIN_DIR/$e")) — pass --force to take it over" ;;
+      esac
+    fi
+  done
+  for e in $ENTRIES; do switch_link "$1/$e" "$BIN_DIR/$e"; done
+
+  mkdir -p "$INSTALL_DIR/payloads"
+  for f in "$1"/payloads/*; do
+    [ -f "$f" ] || continue
+    l=$INSTALL_DIR/payloads/$(basename "$f")
+    if [ -e "$l" ] && [ ! -L "$l" ]; then say "kept your own file $l (not replacing it with the shipped one)"; continue; fi
+    switch_link "$f" "$l"
+  done
+  for l in "$INSTALL_DIR"/payloads/*; do
+    [ -L "$l" ] || continue
+    case $(readlink "$l") in "$INSTALL_DIR"/versions/*) ;; *) continue ;; esac
+    [ -f "$1/payloads/$(basename "$l")" ] && continue
+    if [ -f "$HANDLERS" ] && grep -q "$l" "$HANDLERS" 2>/dev/null; then
+      say "warning: $HANDLERS still names $l, which $2 no longer ships — that handler will fail to start"
+    fi
+    rm -f "$l"
+  done
+}
+
+# ---- rollback ------------------------------------------------------------------
+if [ "$ROLLBACK" = 1 ]; then
+  OLD=$(current_version)
+  PREV=$(cat "$INSTALL_DIR/previous" 2>/dev/null || echo "")
+  [ -n "$PREV" ] && [ -f "$INSTALL_DIR/versions/$PREV/VERSION" ] || die "no previous version is installed to roll back to"
+  "$INSTALL_DIR/versions/$PREV/captainHook" version </dev/null >/dev/null 2>&1 \
+    || die "$INSTALL_DIR/versions/$PREV/captainHook does not run here — links left unchanged"
+  activate "$INSTALL_DIR/versions/$PREV" "$PREV"
+  [ -n "$OLD" ] && printf '%s\n' "$OLD" > "$INSTALL_DIR/previous"
+  say "rolled back to $PREV; $OLD is kept as the previous version (--rollback again returns to it)"
+  "$INSTALL_DIR/versions/$PREV/captainHook" doctor </dev/null 2>/dev/null | grep -v 'nothing to reap' | sed 's/^/  /' || true
+  exit 0
+fi
+
 # ---- which archive -----------------------------------------------------------
 TMP=$(mktemp -d 2>/dev/null || mktemp -d -t captainhook)
 trap 'rm -rf "$TMP"' EXIT INT TERM
@@ -215,38 +267,9 @@ fi
 "$VDIR/captainHook" version </dev/null >/dev/null 2>&1 || die "$VDIR/captainHook does not run on this machine — links left unchanged"
 
 # ---- switch -------------------------------------------------------------------
-mkdir -p "$BIN_DIR"
-for e in $ENTRIES; do
-  if [ -e "$BIN_DIR/$e" ] || [ -L "$BIN_DIR/$e" ]; then
-    if [ ! -L "$BIN_DIR/$e" ]; then die "$BIN_DIR/$e exists and is not a symlink — not overwriting it"; fi
-    case $(readlink "$BIN_DIR/$e") in
-      "$INSTALL_DIR"/versions/*) ;;
-      *) [ "$FORCE" = 1 ] || die "$BIN_DIR/$e points elsewhere ($(readlink "$BIN_DIR/$e")) — pass --force to take it over" ;;
-    esac
-  fi
-done
-for e in $ENTRIES; do switch_link "$VDIR/$e" "$BIN_DIR/$e"; done
+activate "$VDIR" "$VERSION"
 if [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ]; then printf '%s\n' "$OLD" > "$INSTALL_DIR/previous"; fi
 PREV=$(cat "$INSTALL_DIR/previous" 2>/dev/null || echo "")
-
-# Payloads: one FILE symlink per shipped file, flat (ADR-0020 d6).
-mkdir -p "$INSTALL_DIR/payloads"
-for f in "$VDIR"/payloads/*; do
-  [ -f "$f" ] || continue
-  n=$(basename "$f")
-  l=$INSTALL_DIR/payloads/$n
-  if [ -e "$l" ] && [ ! -L "$l" ]; then say "kept your own file $l (not replacing it with the shipped one)"; continue; fi
-  switch_link "$f" "$l"
-done
-for l in "$INSTALL_DIR"/payloads/*; do
-  [ -L "$l" ] || continue
-  case $(readlink "$l") in "$INSTALL_DIR"/versions/*) ;; *) continue ;; esac
-  [ -f "$VDIR/payloads/$(basename "$l")" ] && continue
-  if [ -f "$HANDLERS" ] && grep -q "$l" "$HANDLERS" 2>/dev/null; then
-    say "warning: $HANDLERS still names $l, which $VERSION no longer ships — that handler will fail to start"
-  fi
-  rm -f "$l"
-done
 
 say "installed captAInHook $VERSION → $VDIR"
 [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ] && say "previous version $OLD kept for rollback"

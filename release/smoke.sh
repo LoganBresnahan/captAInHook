@@ -27,8 +27,17 @@ IDLE_MS=${SMOKE_IDLE_MS:-6000}
 pass() { printf 'smoke: ok    %s\n' "$*"; }
 fail() { printf 'smoke: FAIL  %s\n' "$*" >&2; [ -f "$TRAIL" ] && { echo "--- trail tail" >&2; tail -20 "$TRAIL" >&2; }; exit 1; }
 # Monotonic where perl has it (invariant 2); a bare Mac's system perl may not
-# implement clock_gettime, and a reported latency survives the fallback.
-now_ms() { perl -MTime::HiRes -e 'my $t = eval { Time::HiRes::clock_gettime(Time::HiRes::CLOCK_MONOTONIC()) } // Time::HiRes::time(); printf "%d\n", $t * 1000'; }
+# implement clock_gettime, and a reported latency survives the fallback. The
+# system perl first: a version-manager shim on PATH (asdf, …) can break under
+# the throwaway HOME. Never fails — whole seconds as the last resort.
+now_ms() {
+  for p in /usr/bin/perl perl; do
+    # shellcheck disable=SC2016  # perl's $t, not the shell's
+    v=$("$p" -MTime::HiRes -e 'my $t = eval { Time::HiRes::clock_gettime(Time::HiRes::CLOCK_MONOTONIC()) } // Time::HiRes::time(); printf "%d\n", $t * 1000' 2>/dev/null) \
+      && { echo "$v"; return; }
+  done
+  echo $(( $(date +%s) * 1000 ))
+}
 count() { [ -f "$TRAIL" ] || { echo 0; return; }; grep -c "\"evt\":\"$1\"" "$TRAIL" || true; }
 wait_for() {  # wait_for <seconds> <command...>
   t=$1; shift
