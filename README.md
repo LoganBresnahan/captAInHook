@@ -75,43 +75,54 @@ thesis and the per-event effect contracts.
 
 ## Install
 
-Targets **Linux** (incl. WSL2 — the lived-in platform) and **macOS**
-(code-complete, awaiting real-hardware validation). No runtime dependencies:
-the engine ships self-contained (bundled .NET runtime) and the shim is a
-native binary. GitHub Releases with prebuilt artifacts are the intended
-channel; until the first release is tagged, build from source:
+Targets **Linux** (incl. WSL2 — the lived-in platform) and **macOS** (Apple
+silicon and Intel). No runtime dependencies: the engine ships self-contained
+(bundled .NET runtime) and the shim is a native binary.
 
 ```sh
-# prereqs (build-time only): .NET 10 SDK + clang (links the native shim)
+curl -fsSL https://github.com/LoganBresnahan/captAInHook/releases/latest/download/install.sh | sh
+# a specific version:   … | sh -s -- --version 0.1.0
+```
+
+The installer verifies the archive's sha256 before unpacking, puts it in
+`~/.local/share/captainhook/versions/<version>/`, and points two file symlinks
+at it: `~/.local/bin/captainShim` (the hook command) and
+`~/.local/bin/captainHook` (everything else). It keeps the previous version
+for rollback and edits no config: no shell rc file, no
+`~/.claude/settings.json`. Wiring the hooks is a separate step that shows you
+the change first:
+
+```sh
+captainHook install-hooks            # prints the diff it would make to ~/.claude/settings.json
+captainHook install-hooks --apply    # writes it, after a timestamped backup
+```
+
+The hook command it writes names the stable link, so upgrades (re-run the
+installer) never touch `settings.json` again. Uninstall: `captainHook
+install-hooks --remove --apply`, then `install.sh --uninstall`;
+`~/.captainHook/` (config and logs) is kept. The mechanics are in
+[doc/flow/install.md](doc/flow/install.md).
+
+**From source** (prereqs, build-time only: .NET 10 SDK + clang on Linux, or
+Xcode command-line tools on macOS):
+
+```sh
 git clone https://github.com/LoganBresnahan/captAInHook && cd captAInHook
-
-RID=linux-x64        # macOS: osx-arm64 (Apple silicon) or osx-x64
-dotnet publish dotnet/captainHook/captainHook.csproj -c Release -r $RID \
-  --self-contained -p:PublishSingleFile=true -o ~/.captainHook/bin
-dotnet publish dotnet/captainShim/captainShim.csproj -c Release -r $RID -o /tmp/shim \
-  && cp /tmp/shim/captainShim ~/.captainHook/bin/
-cp -r ui ~/.captainHook/bin/ui        # the committed GUI assets
+RID=linux-x64        # linux-arm64, osx-arm64, osx-x64 — must match this machine
+sh release/install.sh --archive "$(release/package.sh 0.0.0-dev $RID)"
 ```
 
-Then wire the hook commands into `~/.claude/settings.json` (Claude Code's
-hooks config) — each event you want worked points at the shim:
-
-```
-~/.captainHook/bin/captainShim hook user-prompt-submit
-~/.captainHook/bin/captainShim hook pre-tool-use
-```
-
-From there: `~/.captainHook/bin/captainHook ui` opens the GUI (live traces,
-supervision, policy editor, and handler install); payloads register in
-`~/.captainHook/handlers.json` — by hand or through the GUI — and
-`examples/payloads/` has working scripts to start from (a resident
-retriever, a memory logger, and the four payloads dogfooded live on the
-maintainer's own hooks — see [doc/dogfood/](doc/dogfood/) for field
-reports).
+From there: `captainHook ui` opens the GUI (live traces, supervision, and
+handler install); payloads register in `~/.captainHook/handlers.json` — by
+hand or through the GUI. The shipped example payloads live at
+`~/.local/share/captainhook/payloads/` (a resident retriever, a memory
+logger, and the payloads dogfooded live on the maintainer's own hooks — see
+[doc/dogfood/](doc/dogfood/) for field reports); point a handler's `command`
+there and it survives upgrades.
 
 **Nice-to-haves:**
 
-- **A staged deploy** (`/deploy`), which installs the
+- **An installed build** (the installer, or `/deploy`), which carries the
   [bosun](https://github.com/LoganBresnahan/bosun) spawn wrapper beside the
   binaries. Payloads are spawned through it so each becomes its own process
   group and a kill reaches *re-parented* background children (a script that

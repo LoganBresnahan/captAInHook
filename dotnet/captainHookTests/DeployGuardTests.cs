@@ -50,8 +50,23 @@ public class DeployGuardTests
         Assert.Contains("\"dispatchId\":\"d-1\"", verdict);
     }
 
+    // ADR-0020: the versioned install is the live tree too — its versions and
+    // its two bin links — and the legacy ~/.captainHook/bin stays guarded.
+    [Theory]
+    [InlineData("rm -rf ~/.local/share/captainhook/versions/0.1.0")]
+    [InlineData("ln -sf /tmp/evil ~/.local/bin/captainShim")]
+    [InlineData("mv x ~/.local/bin/captainHook")]
+    [InlineData("cp x ~/.captainHook/bin/captainHook")]
+    public async Task AMutationOfTheVersionedInstall_Asks(string command)
+    {
+        var verdict = await RunAsync(Envelope("Bash", command));
+        Assert.Contains("\"verdict\":\"ask\"", verdict);
+    }
+
     [Theory]
     [InlineData("run_shell", "ls ~/.captainHook/bin")]   // the live tree, read-only
+    [InlineData("Bash", "ls -la ~/.local/share/captainhook/versions")]   // read-only, new layout
+    [InlineData("Bash", "rm ~/.local/bin/othertool")]    // a mutation in ~/.local/bin, not ours
     [InlineData("run_shell", "rm -rf /tmp/scratch")]     // a mutation, elsewhere
     [InlineData("Bash", "git status")]                   // neither
     public async Task AnythingElse_IsAllowed(string toolName, string command)

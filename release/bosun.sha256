@@ -1,0 +1,10 @@
+# bosun spawn wrapper — THE PIN (ADR-0014 d4, ADR-0020 d1).
+# The tag and the digests move together, in one commit that says why.
+# The digests live HERE, in this repo: checking a download against a manifest
+# fetched from the same release only proves the download finished. This file
+# says "these exact bytes". release/package.sh and /deploy both read it.
+# tag: v0.1.0   (released 2026-08-11, https://github.com/LoganBresnahan/bosun)
+f0076e2c9039e5348b6ad9052fbc7fe27b53a1040e8f0c17a40dfb90f9a668f8  bosun-aarch64-linux
+4617e989c5befba9487362ccb9be6fa7a58fddb6d51c830c06c10bd1ad230320  bosun-aarch64-macos
+b8d5b70f6f9df5cfa0b35baf0145fe776d161f52f22149fd6838a99a178bfa1f  bosun-x86_64-linux
+fe726bee7f0c12d43894144ac2904914c3ef7720bb2a3f9f3fb6fbc3f3065a04  bosun-x86_64-macos
