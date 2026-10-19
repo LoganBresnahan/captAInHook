@@ -1,0 +1,63 @@
+# The suite on every push (ADR-0020 d7): Linux and macOS, the release scripts
+# linted, and one real archive built, installed and smoke-tested on Linux so
+# the artifact path is proven on every push, not only at release time.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Test
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+        run: dotnet test dotnet/captainHookTests/captainHookTests.csproj -clp:ErrorsOnly
+
+  scripts:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: POSIX sh, linted
+        run: |
+          shellcheck -s sh release/install.sh release/package.sh release/smoke.sh
+          for s in release/install.sh release/package.sh release/smoke.sh; do dash -n "$s"; done
+
+  package-smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Native AOT prerequisites
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang zlib1g-dev
+      - name: Package
+        run: release/package.sh "$(cat release/VERSION)-ci" linux-x64 "$RUNNER_TEMP/dist"
+      - name: Install into a fresh HOME and smoke-test
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          sh release/install.sh --archive "$RUNNER_TEMP"/dist/captainhook-*-linux-x64.tar.gz
+          sh release/smoke.sh

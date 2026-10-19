@@ -1,0 +1,56 @@
+# The post-release smoke (ADR-0020 d7): on fresh runners, install a PUBLISHED
+# captAInHook from its public URL exactly as a user would — curl | sh — then
+# wire the hooks into a temp settings file, fire hooks through the shim, check
+# doctor, and watch the daemon idle out. release.yml calls it after
+# publishing; run it by hand for any version (empty: the latest release).
+name: post-release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to install (empty for the latest release)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm, macos-14, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      # The smoke script only: the install itself comes from the release.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: release/smoke.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Install from the public URL
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh"
+          if [ -n "$VERSION" ]; then
+            curl -fsSL "$url" | sh -s -- --version "$VERSION"
+          else
+            curl -fsSL "$url" | sh
+          fi
+
+      - name: Smoke
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          sh release/smoke.sh | tee "$RUNNER_TEMP/smoke.txt"
+          echo "### ${{ matrix.runner }}: $(tail -1 "$RUNNER_TEMP/smoke.txt")" >> "$GITHUB_STEP_SUMMARY"

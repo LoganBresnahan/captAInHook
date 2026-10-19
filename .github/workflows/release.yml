@@ -1,0 +1,147 @@
+# A captAInHook release (ADR-0020 d1, d7): one archive per target, each built
+# NATIVELY on its own runner (Native AOT does not cross operating systems, and
+# an archive's shim and DLLs must come from one build), installed into a fresh
+# HOME and smoke-tested there, then published with SHA256SUMS and install.sh,
+# then installed again from the PUBLIC URL by the post-release smoke.
+#
+# Publishing runs only for a `v*` tag. A ci/** branch push or a manual run
+# builds, installs and smoke-tests every target and publishes nothing.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["ci/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on the OLDEST supported Ubuntu: the AOT shim links the
+          # runner's glibc, and an older glibc runs on newer distros.
+          - { rid: linux-x64,   asset: linux-x64,    runner: ubuntu-22.04 }
+          - { rid: linux-arm64, asset: linux-arm64,  runner: ubuntu-22.04-arm }
+          - { rid: osx-arm64,   asset: darwin-arm64, runner: macos-14 }
+          - { rid: osx-x64,     asset: darwin-x64,   runner: macos-15-intel }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: The version
+        id: version
+        shell: bash
+        run: |
+          version=$(cat release/VERSION)
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "the tag $GITHUB_REF_NAME doesn't name release/VERSION ($version)" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Native AOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang zlib1g-dev
+
+      - name: Package
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+        run: |
+          release/package.sh "${{ steps.version.outputs.version }}" "${{ matrix.rid }}" dist
+          cd dist && shasum -a 256 captainhook-*.tar.gz > "SHA256SUMS.${{ matrix.asset }}" && cat SHA256SUMS.*
+
+      - name: Signatures (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          name=captainhook-${{ steps.version.outputs.version }}-${{ matrix.asset }}
+          mkdir -p "$RUNNER_TEMP/sig" && tar -xzf "dist/$name.tar.gz" -C "$RUNNER_TEMP/sig"
+          for b in captainShim captainHook bosun; do codesign -dv "$RUNNER_TEMP/sig/$name/$b" 2>&1 | grep -E 'Signature|Identifier'; codesign -v "$RUNNER_TEMP/sig/$name/$b"; done
+
+      # The archive this job built, installed exactly as a user's would be,
+      # into a HOME that has never seen captAInHook.
+      - name: Install and smoke-test the archive
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          sh release/install.sh --archive "$PWD/dist/captainhook-${{ steps.version.outputs.version }}-${{ matrix.asset }}.tar.gz"
+          sh release/smoke.sh | tee "$RUNNER_TEMP/smoke.txt"
+          echo "### ${{ matrix.asset }}: $(tail -1 "$RUNNER_TEMP/smoke.txt")" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captainhook-${{ matrix.asset }}
+          path: |
+            dist/captainhook-*.tar.gz
+            dist/SHA256SUMS.*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.files.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: release/install.sh
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: built
+
+      - name: Gather the release files
+        id: files
+        run: |
+          mkdir out
+          cp built/*/captainhook-*.tar.gz out/
+          cat built/*/SHA256SUMS.* | sort -k2 > out/SHA256SUMS
+          cp release/install.sh out/install.sh
+          (cd out && sha256sum -c SHA256SUMS)
+          ls -l out
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # A normal release, marked latest: releases/latest/download/install.sh is this one.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          gh release create "$GITHUB_REF_NAME" out/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "captAInHook $version" \
+            --latest \
+            --notes "Install or upgrade:
+
+          \`\`\`sh
+          curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh | sh
+          \`\`\`
+
+          Then wire the hooks — the first command only prints the diff it would make:
+
+          \`\`\`sh
+          captainHook install-hooks
+          captainHook install-hooks --apply
+          \`\`\`
+
+          Linux x64 and arm64 (glibc 2.35+), macOS on Apple silicon and Intel. See [doc/flow/install.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/doc/flow/install.md)."
+
+  post-release:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/post-release.yml
+    with:
+      version: ${{ needs.publish.outputs.version }}
