@@ -93,7 +93,7 @@ sha256() {
 }
 
 fetch() {  # fetch <url> <dest>
-  if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 -o "$2" "$1"
+  if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 --connect-timeout 20 -o "$2" "$1"
   elif command -v wget >/dev/null 2>&1; then wget -q -O "$2" "$1"
   else die "need curl or wget"; fi
 }

@@ -59,7 +59,9 @@ BOSUN_CACHE=${BOSUN_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/captainhook-bosun/$BO
 BOSUN_BIN=$BOSUN_CACHE/bosun-$BOSUN_TARGET
 if [ ! -f "$BOSUN_BIN" ] || [ "$(sha256 "$BOSUN_BIN")" != "$BOSUN_SHA" ]; then
   mkdir -p "$BOSUN_CACHE"
-  curl -fsSL -o "$BOSUN_BIN.part" \
+  # Retried: a release build must not die on one dropped connection to
+  # github.com (the v0.1.0 darwin-x64 job did, curl exit 28).
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 -o "$BOSUN_BIN.part" \
     "https://github.com/LoganBresnahan/bosun/releases/download/$BOSUN_TAG/bosun-$BOSUN_TARGET"
   mv "$BOSUN_BIN.part" "$BOSUN_BIN"
 fi
