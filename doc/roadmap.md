@@ -1104,6 +1104,15 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [x] **27. `captainHook self` — the installer travels with the install** —
+  [ADR-0020](adr/0020-release-archives-and-install.md) d8, the same spec as
+  geex's and pharos's `self`. Every archive carries `install.sh`;
+  `self rollback|prune|uninstall` runs the bundled one, `self update
+  [--version X]` the newest; `install.sh --prune` (geex 286d128's lines).
+  README and doc/flow/install.md audited against the code and the published
+  0.1.0 assets in the same release. **Shipped (v0.1.1)**: `SelfVerbTests`,
+  smoke steps 10–11 on every target.
+
 - [x] **26. A runtime dir too long for a socket should still get a daemon** —
   found in the v0.1.0 post-release check (2026-10-19). With an
   `XDG_RUNTIME_DIR` (or a home, on macOS) long enough that

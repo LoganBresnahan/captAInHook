@@ -11,9 +11,10 @@
 #
 # Produces <outdir>/captainhook-<version>-<os>-<arch>.tar.gz holding one
 # top-level directory of the same name: captainShim, captainHook, the four
-# loose app DLLs, ui/, bosun (pinned + verified), payloads/, LICENSE, NOTICE,
-# VERSION. stdout carries ONLY the archive's path (build noise goes to stderr),
-# so `install.sh --archive "$(release/package.sh …)"` works.
+# loose app DLLs, ui/, bosun (pinned + verified), payloads/, install.sh (what
+# `captainHook self` runs, ADR-0020 d8), LICENSE, NOTICE, VERSION. stdout
+# carries ONLY the archive's path (build noise goes to stderr), so
+# `install.sh --archive "$(release/package.sh …)"` works.
 #
 # Needs: the .NET 10 SDK, the Native AOT toolchain (clang on Linux, Xcode CLT
 # on macOS), curl, and sha256sum or shasum.
@@ -105,6 +106,7 @@ done
 chmod 0755 "$STAGE"/payloads/*.sh
 
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$STAGE/"
+install -m 0755 "$ROOT/release/install.sh" "$STAGE/install.sh"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
 # macOS arm64 kills an unsigned or invalidly signed Mach-O on exec. The AOT

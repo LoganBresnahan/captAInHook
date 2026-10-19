@@ -30,7 +30,7 @@ public static class ShimMain
             // binary. Phrased as "not a hook mode" so a NEW engine verb is
             // refused by default instead of falling through to a dispatch.
             await stderr.WriteLineAsync(
-                "captainShim: hook shim only — run captainHook for --daemon / doctor / actors-demo / ui / mail / version / install-hooks");
+                "captainShim: hook shim only — run captainHook for --daemon / doctor / actors-demo / ui / mail / version / install-hooks / self");
             return 1;
         }
 

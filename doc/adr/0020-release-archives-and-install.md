@@ -145,6 +145,23 @@ keeps running from the unlinked inodes and the next doctor drains it as
    so a branch run or a manual dispatch is a dry run. A post-release workflow
    installs the PUBLISHED release from its public URL on fresh runners.
 
+8. **`captainHook self` — the installer travels with the install** *(added
+   2026-10-19, v0.1.1; the same spec as geex's and pharos's `self`)*. Every
+   archive carries `install.sh`, so each `versions/<v>/` holds the script that
+   laid it out. `captainHook self rollback|prune|uninstall` runs that bundled
+   script with the matching flag; `self update [--version X]` fetches the
+   latest (or X's) `install.sh` from `$CAPTAINHOOK_RELEASE_URL` and runs it,
+   so an update never runs an old installer. The engine sets
+   `CAPTAINHOOK_INSTALL_DIR` from its real location and `CAPTAINHOOK_BIN_DIR`
+   from the link that launched it (else the PATH entry linking to it), and
+   feeds the script on stdin (`sh -s --`) like the other apps' launchers.
+   `install.sh --prune` is new beside it: retention alone, no download,
+   printing `kept <v> (current)` / `kept <v> (previous)` / `removed <v>` — the
+   lines an install's own prune now prints too. Uninstall keeps decision 3's
+   guard (refused while `settings.json` runs the shim). The shim refuses
+   `self` like every engine verb; an engine with no `versions/` around it (a
+   dev tree, `dotnet run`) prints the install one-liner and exits 1.
+
 ## Consequences
 
 - One install path for dev and release: `/deploy` becomes "package a local
@@ -154,6 +171,7 @@ keeps running from the unlinked inodes and the next doctor drains it as
   previous version's, unreachable, and the new one). Doctor reports both
   healthy; that is correct, not a fault.
 - The archive is ~75–80 MB per target, dominated by the bundled runtime.
+  *(Measured at v0.1.0: 33–36 MB compressed per target.)*
 - **N1 · macOS is proven by CI, not by hardware.** The symlink →
   BaseDirectory behaviour, the AOT shim's ad-hoc signature surviving the
   archive round trip, and the whole ADR-0012 N2 list are exercised by the
@@ -184,5 +202,6 @@ keeps running from the unlinked inodes and the next doctor drains it as
 | bosun pin | `release/bosun.sha256` (tag + digests) |
 | install-hooks | `dotnet/captainHook/Install/InstallHooksVerb.cs` (+ `UnifiedDiff.cs`); `InstallHooksTests` |
 | version | `dotnet/captainHook/Install/VersionVerb.cs` |
+| self | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; `release/smoke.sh` steps 10–11 |
 | CI | `.github/workflows/{ci,release,post-release}.yml`, `release/smoke.sh` |
 | mechanics | [doc/flow/install.md](../flow/install.md) |

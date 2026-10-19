@@ -39,6 +39,11 @@ public enum Mode
     /// d4): dry-run diff by default, `--apply` to write. Its flags are its
     /// own (the engine hands it args[1..]). Engine-only; the shim refuses it.
     InstallHooks,
+    /// `self update [--version X] | rollback | prune | uninstall` — manage the
+    /// install this engine runs from with its install.sh (ADR-0020 d8). Its
+    /// arguments are its own (the engine hands it args[1..]). Engine-only;
+    /// the shim refuses it.
+    Self,
 }
 
 /// One parsed invocation: the mode plus the hook-dispatch arguments that shim
@@ -59,6 +64,8 @@ public sealed record Invocation(Mode Mode, string? EventName, string HarnessName
             return new(Mode.Version, null, "claude-code");
         if (args.Length > 0 && args[0] == "install-hooks")
             return new(Mode.InstallHooks, null, "claude-code");
+        if (args.Length > 0 && args[0] == "self")
+            return new(Mode.Self, null, "claude-code");
 
         string? eventName = null;
         var harnessName = "claude-code";

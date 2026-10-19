@@ -107,6 +107,11 @@ switch (inv.Mode)
         // only with --apply. Its flags are its own — args[1..].
         return CaptainHook.Install.InstallHooksVerb.Run(args[1..], Console.Out, Console.Error);
 
+    case Mode.Self:
+        // Human command (ADR-0020 d8): runs install.sh against the install this
+        // engine lives in, with the terminal handed straight through.
+        return CaptainHook.Install.SelfVerb.Run(args[1..], Console.Out, Console.Error);
+
     case Mode.Doctor:
     {
         // Human command, not hook mode: the report goes to stdout on purpose.

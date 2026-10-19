@@ -2,13 +2,14 @@
 
 *Lifecycle hooks as the composition primitive for agents.*
 
-> **Building in public — feature-complete, pre-release.** The whole stack
-> works and is dogfooded live on the maintainer's own sessions: dispatch
-> engine, warm daemon + native shim, dispatch policy, exec-handler payloads
-> (your own scripts, any language), management API, and a browser GUI with
-> install UX. Validated on Linux/WSL2; macOS is a committed target, not yet
-> exercised on real hardware. See [Status](#status) and
-> [doc/roadmap.md](doc/roadmap.md).
+> **Building in public — released, early.** The whole stack works and is
+> dogfooded live on the maintainer's own sessions: dispatch engine, warm
+> daemon + native shim, dispatch policy, exec-handler payloads (your own
+> scripts, any language), management API, and a browser GUI with install UX.
+> Release archives for Linux and macOS (x64 and arm64) are smoke-tested on
+> every target before they publish; Linux/WSL2 is the lived-in platform, and
+> macOS is verified in CI and on Apple-silicon hardware. See
+> [Status](#status) and [doc/roadmap.md](doc/roadmap.md).
 
 A framework for splicing deterministic **or** LLM-backed subsystems into an AI
 agent's loop at guaranteed seams — turning *"the model might call the tool"*
@@ -75,9 +76,11 @@ thesis and the per-event effect contracts.
 
 ## Install
 
-Targets **Linux** (incl. WSL2 — the lived-in platform) and **macOS** (Apple
-silicon and Intel). No runtime dependencies: the engine ships self-contained
-(bundled .NET runtime) and the shim is a native binary.
+Targets **Linux** (x64 and arm64, incl. WSL2 — the lived-in platform) and
+**macOS** (Apple silicon and Intel). **Windows: use WSL** — there is no
+Windows-native build. No runtime dependencies: the engine ships
+self-contained (bundled .NET runtime) and the shim is a native binary; each
+archive is ~35 MB.
 
 ```sh
 curl -fsSL https://github.com/LoganBresnahan/captAInHook/releases/latest/download/install.sh | sh
@@ -97,14 +100,27 @@ captainHook install-hooks            # prints the diff it would make to ~/.claud
 captainHook install-hooks --apply    # writes it, after a timestamped backup
 ```
 
-The hook command it writes names the stable link, so upgrades (re-run the
-installer) never touch `settings.json` again. Uninstall: `captainHook
-install-hooks --remove --apply`, then `install.sh --uninstall`;
-`~/.captainHook/` (config and logs) is kept. The mechanics are in
+The hook command it writes names the stable link, so upgrades never touch
+`settings.json` again. After that, the installed engine manages its own
+install with the `install.sh` each version carries:
+
+```sh
+captainHook self update                  # the latest release (or: self update --version 0.1.1)
+captainHook self rollback                # back to the previous version (again to return)
+captainHook self prune                   # remove versions but the current and the previous
+captainHook install-hooks --remove --apply && captainHook self uninstall
+```
+
+`self uninstall` refuses while `settings.json` still runs the shim (take the
+hooks out first, as above); `~/.captainHook/` (config and logs) is kept. The
+same actions are `install.sh` flags (`--rollback`, `--prune`, `--uninstall`)
+for a machine without a working engine. The mechanics are in
 [doc/flow/install.md](doc/flow/install.md).
 
 **From source** (prereqs, build-time only: .NET 10 SDK + clang on Linux, or
-Xcode command-line tools on macOS):
+Xcode command-line tools on macOS; the build fetches the pinned
+[bosun](https://github.com/LoganBresnahan/bosun) release, so it needs the
+network once):
 
 ```sh
 git clone https://github.com/LoganBresnahan/captAInHook && cd captAInHook
@@ -115,14 +131,14 @@ sh release/install.sh --archive "$(release/package.sh 0.0.0-dev $RID)"
 From there: `captainHook ui` opens the GUI (live traces, supervision, and
 handler install); payloads register in `~/.captainHook/handlers.json` — by
 hand or through the GUI. The shipped example payloads live at
-`~/.local/share/captainhook/payloads/` (a resident retriever, a memory
-logger, and the payloads dogfooded live on the maintainer's own hooks — see
-[doc/dogfood/](doc/dogfood/) for field reports); point a handler's `command`
-there and it survives upgrades.
+`~/.local/share/captainhook/payloads/` (starter templates, a resident
+retriever, a memory logger, and the payloads dogfooded live on the
+maintainer's own hooks — see [doc/dogfood/](doc/dogfood/) for field
+reports); point a handler's `command` there and it survives upgrades.
 
 **Nice-to-haves:**
 
-- **An installed build** (the installer, or `/deploy`), which carries the
+- **An installed build** (the installer, or `/deploy` in this repo), which carries the
   [bosun](https://github.com/LoganBresnahan/bosun) spawn wrapper beside the
   binaries. Payloads are spawned through it so each becomes its own process
   group and a kill reaches *re-parented* background children (a script that
@@ -132,15 +148,19 @@ there and it survives upgrades.
   (`spawner=` and `pgroup=false` in the trail). ADR-0014.
 - **A `$XDG_RUNTIME_DIR`** (standard on systemd Linux): rendezvous files land
   on per-user tmpfs. Absent (macOS default), they fall back to
-  `~/.captainHook/` — fine, just not RAM-backed.
+  `~/.captainHook/` — fine, just not RAM-backed. Either one too long for a
+  Unix socket path (~104 bytes) moves them to `/tmp/captainhook-<uid>`, used
+  only when it is yours and `0700`; `captainHook version` and `doctor` say
+  which directory is in use and why.
 
 ## Status
 
-**Feature-complete, pre-release.** Everything below works today and runs live
-on the maintainer's own Claude Code sessions. Linux/WSL2 is validated by the
-test suite and live use; macOS support is implemented per
-[ADR-0012](doc/adr/0012-distribution-and-platform-targets.md) but not yet
-exercised on real hardware.
+**Released, early (v0.1.x).** Everything below works today and runs live on
+the maintainer's own Claude Code sessions. Linux/WSL2 is validated by the
+test suite and live use; macOS by the suite and the release smoke in CI on
+both architectures, and by sandbox runs on Apple-silicon hardware
+([ADR-0012](doc/adr/0012-distribution-and-platform-targets.md),
+[ADR-0020](doc/adr/0020-release-archives-and-install.md)).
 
 ### Works today (dogfooded live)
 
@@ -157,7 +177,9 @@ exercised on real hardware.
   Decision record: [ADR-0001](doc/adr/0001-actor-runtime-fsharp-hybrid.md).
 - **Warm daemon + native shim** — a long-lived daemon serves hooks over a
   versioned Unix socket; the deployed hook command is a Native-AOT shim
-  (~16ms per warm hook vs ~140ms cold JIT), with at-most-once dispatch,
+  (a warm hook answers in ~20–30 ms end to end on a desktop, a cold one —
+  delegate + daemon spawn — in ~200 ms; the release smoke prints both per
+  target), with at-most-once dispatch,
   graceful drain, idle self-exit, and a wire-skew guard so mismatched
   artifacts fail safe to a collapsed in-process run
   ([ADR-0004](doc/adr/0004-daemon-topology.md)).
@@ -186,12 +208,15 @@ exercised on real hardware.
   from dispatch policy; same-user trust boundary recorded in
   [ADR-0011](doc/adr/0011-hook-trust-model.md).
 - **Runtime-free distribution** — the engine ships single-file
-  self-contained (no .NET install needed) and the shim is Native AOT;
-  Linux + macOS ([ADR-0012](doc/adr/0012-distribution-and-platform-targets.md)).
+  self-contained (no .NET install needed) and the shim is Native AOT; one
+  checksummed archive per target, a POSIX `install.sh`, consent-first
+  `install-hooks`, and `captainHook self` for update/rollback/prune/uninstall
+  ([ADR-0012](doc/adr/0012-distribution-and-platform-targets.md),
+  [ADR-0020](doc/adr/0020-release-archives-and-install.md)).
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
   kept pure for the hook protocol.
-- **Tests** — xunit suite (620+, green twice in a row as the ship bar) plus
+- **Tests** — xunit suite (1,600+, green twice in a row as the ship bar) plus
   web unit tests and Playwright E2E; the `/shipshape` skill verifies
   coverage, docs, and logging conventions.
 
@@ -204,7 +229,7 @@ exercised on real hardware.
   containers ([ADR-0011](doc/adr/0011-hook-trust-model.md) d7,
   `doc/scratch.md`).
 - **Desktop shell / TUI / Windows-native / other-runtime ports** — decided
-  out, not merely postponed: browser-only, Linux+macOS, .NET core with
+  out, not merely postponed: browser-only, Linux+macOS (Windows: use WSL), .NET core with
   any-language *payloads* carrying the polyglot story
   ([ADR-0012](doc/adr/0012-distribution-and-platform-targets.md)).
 

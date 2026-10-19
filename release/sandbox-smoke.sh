@@ -55,11 +55,9 @@ if [ "$(uname -s)" = Darwin ]; then
   done
 fi
 
+# The smoke ends by uninstalling (`captainHook self uninstall`, after the
+# hooks come out) — this only confirms nothing was left.
 sh "$HERE/smoke.sh"
-
-# Leave nothing installed: hooks out of the temp settings, then the binaries.
-"$BIN/captainHook" install-hooks --remove --apply >/dev/null
-sh "$HERE/install.sh" --uninstall >/dev/null
 if [ -e "$BIN/captainShim" ] || [ -e "$INSTALL/versions" ]; then echo "sandbox-smoke: FAIL  uninstall left files behind" >&2; exit 1; fi
 echo "sandbox-smoke: ok    uninstalled; the trail is kept at $HOME/.captainHook/logs/captainHook.jsonl"
 echo "sandbox-smoke: PASS  $(basename "$ARCHIVE") on $(uname -sm)"

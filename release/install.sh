@@ -10,6 +10,8 @@
 #                    (verified against <tgz>.sha256 or a SHA256SUMS beside it, when present)
 #   --force          reinstall even if this version is already current
 #   --rollback       switch back to the previous version (again to return)
+#   --prune          remove every version but the current and the previous one
+#                    (an install does this too); downloads nothing
 #   --uninstall      remove the installed versions and links (config is kept)
 #   -h | --help
 #
@@ -19,7 +21,8 @@
 #   CAPTAINHOOK_RELEASE_URL  default https://github.com/LoganBresnahan/captAInHook/releases
 #
 # Layout (ADR-0020 d2):
-#   $CAPTAINHOOK_INSTALL_DIR/versions/<v>/   one unpacked archive per version
+#   $CAPTAINHOOK_INSTALL_DIR/versions/<v>/   one unpacked archive per version,
+#                                            with this script as install.sh
 #   $CAPTAINHOOK_INSTALL_DIR/payloads/<f>    file symlinks into the current version
 #   $CAPTAINHOOK_INSTALL_DIR/previous        the version before the last switch
 #   $CAPTAINHOOK_BIN_DIR/captainShim, captainHook   file symlinks into the current version
@@ -28,6 +31,9 @@
 # ~/.captainHook. Wiring the hooks is a separate, explicit step:
 #   captainHook install-hooks          (prints the diff it would make)
 #   captainHook install-hooks --apply  (writes it, after a backup)
+#
+# Once installed, `captainHook self update|rollback|prune|uninstall` runs this
+# script for you (ADR-0020 d8).
 set -eu
 
 APP=captainhook
@@ -41,11 +47,13 @@ say() { printf 'captainhook: %s\n' "$*"; }
 usage() {
   cat <<'USAGE'
 captAInHook installer
-  install.sh [--version <v>] [--archive <tgz>] [--force] [--uninstall]
+  install.sh [--version <v>] [--archive <tgz>] [--force] | --rollback | --prune | --uninstall
     --version <v>    install this release (default: the latest)
     --archive <tgz>  install a local archive built by release/package.sh
     --force          reinstall even if this version is already current
     --rollback       switch back to the previous version (and again to return)
+    --prune          remove every version but the current and the previous one
+                     (an install does this too); downloads nothing
     --uninstall      remove the installed versions and links (config is kept)
   env: CAPTAINHOOK_INSTALL_DIR (default ${XDG_DATA_HOME:-~/.local/share}/captainhook)
        CAPTAINHOOK_BIN_DIR     (default ~/.local/bin)
@@ -58,6 +66,7 @@ ARCHIVE=""
 FORCE=0
 UNINSTALL=0
 ROLLBACK=0
+PRUNE=0
 while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; WANT_VERSION=${2#v}; shift 2 ;;
@@ -65,6 +74,7 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --rollback) ROLLBACK=1; shift ;;
+    --prune) PRUNE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option '$1' (try --help)" ;;
   esac
@@ -178,6 +188,34 @@ activate() {  # activate <version-dir> <version>
   done
 }
 
+# Retention (ADR-0020 d3): keep the current and the previous version; remove
+# the rest, and leftovers of an install that stopped half-way. A daemon running
+# from a removed folder keeps its unlinked inodes until doctor drains it. The
+# same lines as geex's and pharos's install.sh.
+prune() {  # prune <current>
+  keep_previous=$(cat "$INSTALL_DIR/previous" 2>/dev/null || echo "")
+  for d in "$INSTALL_DIR"/versions/* "$INSTALL_DIR"/versions/.tmp-*; do
+    [ -d "$d" ] || continue
+    v=$(basename "$d")
+    if [ "$v" = "$1" ]; then say "kept $v (current)"; continue; fi
+    if [ -n "$keep_previous" ] && [ "$v" = "$keep_previous" ]; then say "kept $v (previous)"; continue; fi
+    case $v in .tmp-*-$$) continue ;; esac
+    rm -rf "$d"
+    case $v in .*) ;; *) say "removed $v" ;; esac
+  done
+}
+
+# ---- prune ---------------------------------------------------------------------
+# No current version (no link, or one into another layout) is nothing to prune:
+# the current one is what decides what stays.
+if [ "$PRUNE" = 1 ]; then
+  CUR=$(current_version)
+  if [ -z "$CUR" ]; then say "no captAInHook installed at $BIN_DIR/captainHook; nothing to prune"; exit 0; fi
+  prune "$CUR"
+  "$INSTALL_DIR/versions/$CUR/captainHook" doctor </dev/null 2>/dev/null | grep -v 'nothing to reap' | sed 's/^/  /' || true
+  exit 0
+fi
+
 # ---- rollback ------------------------------------------------------------------
 if [ "$ROLLBACK" = 1 ]; then
   OLD=$(current_version)
@@ -269,21 +307,12 @@ fi
 # ---- switch -------------------------------------------------------------------
 activate "$VDIR" "$VERSION"
 if [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ]; then printf '%s\n' "$OLD" > "$INSTALL_DIR/previous"; fi
-PREV=$(cat "$INSTALL_DIR/previous" 2>/dev/null || echo "")
 
 say "installed captAInHook $VERSION → $VDIR"
 [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ] && say "previous version $OLD kept for rollback"
 
 # ---- retention: current + previous ----------------------------------------------
-for d in "$INSTALL_DIR"/versions/* "$INSTALL_DIR"/versions/.tmp-*; do
-  [ -d "$d" ] || continue
-  v=$(basename "$d")
-  case $v in .tmp-*-$$) continue ;; esac
-  [ "$v" = "$VERSION" ] && continue
-  [ -n "$PREV" ] && [ "$v" = "$PREV" ] && continue
-  rm -rf "$d"
-  case $v in .tmp-*) ;; *) say "pruned version $v" ;; esac
-done
+prune "$VERSION"
 
 # A pruned version's daemon is drained here; the previous version's is left to
 # idle out — no hook reaches it after the switch (ADR-0020 d3).
@@ -298,5 +327,5 @@ esac
 say "next: wire the hooks (nothing is changed until you pass --apply):
     $BIN_DIR/captainHook install-hooks
     $BIN_DIR/captainHook install-hooks --apply"
-say "uninstall: $BIN_DIR/captainHook install-hooks --remove --apply, then
-    curl -fsSL $RELEASES/latest/download/install.sh | sh -s -- --uninstall"
+say "later: $BIN_DIR/captainHook self update | self rollback | self prune
+    uninstall: $BIN_DIR/captainHook install-hooks --remove --apply, then $BIN_DIR/captainHook self uninstall"

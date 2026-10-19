@@ -14,7 +14,10 @@
 # from its payloads/ link; zero wire skew; doctor sees a healthy daemon; the
 # daemon idle-exits on its own; and, under an XDG_RUNTIME_DIR too long for a
 # socket, a daemon still comes up — in the short per-uid dir
-# /tmp/captainhook-<uid> (ADR-0004 d3). Prints the hook latencies. Exit 0 = pass.
+# /tmp/captainhook-<uid> (ADR-0004 d3); `captainHook self prune` keeps the
+# current version and removes a stale one; and `captainHook self uninstall`
+# refuses while the hooks are wired, then removes the install once they are
+# not — so the smoke ENDS uninstalled. Prints the hook latencies. Exit 0 = pass.
 set -eu
 
 INSTALL_DIR=${CAPTAINHOOK_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/captainhook}
@@ -168,5 +171,26 @@ printf '%s\n' "$doc" | grep -q "captaind-$id: healthy" || fail "doctor did not f
 short_gone() { ! short_pid; }
 wait_for $(( IDLE_MS / 1000 + 30 )) short_gone || fail "the short-dir daemon did not idle-exit"
 pass "long XDG_RUNTIME_DIR: daemon in $SHORT (0700), cold ${LONG_COLD_MS}ms, warm answered, doctor names it, idle-exited"
+
+# 10. self prune: the version folder's own install.sh, run by the engine
+# (ADR-0020 d8) — keeps the current version, removes a stale one.
+cur=$(basename "$base")
+mkdir -p "$INSTALL_DIR/versions/0.0.0-smoke" && echo 0.0.0-smoke > "$INSTALL_DIR/versions/0.0.0-smoke/VERSION"
+out=$("$ENGINE" self prune </dev/null 2>&1) || fail "self prune failed: $out"
+printf '%s\n' "$out" | grep -q "kept $cur (current)" || fail "self prune did not keep the current version: $out"
+printf '%s\n' "$out" | grep -q "removed 0.0.0-smoke" || fail "self prune did not report the stale version: $out"
+[ ! -e "$INSTALL_DIR/versions/0.0.0-smoke" ] || fail "self prune left the stale version behind"
+[ -x "$INSTALL_DIR/versions/$cur/captainHook" ] || fail "self prune removed the current version"
+pass "self prune: kept $cur (current), removed a stale version"
+
+# 11. self uninstall: refused while settings.json still runs the shim, then
+# done once install-hooks has taken the hooks out.
+if out=$("$ENGINE" self uninstall </dev/null 2>&1); then fail "self uninstall ran while the hooks were wired: $out"; fi
+printf '%s\n' "$out" | grep -q 'install-hooks --remove --apply' || fail "self uninstall refused without naming the fix: $out"
+"$ENGINE" install-hooks --settings "$SETTINGS" --remove --apply >/dev/null
+out=$("$ENGINE" self uninstall </dev/null 2>&1) || fail "self uninstall failed after the hooks were removed: $out"
+if [ -e "$SHIM" ] || [ -e "$ENGINE" ] || [ -e "$INSTALL_DIR/versions" ]; then fail "self uninstall left the install behind: $out"; fi
+grep -q captainShim "$SETTINGS" && fail "install-hooks --remove left a captainShim hook in $SETTINGS"
+pass "self uninstall: refused while hooks were wired, then removed the links and versions"
 
 echo "smoke: PASS  cold=${COLD_MS}ms warm=${WARM_MS}ms  $(uname -s)/$(uname -m)"

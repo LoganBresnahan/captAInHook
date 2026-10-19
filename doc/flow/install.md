@@ -11,9 +11,10 @@ what `/deploy` and CI use), so there is one install path.
                       release/package.sh <v> <rid>                                    │
                         dotnet publish engine (single-file) + shim (AOT), ONE build   │
                         + bosun (pinned tag, sha256 from release/bosun.sha256)        │
-                        + ui/ + payloads/ + LICENSE NOTICE VERSION                    │
+                        + ui/ + payloads/ + install.sh + LICENSE NOTICE VERSION       │
                       install.sh --archive <tgz>   into a temp HOME                   │
-                      release/smoke.sh             cold · warm · bosun · doctor · idle│
+                      release/smoke.sh   cold · warm · bosun · doctor · idle ·        │
+                                         long runtime dir · self prune/uninstall      │
                       ─► only if every target passed: publish                         │
                          captainhook-<v>-<os>-<arch>.tar.gz × N, SHA256SUMS, install.sh
                                                                                       │
@@ -29,13 +30,19 @@ what `/deploy` and CI use), so there is one install path.
         ~/.local/bin/captainHook  → versions/<v>/captainHook
         payloads/<f>              → versions/<v>/payloads/<f>   (one per file, flat)
    8. previous ← the version the links pointed at before (when it changed)
-   9. prune every versions/* except <v> and previous
+   9. prune: "kept <v> (current)", "kept <p> (previous)", "removed <x>"
   10. versions/<v>/captainHook doctor   drains daemons whose folder step 9 deleted
   11. print PATH hint + the install-hooks next step — NO config is edited
 
  captainHook install-hooks            dry run: the unified diff it would make
  captainHook install-hooks --apply    backup, then write ~/.claude/settings.json
    hook command = ~/.local/bin/captainShim hook <event>   ← stable across upgrades
+
+ captainHook self rollback|prune|uninstall  ─► sh -s -- --<verb>  < versions/<v>/install.sh
+ captainHook self update [--version X]      ─► fetch latest (or vX's) install.sh ─► sh -s -- [--version X]
+   env: CAPTAINHOOK_INSTALL_DIR ← the engine's real folder's grandparent
+        CAPTAINHOOK_BIN_DIR     ← the launching link's dir (else the PATH entry linking here)
+   no versions/ around the engine (dev tree, dotnet run) ─► print the curl one-liner, exit 1
 ```
 
 ## Why it is shaped like this
@@ -88,9 +95,20 @@ folder with the SAME content identity, and the warm daemon keeps serving.
 
 **Uninstall is two steps, in order.** `captainHook install-hooks --remove
 --apply` takes captAInHook out of the harness config (the binary is needed to
-do it); `install.sh --uninstall` then removes the links, payload links and
-versions, keeping `~/.captainHook/`. It refuses while `settings.json` still runs
-the shim link, because every hook would then fail to start.
+do it); `captainHook self uninstall` (= `install.sh --uninstall`) then removes
+the links, payload links and versions, keeping `~/.captainHook/`. It refuses
+while `settings.json` still runs the shim link, because every hook would then
+fail to start.
+
+**The installer travels with the install.** Every version folder carries the
+`install.sh` that laid it out, and `captainHook self` runs it: `rollback`,
+`prune` and `uninstall` work offline, against the install the engine really
+lives in, while `update` fetches the newest installer (or `--version X`'s) so
+an update never runs an old one. The engine only launches: the script goes in
+on stdin (`sh -s --`, the `curl | sh` path), exactly as geex's and pharos's
+launchers run theirs — the three apps share the verbs, the flags and the
+prune lines. A version folder from before 0.1.1 has no `install.sh`; `self`
+then says how to install instead, and one `curl … | sh` fixes it.
 
 ## Paths
 
@@ -100,14 +118,15 @@ the shim link, because every hook would then fail to start.
 | `$CAPTAINHOOK_BIN_DIR` | `captainShim`, `captainHook` links | `~/.local/bin` |
 | `$CAPTAINHOOK_RELEASE_URL` | where releases are fetched from (tests point it at `file://`) | `https://github.com/LoganBresnahan/captAInHook/releases` |
 | `~/.captainHook/` | config, logs, harness overrides — untouched by install | |
-| `$XDG_RUNTIME_DIR/captainHook/` (else `~/.captainHook/`) | rendezvous files, created by the daemon | |
+| `$XDG_RUNTIME_DIR/captainHook/` (else `~/.captainHook/`; when either is too long for a socket, `/tmp/captainhook-<uid>`) | rendezvous files, created by the daemon — `captainHook version` prints which | |
 
 ## Ground truth
 
 | what | where |
 | --- | --- |
 | archive builder | `release/package.sh` |
-| installer (install, upgrade, prune, uninstall) | `release/install.sh` |
+| installer (install, upgrade, rollback, prune, uninstall) | `release/install.sh` — also `versions/<v>/install.sh` in every install |
+| `captainHook self` | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; smoke steps 10–11 |
 | per-target smoke test | `release/smoke.sh` |
 | a toolchain-free sandbox run (install → smoke → uninstall inside one directory; how a bare Mac is checked) | `release/sandbox-smoke.sh` |
 | bosun pin | `release/bosun.sha256` |
