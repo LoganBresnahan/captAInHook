@@ -129,4 +129,25 @@ public class RendezvousPathsTests
             Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", original);
         }
     }
+
+    // Doctor needs only the DIRECTORY: a runtime dir too long for a socket
+    // must not crash it (it used to resolve a probe socket and abort, exit
+    // 134, from install.sh under a long sandbox HOME).
+    [Fact]
+    public async Task Doctor_UnderARuntimeDirTooLongForASocket_RunsAndReportsNothing()
+    {
+        var original = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        var longDir = "/tmp/chk-" + new string('x', 120);
+        try
+        {
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", longDir);
+            Assert.Equal(Path.Combine(longDir, "captainHook"), RendezvousPaths.DefaultRuntimeDir());
+            Assert.Throws<InvalidOperationException>(() => RendezvousPaths.Resolve(version: "v"));
+            Assert.Empty(await CaptainHook.Core.Doctor.RunAsync());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", original);
+        }
+    }
 }

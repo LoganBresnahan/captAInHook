@@ -75,9 +75,18 @@ public static class Doctor
     /// reuse guard; production uses the cmdline check.
     public static async Task<IReadOnlyList<DoctorVerdict>> RunAsync(
         string? runtimeDir = null, TimeSpan? grace = null,
-        Func<int, PidRecord, bool>? isOurProcess = null)
+        Func<int, PidRecord, bool>? isOurProcess = null, string? selfIdentity = null)
     {
-        var dir = runtimeDir ?? RendezvousPaths.Resolve(version: "probe").RuntimeDir;
+        // Display only (ADR-0020 d3): which healthy daemon is THIS build's. After
+        // an upgrade the previous version's daemon is still alive and still
+        // healthy by the reap rule — nothing reaches it, so it idles out — and
+        // saying so keeps two healthy lines from reading as a fault.
+        string? self = selfIdentity;
+        if (self is null) { try { self = ContentIdentity.Current; } catch { /* dev tree: no loose DLLs */ } }
+        // The DIRECTORY only: doctor reads pidfiles, it binds no socket, so the
+        // sun_path cap Resolve enforces is not its to trip over. (It used to
+        // resolve a probe socket here and crash on a long home path.)
+        var dir = runtimeDir ?? RendezvousPaths.DefaultRuntimeDir();
         // Covers the daemon's 10s drain PLUS its child phase (ADR-0010 N6:
         // TERM→2s grace→KILL + reap beat + the 1s cut window run after the
         // drain deadline; worst case ≈ 14.5s) with real headroom — a doctor
@@ -123,7 +132,10 @@ public static class Doctor
 
             if (pathIdentity == version)
             {
-                verdicts.Add(new DoctorVerdict(version, "healthy", $"pid {rec.Pid} serving the current build at {rec.BinaryPath}; left alone"));
+                verdicts.Add(new DoctorVerdict(version, "healthy", version == self || self is null
+                    ? $"pid {rec.Pid} serving this build at {rec.BinaryPath}; left alone"
+                    : $"pid {rec.Pid} serving another installed build at {rec.BinaryPath} (not this one — "
+                      + "after an upgrade that is the previous version, unreachable now; it idle-exits on its own); left alone"));
                 continue;
             }
 

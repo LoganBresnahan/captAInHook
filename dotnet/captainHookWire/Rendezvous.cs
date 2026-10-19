@@ -127,7 +127,7 @@ public sealed record RendezvousPaths(
     /// construction, per-user 0700 tmpfs — the idiomatic home for runtime
     /// state), else ~/.captainHook (macOS/Windows never set XDG; their home
     /// paths are short). "Is it set?" is itself the deterministic branch.
-    private static string DefaultRuntimeDir()
+    public static string DefaultRuntimeDir()
     {
         var xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         return !string.IsNullOrEmpty(xdg)

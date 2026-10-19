@@ -98,6 +98,33 @@ public class DoctorTests
         finally { Directory.Delete(bin, recursive: true); }
     }
 
+    // ADR-0020 d3: after an upgrade the previous version's daemon is healthy by
+    // the reap rule (its own folder still computes its identity) — doctor
+    // leaves it alone and LABELS it, so two healthy lines don't read as a fault.
+    [Theory]
+    [InlineData(true, "serving this build")]
+    [InlineData(false, "serving another installed build")]
+    public async Task HealthyDaemon_IsLabelledThisBuildOrAnother_LeftAloneEitherWay(bool isSelf, string label)
+    {
+        using var dir = new TempRuntimeDir();
+        var bin = MakeBinDir(out var identity);
+        try
+        {
+            using var daemonish = Spawn("sleep 30");
+            WritePidfile(dir, identity, daemonish.Id, Path.Combine(bin, "captainHook"));
+
+            var verdicts = await Doctor.RunAsync(dir.Path, TimeSpan.FromSeconds(1),
+                isOurProcess: (_, _) => true, selfIdentity: isSelf ? identity : "0123456789ab");
+
+            var v = Assert.Single(verdicts);
+            Assert.Equal("healthy", v.Action);
+            Assert.Contains(label, v.Detail);
+            Assert.False(daemonish.HasExited, "a healthy daemon is never signalled, whichever build it is");
+            daemonish.Kill();
+        }
+        finally { Directory.Delete(bin, recursive: true); }
+    }
+
     [Fact]
     public async Task SupersededDaemon_SigtermReapsIt_FilesCleaned()
     {
