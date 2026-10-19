@@ -17,6 +17,16 @@ run live*. The framework underneath is what exists today.
   (a session's own mailbox plus one shared mailbox per role, no reaper) is
   shelved in `doc/scratch.md` § Mail bus, not proposed.
 
+- [ ] **25. Public release v0.1.0 — archives, curl installer, consent-first
+  hook wiring** — [ADR-0020](adr/0020-release-archives-and-install.md). One
+  archive per platform built natively in CI (linux x64/arm64, darwin
+  arm64/x64), `install.sh` into the versioned `~/.local/share/captainhook`
+  layout behind `~/.local/bin` file symlinks, `captainHook install-hooks`
+  (dry-run diff by default, `--apply` after a backup), `captainHook version`,
+  a per-target smoke test before publishing and a post-release smoke test
+  from the public URL. `/deploy` becomes package + `install.sh --archive`.
+  Cross-app: geex and pharos ship the same convention in the same run.
+
 - [x] **24. A guard that cannot see does not approve — the shell is whatever
   the host calls it** — [ADR-0019](adr/0019-canonical-tool-kind.md)
   (**Rejected** 2026-10-12). moby's `run_shell` walked past `deploy-guard.sh`'s

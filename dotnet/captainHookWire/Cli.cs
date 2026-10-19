@@ -32,6 +32,13 @@ public enum Mode
     /// usage error there, not a parse-time guess here). Engine-only; the shim
     /// refuses it.
     MailSend,
+    /// `version` / `--version` — what is installed and from where (ADR-0020
+    /// d5). Engine-only; the shim refuses it.
+    Version,
+    /// `install-hooks [flags]` — the consent-first hook wiring verb (ADR-0020
+    /// d4): dry-run diff by default, `--apply` to write. Its flags are its
+    /// own (the engine hands it args[1..]). Engine-only; the shim refuses it.
+    InstallHooks,
 }
 
 /// One parsed invocation: the mode plus the hook-dispatch arguments that shim
@@ -48,6 +55,10 @@ public sealed record Invocation(Mode Mode, string? EventName, string HarnessName
             return new(Mode.Ui, null, "claude-code");
         if (args.Length > 0 && args[0] == "mail")
             return new(Mode.MailSend, args.Length > 1 ? args[1] : null, "claude-code");
+        if (args.Length > 0 && args[0] is "version" or "--version")
+            return new(Mode.Version, null, "claude-code");
+        if (args.Length > 0 && args[0] == "install-hooks")
+            return new(Mode.InstallHooks, null, "claude-code");
 
         string? eventName = null;
         var harnessName = "claude-code";

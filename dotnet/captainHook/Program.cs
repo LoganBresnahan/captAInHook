@@ -98,6 +98,15 @@ switch (inv.Mode)
             _ => CaptainHook.Mail.MailSend.Run(inv.EventName, Console.In, Console.Out, Console.Error),
         };
 
+    case Mode.Version:
+        // Human command (ADR-0020 d5): stdout on purpose.
+        return CaptainHook.Install.VersionVerb.Run(Console.Out, Console.Error);
+
+    case Mode.InstallHooks:
+        // Human command (ADR-0020 d4): prints the diff it would make; writes
+        // only with --apply. Its flags are its own — args[1..].
+        return CaptainHook.Install.InstallHooksVerb.Run(args[1..], Console.Out, Console.Error);
+
     case Mode.Doctor:
     {
         // Human command, not hook mode: the report goes to stdout on purpose.

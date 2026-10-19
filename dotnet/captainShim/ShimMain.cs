@@ -23,13 +23,14 @@ public static class ShimMain
         string? deployDir = null, string? socketPathOverride = null)
     {
         var inv = Invocation.Parse(args);
-        if (inv.Mode is Mode.Daemon or Mode.Doctor or Mode.ActorsDemo or Mode.Ui or Mode.MailSend)
+        if (inv.Mode is not (Mode.Shim or Mode.Collapsed))
         {
             // The shim is the hook command, nothing else. Engine work belongs
             // to the engine — a loud refusal beats silently being the wrong
-            // binary.
+            // binary. Phrased as "not a hook mode" so a NEW engine verb is
+            // refused by default instead of falling through to a dispatch.
             await stderr.WriteLineAsync(
-                "captainShim: hook shim only — run captainHook for --daemon / doctor / actors-demo / ui / mail");
+                "captainShim: hook shim only — run captainHook for --daemon / doctor / actors-demo / ui / mail / version / install-hooks");
             return 1;
         }
 
