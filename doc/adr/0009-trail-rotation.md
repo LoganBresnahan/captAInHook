@@ -162,8 +162,11 @@ thing: the id contract.**
      starts skip the scan; `daemon.shellHistoryMigrated`). history reads that
      copy, or the trail itself until a daemon has made it, then the active
      file, so nothing recorded since 0.1.3 is lost or doubled. Accepted edge:
-     lines a rolled-back 0.1.3 writes to the trail after the copy exists are
-     not picked up.
+     lines a 0.1.3 build writes to the trail after the copy exists are not
+     picked up: a rolled-back 0.1.3, or a 0.1.3 daemon still draining an
+     in-flight dispatch during the deploy handoff. Rare and harmless, but it
+     means the trail can hold `tool.shell` lines after the migration, and
+     nothing may assume otherwise.
    - **Item 32 must not cap the trail before the copy exists**: its rotation
      either runs the migration first or refuses to drop a segment holding
      uncopied `tool.shell` lines.
