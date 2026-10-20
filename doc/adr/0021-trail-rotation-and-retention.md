@@ -1,6 +1,7 @@
 # ADR-0021 — Trail rotation and a retention cap: build ADR-0009's segments, bounded at ~30 days
 
-**Status:** Proposed (2026-10-19), for review before any code
+**Status:** Accepted (2026-10-19) after review: R1 (a durable segment
+high-water mark) and notes N1–N3 folded in. Build in the order below.
 **Builds on:** [ADR-0009](0009-trail-rotation.md) (the opaque-cursor contract
 d2, the segmented-archive design d3–d6, d8's command-history split),
 [ADR-0007](0007-management-api.md) d5 (SSE ids), [ADR-0004](0004-daemon-topology.md)
@@ -32,10 +33,21 @@ the build "until growth bites". Three things changed:
 
 ## Decision
 
-1. **Segments, named as ADR-0009 d3 designed.** The active file stays
-   `captainHook.jsonl`. Rotation renames it to `captainHook.<seq>.jsonl`, where
-   `<seq>` is one more than the highest existing segment (1 on the first
-   rotation), and the next append creates a fresh active file. Every writer
+1. **Segments, named as ADR-0009 d3 designed, numbered from a durable
+   high-water mark.** The active file stays `captainHook.jsonl`. Rotation
+   renames it to `captainHook.<seq>.jsonl` and the next append creates a fresh
+   active file. `<seq>` comes from `logs/.trail-seq`, the last segment number
+   ever used, never from the segments that happen to exist: retention (rule 3)
+   can delete the newest renamed segment on a quiet machine, and a number
+   derived from survivors would then go backwards, moving ids already issued
+   and reusing a name a cursor remembers. A rotation computes
+   `seq = max(.trail-seq, highest existing segment) + 1`, renames the active
+   file, then writes `seq` to `.trail-seq` (temp file + rename), all under the
+   rotate lock (rule 2). A crash between the rename and the write is healed by
+   the `max` on the next rotation; a lost `.trail-seq` is healed the same way
+   as long as one segment survives, and otherwise restarts at 1 only when no
+   segment and no cursor-visible history remain. The active file's own
+   number is `max(.trail-seq, highest existing segment) + 1`. Every writer
    keeps its per-call `O_APPEND` open (ADR-0004 N3), so a line racing the
    rename lands whole in one file or the other, never lost and never split.
    No writer holds the file open, which is what makes rename-rotation safe.
@@ -67,7 +79,11 @@ the build "until growth bites". Three things changed:
 4. **The keeper never deletes the 0.1.3 window's commands.** Before its first
    prune, the keeper ensures `shell-history.0.jsonl` exists, running
    `ShellTrail.MigrateLegacy` synchronously if the daemon-start migration has
-   not finished (ADR-0009 d8's guard). It never reads or touches
+   not finished (ADR-0009 d8's guard). If that attempt fails too (the
+   start-time migration already logged "retried next start"), **pruning is
+   skipped until `shell-history.0.jsonl` exists**, with a `trail.pruneHeld`
+   warning at most once a day; rotation still proceeds, since it deletes
+   nothing. It never reads or touches
    `shell-history*.jsonl` otherwise: command history is kept forever, and is
    not the trail. **The keeper must not assume the trail is free of
    `tool.shell` lines once the copy exists:** a 0.1.3 daemon draining during
@@ -85,7 +101,12 @@ the build "until growth bites". Three things changed:
    - the active file's segment number is one more than the highest renamed
      segment, so a line keeps its id when its file is renamed;
    - 2^40 bytes (1 TiB) per segment and up to 2^13 segments stay below 2^53,
-     so the id survives any client that parses it as a JSON number; the GUI
+     so the id survives any client that parses it as a JSON number. Because
+     `.trail-seq` only grows, the segment count is the number of rotations
+     ever, not the number kept: about 250 years at 16 MiB and today's rate,
+     or about 16 if `CAPTAINHOOK_TRAIL_SEGMENT_MB=1` were left on for real.
+     Past 2^13 the keeper refuses to rotate and logs `trail.seqExhausted` once
+     a day; the trail then grows unbounded, but every id stays valid. The GUI
      does not: it keeps the id as a string and echoes it verbatim
      (`web/src/sse.ts`, `mailStream.ts`);
    - today's ids (offsets in a never-rotated file, segment 0) mean exactly
@@ -96,7 +117,9 @@ the build "until growth bites". Three things changed:
    appears, the file it was reading has been renamed: it drains that segment
    from its local offset to the end, waits one grace period (1 s) and drains
    again for lines that raced the rename, then moves to the next segment at
-   offset 0. Only a cursor whose segment has been deleted gets a `reset`
+   offset 0. Several rotations can happen between two polls (a burst, or the
+   smoke's tiny segments), so the cursor walks `seq, seq+1, …` up to the
+   active file, draining each, and never assumes a single step. Only a cursor whose segment has been deleted gets a `reset`
    (d2: "earliest still-reachable"), re-anchored at the oldest segment.
    Truncation of the active file without a rename (a person running
    `: > captainHook.jsonl`) keeps today's `reset`. `MailWatcher` uses the
@@ -149,16 +172,18 @@ the build "until growth bites". Three things changed:
 
 ## Build order (for review; slices, not commits)
 
-1. `TrailKeeper`: rotation + the lock + retention + the d8 guard, shipped
-   with the cursor unchanged but rotation **off by default**, so no window
-   exists where the stream resets on every rotation. Tests: race the rename
-   with concurrent O_APPEND writers (no line lost or split); prune by mtime;
-   future mtime kept; the lock serializes two keepers; retention 0 keeps all.
+1. `TrailKeeper`: rotation + the lock + `.trail-seq` + retention + the d8
+   guard, shipped with the cursor unchanged but rotation **off by default**,
+   so no window exists where the stream resets on every rotation. Tests: race
+   the rename with concurrent O_APPEND writers (no line lost or split); prune
+   by mtime; future mtime kept; the lock serializes two keepers; retention 0
+   keeps all; **prune every segment, rotate again, and the numbers keep
+   rising** (R1); a failed migration holds pruning but not rotation.
 2. Rule 5 + rule 6 in `TrailCursor` (and so `MailWatcher`): segment-aware
    resume, rename-follow with the grace drain, `reset` only for a deleted
    segment. Adversarial verify. Mutation-checked tests: rotate mid-stream
    exactly once, resume across a boundary, a line racing the rename is
-   delivered once.
+   delivered once, several rotations between two polls each drained in order.
 3. Rule 7's readers; the ADR-0007 d5 amendment and the management-api flow
    doc; rotation turned **on** (30 days, 16 MiB); CLAUDE.md's env-var list;
    a release smoke step that forces a tiny segment size and proves rotation,
@@ -171,5 +196,6 @@ the build "until growth bites". Three things changed:
 | keeper (rotate, lock, prune, d8 guard) | `Core/TrailKeeper.cs` (new), started by `DaemonHost` |
 | segment-aware cursor | `Api/TrailTail.cs` (`TrailCursor`) |
 | readers | `Api/ApiReadModel.cs` (`TrailEventId`), `Api/MailDeliveryFold.cs`, `Core/MailWatcher.cs`, `Core/ShellTrail.cs` |
-| events | `trail.rotate`, `trail.prune` (src `trail`) |
+| events | `trail.rotate`, `trail.prune`, `trail.pruneHeld`, `trail.seqExhausted` (src `trail`) |
+| high-water mark | `logs/.trail-seq` (written under `logs/.rotate.lock`) |
 | env | `CAPTAINHOOK_TRAIL_RETENTION_DAYS`, `CAPTAINHOOK_TRAIL_SEGMENT_MB` |
