@@ -51,7 +51,13 @@ public class PerHandlerBudgetTests
                 return new Effect.Inject("unreachable");
             }),
             budget: TimeSpan.FromMilliseconds(150));
-        var dispatcher = new Dispatcher(reg, budget: TimeSpan.FromSeconds(10));
+        // An explicit grace (the Dispatcher's classification seam): the
+        // budget-scaled grace of a 150ms window is tens of ms, and on a loaded
+        // macOS runner the HONORED cancellation's reply can arrive after it —
+        // then classified "wedged", correctly for the clock but not what this
+        // test is about (macos-14 CI, 2026-10-20). The window under test is
+        // still the handler's 150ms; the timing assertion below holds it.
+        var dispatcher = new Dispatcher(reg, budget: TimeSpan.FromSeconds(10), grace: TimeSpan.FromSeconds(2));
         Assert.IsType<Effect.Inject>((await dispatcher.DispatchAsync(Ev())).Merged);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -61,7 +67,8 @@ public class PerHandlerBudgetTests
         Assert.IsType<Effect.Noop>(r.Merged);
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5),
             $"dispatch resolved in {sw.Elapsed.TotalMilliseconds:F0}ms — must ride the 150ms handler window, not the 10s default");
-        Assert.Contains("TIMEOUT(cancelled)", r.Trace.Render());
+        var rendered = r.Trace.Render();
+        Assert.True(rendered.Contains("TIMEOUT(cancelled)", StringComparison.Ordinal), rendered);
     }
 
     [Fact]
