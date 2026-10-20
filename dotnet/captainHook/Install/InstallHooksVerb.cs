@@ -19,6 +19,15 @@ namespace CaptainHook.Install;
 // the file (other tools' hooks, permissions, plugins) is carried through
 // untouched, in order. Re-running converges: same input ⇒ "up to date".
 //
+// Home-relative spellings (ADR-0020 d4, 2026-10-19 amendment): a settings.json
+// shared through dotfiles by two machines whose homes differ names the shim
+// as `"$HOME/.local/bin/captainShim"` (or `${HOME}/…`, or `~/…`); the host
+// runs hook commands through a shell, which expands them. Such a command IS
+// the shim path, so it is "up to date", never rewritten to the absolute path.
+// And when the verb does write or repoint an entry in a file that already
+// spells the shim that way, it keeps the spelling, so an upgrade on either
+// machine never bakes one machine's home into the shared file.
+//
 // Event set: an explicit --events list wins; else the events the file ALREADY
 // wires to captAInHook (an upgrade repoints, it never widens what you chose);
 // else, on a first install, every event the harness spec declares.
@@ -68,11 +77,13 @@ public static class InstallHooksVerb
         return new(apply, remove, harness, settings, shim, events);
     }
 
-    /// `registry`, `defaultShim` and `now` are test seams; production passes none.
+    /// `registry`, `defaultShim`, `now` and `home` are test seams; production
+    /// passes none.
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr,
                           HarnessRegistry? registry = null, string? defaultShim = null,
-                          Func<DateTime>? now = null)
+                          Func<DateTime>? now = null, string? home = null)
     {
+        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var opt = ParseArgs(args, stderr);
         if (opt is null) return 1;
 
@@ -127,13 +138,16 @@ public static class InstallHooksVerb
             return 1;
         }
 
-        Converge(root, install, events, shim);
+        var spelling = ShimSpelling.Detect(root, home);
+        Converge(root, install, events, shim, spelling, home);
         var updated = Serialize(root, trailingNewline: !exists || original.EndsWith('\n'));
 
         stdout.WriteLine($"captainHook install-hooks: {settingsPath}");
         if (!opt.Remove)
         {
-            stdout.WriteLine($"  hook command  {install.Render(shim, "<event>")}");
+            stdout.WriteLine($"  hook command  {install.RenderProgram(ShimSpelling.Program(shim, spelling, home), "<event>")}");
+            if (spelling is not null && ShimSpelling.Program(shim, spelling, home) != InstallSpec.ShellQuote(shim))
+                stdout.WriteLine($"  spelling      home-relative, as this file already writes it ({spelling.Prefix}/…)");
             stdout.WriteLine($"  events        {(events.Count == 0 ? "(none)" : string.Join(", ", events))}  — {why}");
             var notWired = spec.Events.Keys.Except(events).ToList();
             if (notWired.Count > 0 && opt.Events is null)
@@ -207,8 +221,11 @@ public static class InstallHooksVerb
     /// (repointed in place when one exists, so its position among other tools'
     /// hooks is kept), and none anywhere else. Groups and event arrays that
     /// become empty BECAUSE we removed our entry go too; nothing else changes.
-    internal static void Converge(JsonObject root, InstallSpec install, IReadOnlyList<string> events, string shim)
+    internal static void Converge(JsonObject root, InstallSpec install, IReadOnlyList<string> events, string shim,
+                                  ShimSpelling? spelling = null, string? home = null)
     {
+        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var program = ShimSpelling.Program(shim, spelling, home);
         var hooks = root["hooks"] as JsonObject;
         if (hooks is null)
         {
@@ -233,8 +250,11 @@ public static class InstallHooksVerb
                     touched = true;
                     if (want && !kept)
                     {
-                        var cmd = install.Render(shim, ev);
-                        if (h!["command"]!.GetValue<string>() != cmd) h["command"] = cmd;
+                        var cmd = install.RenderProgram(program, ev);
+                        var have = h!["command"]!.GetValue<string>();
+                        // Same shim and same arguments, however the shim is
+                        // spelled (`$HOME/…` vs absolute): leave it be.
+                        if (have != cmd && !ShimSpelling.SameCommand(have, cmd, home)) h["command"] = cmd;
                         kept = true;
                     }
                     else hs.Remove(h);
@@ -243,7 +263,7 @@ public static class InstallHooksVerb
             }
             if (want && !kept)
             {
-                groups.Add(NewGroup(install, shim, ev));
+                groups.Add(NewGroup(install, program, ev));
                 kept = true;
             }
             if (groups.Count == 0) hooks.Remove(key);
@@ -252,16 +272,16 @@ public static class InstallHooksVerb
         // Wanted events with no key yet: append in the spec's declared order.
         foreach (var ev in events)
             if (!hooks.Any(kv => Harness.Canon(kv.Key) == ev))
-                hooks[install.HooksKey(ev)] = new JsonArray(NewGroup(install, shim, ev));
+                hooks[install.HooksKey(ev)] = new JsonArray(NewGroup(install, program, ev));
 
         if (hooks.Count == 0) root.Remove("hooks");
     }
 
-    private static JsonObject NewGroup(InstallSpec install, string shim, string ev)
+    private static JsonObject NewGroup(InstallSpec install, string program, string ev)
     {
         var entry = new JsonObject();
         foreach (var (k, v) in install.Entry)
-            entry[k] = k == "command" ? install.Render(shim, ev) : v?.DeepClone();
+            entry[k] = k == "command" ? install.RenderProgram(program, ev) : v?.DeepClone();
         return new JsonObject { ["hooks"] = new JsonArray(entry) };
     }
 
@@ -340,9 +360,12 @@ public sealed record InstallSpec(string ConfigFile, JsonObject Entry, string Com
     /// The hooks object's key for an event — the spec's canonical name.
     public string HooksKey(string ev) => ev;
 
-    public string Render(string shim, string ev) =>
+    public string Render(string shim, string ev) => RenderProgram(ShellQuote(shim), ev);
+
+    /// Render with the shim already spelled as a shell word (`ShimSpelling`).
+    public string RenderProgram(string program, string ev) =>
         CommandTemplate
-            .Replace("{captainShim}", ShellQuote(shim))
+            .Replace("{captainShim}", program)
             .Replace("{event-kebab}", ev == "<event>" ? ev : Kebab(ev))
             .Replace("{event}", ev);
 
@@ -353,4 +376,94 @@ public sealed record InstallSpec(string ConfigFile, JsonObject Entry, string Com
     /// a conservative set gets single-quoted.
     internal static string ShellQuote(string s) =>
         Regex.IsMatch(s, @"^[A-Za-z0-9/._+~-]+$") ? s : "'" + s.Replace("'", "'\\''") + "'";
+}
+
+/// How a settings file spells the shim in its hook commands when not as an
+/// absolute path: a home-relative prefix (`$HOME`, `${HOME}` or `~`) and the
+/// quote around the word (none, or `"`). Only spellings a shell expands count:
+/// `$HOME` bare or in double quotes, `~` bare; `'$HOME/…'` is a literal path.
+public sealed record ShimSpelling(string Prefix, char? Quote)
+{
+    private static readonly string[] Prefixes = ["${HOME}", "$HOME", "~"];
+
+    /// The spelling the file's captAInHook entries already use, or null when
+    /// none of them is home-relative (then the verb writes absolute paths, as
+    /// it always has).
+    public static ShimSpelling? Detect(JsonObject root, string home)
+    {
+        if (root["hooks"] is not JsonObject hooks) return null;
+        foreach (var (_, groups) in hooks)
+            if (groups is JsonArray arr)
+                foreach (var g in arr.OfType<JsonObject>())
+                    if (g["hooks"] is JsonArray hs)
+                        foreach (var h in hs.Where(InstallHooksVerb.IsOurs))
+                            if (Split(h!["command"]!.GetValue<string>()) is { } w && Of(w.Word, w.Quote) is { } sp)
+                                return sp;
+        return null;
+    }
+
+    /// The shim as a shell word: home-relative in `spelling` when the shim
+    /// lives under `home`, else the absolute path, quoted only if it must be.
+    public static string Program(string shim, ShimSpelling? spelling, string home)
+    {
+        var h = home.TrimEnd('/');
+        if (spelling is null || h.Length == 0 || !shim.StartsWith(h + "/", StringComparison.Ordinal))
+            return InstallSpec.ShellQuote(shim);
+        var rel = shim[(h.Length + 1)..];
+        var safe = System.Text.RegularExpressions.Regex.IsMatch(rel, @"^[A-Za-z0-9/._+-]+$");
+        if (spelling.Prefix == "~" && safe) return "~/" + rel;
+        var prefix = spelling.Prefix == "~" ? "$HOME" : spelling.Prefix;
+        // `~` cannot be quoted and keep its meaning: an unsafe path under a
+        // `~` file falls to `"$HOME/…"`, which a shell expands the same way.
+        if (spelling.Quote is null && safe) return prefix + "/" + rel;
+        return "\"" + prefix + "/" + EscapeDoubleQuoted(rel) + "\"";
+    }
+
+    /// Whether two hook commands run the same program with the same
+    /// arguments once the shell has expanded a home-relative spelling.
+    public static bool SameCommand(string a, string b, string home)
+    {
+        if (Split(a) is not { } x || Split(b) is not { } y) return false;
+        return x.Tail.Trim() == y.Tail.Trim() && Expand(x.Word, x.Quote, home) == Expand(y.Word, y.Quote, home);
+    }
+
+    private static ShimSpelling? Of(string word, char? quote)
+    {
+        foreach (var p in Prefixes)
+        {
+            if (!word.StartsWith(p + "/", StringComparison.Ordinal)) continue;
+            if (p == "~" && quote is not null) return null;        // "~/x" is literal
+            if (quote == '\'') return null;                        // '$HOME/x' is literal
+            return new ShimSpelling(p, quote);
+        }
+        return null;
+    }
+
+    private static string Expand(string word, char? quote, string home) =>
+        Of(word, quote) is { } sp ? home.TrimEnd('/') + "/" + word[(sp.Prefix.Length + 1)..] : word;
+
+    /// The first shell word of a command (unquoted, single- or double-quoted)
+    /// and what follows it. Double-quoted escapes are undone.
+    private static (string Word, char? Quote, string Tail)? Split(string cmd)
+    {
+        var t = cmd.TrimStart();
+        if (t.Length == 0) return null;
+        if (t[0] is '\'' or '"')
+        {
+            var q = t[0];
+            var sb = new System.Text.StringBuilder();
+            for (var i = 1; i < t.Length; i++)
+            {
+                if (q == '"' && t[i] == '\\' && i + 1 < t.Length && t[i + 1] is '"' or '\\' or '$' or '`') { sb.Append(t[++i]); continue; }
+                if (t[i] == q) return (sb.ToString(), q, t[(i + 1)..]);
+                sb.Append(t[i]);
+            }
+            return null;   // unterminated
+        }
+        var end = t.IndexOfAny([' ', '\t']);
+        return end < 0 ? (t, null, "") : (t[..end], null, t[end..]);
+    }
+
+    private static string EscapeDoubleQuoted(string s) =>
+        s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("$", "\\$").Replace("`", "\\`");
 }

@@ -38,6 +38,136 @@ public class InstallHooksTests : IDisposable
         return (exit, o.ToString(), e.ToString());
     }
 
+    /// Run with HOME = the temp dir, so the shim (`<dir>/bin/captainShim`)
+    /// lives under it, as `~/.local/bin/captainShim` does for real.
+    private (int Exit, string Out, string Err) RunHome(string home, params string[] args)
+    {
+        var o = new StringWriter();
+        var e = new StringWriter();
+        var exit = InstallHooksVerb.Run([.. args, "--settings", _settings, "--shim", _shim], o, e,
+                                        Registry, now: () => Fixed, home: home);
+        return (exit, o.ToString(), e.ToString());
+    }
+
+    private static string Hooks(params (string Event, string Command)[] entries) =>
+        new JsonObject
+        {
+            ["hooks"] = new JsonObject(entries.Select(x => new KeyValuePair<string, JsonNode?>(x.Event,
+                new JsonArray(new JsonObject { ["hooks"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "command", ["command"] = x.Command,
+                }) })))),
+        }.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true, IndentSize = 2, NewLine = "\n", Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n";
+
+    private string Command(string ev) =>
+        JsonNode.Parse(File.ReadAllText(_settings))!["hooks"]![ev]![0]!["hooks"]![0]!["command"]!.GetValue<string>();
+
+    // ---- home-relative spellings (ADR-0020 d4, 2026-10-19 amendment) -------
+
+    /// A settings.json shared by two machines names the shim through the
+    /// shell's home: that IS the shim, so nothing is rewritten.
+    [Theory]
+    [InlineData("\"$HOME/bin/captainShim\" hook user-prompt-submit")]
+    [InlineData("$HOME/bin/captainShim hook user-prompt-submit")]
+    [InlineData("${HOME}/bin/captainShim hook user-prompt-submit")]
+    [InlineData("\"${HOME}/bin/captainShim\" hook user-prompt-submit")]
+    [InlineData("~/bin/captainShim hook user-prompt-submit")]
+    public void AHomeRelativeShim_IsUpToDate(string command)
+    {
+        var file = Hooks(("UserPromptSubmit", command));
+        File.WriteAllText(_settings, file);
+
+        var (exit, stdout, _) = RunHome(_dir, "--apply");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("up to date", stdout);
+        Assert.Equal(file, File.ReadAllText(_settings));
+        Assert.Empty(Backups());
+    }
+
+    /// The other machine: same file, a different home, its own shim under it.
+    [Fact]
+    public void TheSharedFile_IsUpToDate_OnAMachineWithAnotherHome()
+    {
+        var file = Hooks(("UserPromptSubmit", "\"$HOME/bin/captainShim\" hook user-prompt-submit"));
+        File.WriteAllText(_settings, file);
+        var (_, stdout, _) = RunHome(_dir + "/", "--apply");   // a home with a trailing slash is the same home
+        Assert.Contains("up to date", stdout);
+        Assert.Equal(file, File.ReadAllText(_settings));
+    }
+
+    /// Quoting decides what a shell expands: '$HOME/…' and "~/…" are literal
+    /// paths, not the shim, so they are repointed (to the absolute path, since
+    /// the file has no home-relative spelling to keep).
+    [Theory]
+    [InlineData("'$HOME/bin/captainShim' hook user-prompt-submit")]
+    [InlineData("\"~/bin/captainShim\" hook user-prompt-submit")]
+    public void AQuotedSpellingTheShellWouldNotExpand_IsRepointed(string command)
+    {
+        File.WriteAllText(_settings, Hooks(("UserPromptSubmit", command)));
+        RunHome(_dir, "--apply");
+        Assert.Equal($"{_shim} hook user-prompt-submit", Command("UserPromptSubmit"));
+    }
+
+    /// Repointing an entry keeps the file's spelling: an upgrade on either
+    /// machine never bakes one home into the shared file.
+    [Theory]
+    [InlineData("\"$HOME/.captainHook/bin/captainShim\" hook user-prompt-submit", "\"$HOME/bin/captainShim\" hook user-prompt-submit")]
+    [InlineData("${HOME}/.captainHook/bin/captainShim hook user-prompt-submit", "${HOME}/bin/captainShim hook user-prompt-submit")]
+    [InlineData("~/.captainHook/bin/captainShim hook user-prompt-submit", "~/bin/captainShim hook user-prompt-submit")]
+    public void ARepointedEntry_KeepsTheFilesSpelling(string before, string after)
+    {
+        File.WriteAllText(_settings, Hooks(("UserPromptSubmit", before)));
+
+        var (exit, stdout, _) = RunHome(_dir, "--apply");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("home-relative", stdout);
+        Assert.Equal(after, Command("UserPromptSubmit"));
+        Assert.DoesNotContain(_dir, File.ReadAllText(_settings));
+    }
+
+    [Fact]
+    public void ANewEntry_InAHomeRelativeFile_IsWrittenTheSameWay()
+    {
+        File.WriteAllText(_settings, Hooks(("UserPromptSubmit", "~/bin/captainShim hook user-prompt-submit")));
+
+        RunHome(_dir, "--apply", "--events", "UserPromptSubmit,PreToolUse");
+
+        Assert.Equal("~/bin/captainShim hook pre-tool-use", Command("PreToolUse"));
+        Assert.Equal("~/bin/captainShim hook user-prompt-submit", Command("UserPromptSubmit"));
+    }
+
+    /// A shim that is not under this home cannot be spelled through it: the
+    /// absolute path, as before.
+    [Fact]
+    public void AShimOutsideTheHome_IsWrittenAbsolute()
+    {
+        File.WriteAllText(_settings, Hooks(("UserPromptSubmit", "\"$HOME/old/captainShim\" hook user-prompt-submit")));
+        RunHome("/nonexistent-home", "--apply");
+        Assert.Equal($"{_shim} hook user-prompt-submit", Command("UserPromptSubmit"));
+    }
+
+    /// A file with no home-relative entry keeps getting absolute paths.
+    [Fact]
+    public void AnAbsoluteFile_StaysAbsolute()
+    {
+        File.WriteAllText(_settings, Hooks(("UserPromptSubmit", "/old/captainShim hook user-prompt-submit")));
+        RunHome(_dir, "--apply");
+        Assert.Equal($"{_shim} hook user-prompt-submit", Command("UserPromptSubmit"));
+    }
+
+    [Theory]
+    [InlineData("a b", "\"$HOME/a b/captainShim\"")]          // unsafe chars: double-quoted
+    [InlineData("a$b", "\"$HOME/a\\$b/captainShim\"")]        // $ escaped inside the quotes
+    public void Program_QuotesAnUnsafePath_AndATildeFallsToHome(string sub, string expected)
+    {
+        var home = "/h";
+        var shim = $"/h/{sub}/captainShim";
+        Assert.Equal(expected, ShimSpelling.Program(shim, new ShimSpelling("~", null), home));
+        Assert.Equal(expected, ShimSpelling.Program(shim, new ShimSpelling("$HOME", '"'), home));
+    }
+
     private string[] Backups() => Directory.GetFiles(_dir, "settings.json.bak-captainhook-*");
 
     // The maintainer's real shape: another tool's hooks interleaved with ours,

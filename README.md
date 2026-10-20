@@ -103,7 +103,9 @@ captainHook install-hooks --apply    # writes it, after a timestamped backup
 ```
 
 The hook command it writes names the stable link, so upgrades never touch
-`settings.json` again. After that, the installed engine manages its own
+`settings.json` again. A settings.json shared between machines can name it
+`"$HOME/.local/bin/captainShim"` instead; install-hooks treats that as up to
+date and keeps the spelling when it writes. After that, the installed engine manages its own
 install with the `install.sh` each version carries:
 
 ```sh

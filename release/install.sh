@@ -133,12 +133,16 @@ switch_link() {  # switch_link <target> <link>
 # is typed. Only where the file system tells the two names apart. On a
 # case-insensitive one (APFS's default) `captainhook` already resolves to
 # `captainHook`, and a link written under that name would REPLACE the real
-# one. So: if the lower-case path already exists and is the same file, there
-# is nothing to do (case-insensitive, or our alias already points at this
-# version). Hooks never use it; they keep the exact names.
+# one. So: if the lower-case path already exists and is the same directory
+# entry (the same inode as the link itself, never followed), the file system
+# folds case and there is nothing to do. Hooks never use it; they keep the
+# exact names.
+entry_inode() { ls -di "$1" 2>/dev/null | awk '{ print $1 }'; }
 link_alias() {  # link_alias <version-dir>
   a=$BIN_DIR/$ALIAS
-  if [ -e "$a" ] && [ "$a" -ef "$BIN_DIR/captainHook" ]; then return 0; fi
+  if [ -e "$a" ] || [ -L "$a" ]; then
+    [ "$(entry_inode "$a")" = "$(entry_inode "$BIN_DIR/captainHook")" ] && return 0
+  fi
   if [ -L "$a" ]; then
     case $(readlink "$a") in "$INSTALL_DIR"/versions/*) ;; *) say "kept $a (not ours)"; return 0 ;; esac
   elif [ -e "$a" ]; then
@@ -150,9 +154,26 @@ link_alias() {  # link_alias <version-dir>
 HANDLERS=${CAPTAINHOOK_HANDLERS_FILE:-$HOME/.captainHook/handlers.json}
 SETTINGS=$HOME/.claude/settings.json
 
+# Does settings.json still run the shim? The absolute path, or (a file shared
+# through dotfiles by machines whose homes differ) the home-relative
+# spellings install-hooks keeps: $HOME/…, ${HOME}/…, ~/… — bare or quoted
+# (a quote is \" inside the JSON string).
+wired() {  # wired <settings>
+  set -- "$1" "$BIN_DIR/captainShim"
+  case $BIN_DIR in
+    "$HOME"/*) r=${BIN_DIR#"$HOME"/}/captainShim
+               set -- "$@" "\$HOME/$r" "\${HOME}/$r" "~/$r" ;;
+  esac
+  f=$1; shift
+  for p in "$@"; do
+    grep -qF -e "$p hook" -e "$p\\\" hook" "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 # ---- uninstall ----------------------------------------------------------------
 if [ "$UNINSTALL" = 1 ]; then
-  if [ -f "$SETTINGS" ] && grep -q "$BIN_DIR/captainShim hook" "$SETTINGS" 2>/dev/null && [ "$FORCE" = 0 ]; then
+  if [ -f "$SETTINGS" ] && wired "$SETTINGS" && [ "$FORCE" = 0 ]; then
     die "$SETTINGS still runs $BIN_DIR/captainShim — remove the hooks first:
     captainHook install-hooks --remove --apply
   then re-run --uninstall (or pass --force to leave them dangling)"

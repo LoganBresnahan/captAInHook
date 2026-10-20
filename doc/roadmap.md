@@ -1104,6 +1104,16 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [x] **33. install-hooks keeps a shared settings.json home-free** — the
+  maintainer's `~/.claude/settings.json` moves into dotfiles for WSL and the
+  Mac, so its hook commands read `"$HOME/.local/bin/captainShim" hook
+  <event>`. install-hooks treats `$HOME/…`, `${HOME}/…` and `~/…` (as a
+  shell would expand them) as the shim, so such a file is up to date, and
+  keeps that spelling when it repoints or adds an entry; install.sh's
+  uninstall refusal recognizes the same forms.
+  [ADR-0020](adr/0020-release-archives-and-install.md) d4's 2026-10-19
+  amendment; `ShimSpelling`; `InstallHooksTests`. **Shipped (v0.1.3).**
+
 - [ ] **32. Trail bounding — build ADR-0009's segmented archive** — the trail
   is one unbounded file (87 MB on the maintainer's machine, 2026-10-19), and
   since item 29 it also carries every agent command whole, so it grows faster.
@@ -1122,8 +1132,8 @@ run live*. The framework underneath is what exists today.
 
 - [x] **30. A lower-case `captainhook` alias** — install.sh links
   `~/.local/bin/captainhook` to the engine on a case-sensitive file system
-  only (on APFS's default the name already resolves, and a second link would
-  replace the real one); `--uninstall` removes it; hooks keep the exact
+  only (on APFS's default the name already resolves to the same directory
+  entry, and a second link would replace the real one); `--uninstall` removes it; hooks keep the exact
   names. The shipped deploy-guard guards the alias path too, and its header
   now speaks to users (asks, never denies, fail-open).
   [ADR-0020](adr/0020-release-archives-and-install.md) d2's 2026-10-19

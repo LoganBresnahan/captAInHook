@@ -90,8 +90,9 @@ keeps running from the unlinked inodes and the next doctor drains it as
    case-insensitive one (APFS's default) `captainhook` already resolves to
    `captainHook`, and writing a link under that name would rename-replace the
    real entry. Detection is the question itself: if the lower-case path
-   already exists and is the same file (`-ef`), there is nothing to write
-   (case-insensitive, or the alias already points at this version). A
+   already exists as the same directory entry (the link's own inode, read
+   with `ls -di`, never followed: `test -ef` is not POSIX), the file system
+   folds case and there is nothing to write. A
    `captainhook` that is not ours is kept and named. `--uninstall` removes
    the alias after the real names, so on a case-insensitive disk it is gone
    with them. Hooks and settings.json keep the exact names; the alias is for
@@ -132,6 +133,22 @@ keeps running from the unlinked inodes and the next doctor drains it as
    event; `--events` chooses explicitly; `--remove` takes captAInHook out. The
    hook command targets the STABLE link (`$CAPTAINHOOK_BIN_DIR/captainShim`),
    so no upgrade ever needs to run it again.
+   *(2026-10-19 amendment, v0.1.3 — a settings.json shared by two homes.)*
+   When `~/.claude/settings.json` lives in a dotfiles repo used on WSL
+   (`/home/oof`) and a Mac (`/Users/dogdrool`), its hook commands name the
+   shim through the shell, `"$HOME/.local/bin/captainShim" hook <event>`, and
+   the host's shell expands it. The verb now treats a program spelled
+   `$HOME/…` or `${HOME}/…` (bare or double-quoted) or `~/…` (bare) as the
+   path it expands to: equal to the shim ⇒ "up to date", nothing written.
+   Spellings a shell would NOT expand (`'$HOME/…'`, `"~/…"`) are literal
+   paths and get repointed like any other. When it does write (a repoint, a
+   new event) in a file whose captAInHook entries already use a home-relative
+   spelling, it keeps that spelling and quoting (`ShimSpelling`), so an
+   upgrade on either machine never bakes one home into the shared file; a
+   shim outside the home, or a path a bare `~` cannot carry, falls back to
+   the absolute or `"$HOME/…"` form. `install.sh --uninstall`'s "settings
+   still run the shim" refusal recognizes the same spellings. Pinned by
+   `InstallHooksTests` (the home-relative theories).
 
 5. **`captainHook version`** prints the stamped version, the content
    identity, `AppContext.BaseDirectory`, and the runtime identifier — so an
@@ -214,7 +231,7 @@ keeps running from the unlinked inodes and the next doctor drains it as
 | archive builder | `release/package.sh` |
 | installer | `release/install.sh` (`activate`, `link_alias` — the case-sensitive-only `captainhook` alias) |
 | bosun pin | `release/bosun.sha256` (tag + digests) |
-| install-hooks | `dotnet/captainHook/Install/InstallHooksVerb.cs` (+ `UnifiedDiff.cs`); `InstallHooksTests` |
+| install-hooks | `dotnet/captainHook/Install/InstallHooksVerb.cs` (+ `UnifiedDiff.cs`; `ShimSpelling` for home-relative commands); `InstallHooksTests` |
 | version | `dotnet/captainHook/Install/VersionVerb.cs` |
 | self | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; `release/smoke.sh` steps 10–11 |
 | CI | `.github/workflows/{ci,release,post-release}.yml`, `release/smoke.sh` |

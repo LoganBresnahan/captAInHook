@@ -30,7 +30,7 @@ what `/deploy` and CI use), so there is one install path.
         ~/.local/bin/captainShim  → versions/<v>/captainShim
         ~/.local/bin/captainHook  → versions/<v>/captainHook
         ~/.local/bin/captainhook  → versions/<v>/captainHook   (case-sensitive FS only:
-                                    skipped when it already -ef captainHook — APFS)
+                                    skipped when it is captainHook's own entry — APFS)
         payloads/<f>              → versions/<v>/payloads/<f>   (one per file, flat)
    8. previous ← the version the links pointed at before (when it changed)
    9. prune: "kept <v> (current)", "kept <p> (previous)", "removed <x>"
@@ -40,6 +40,8 @@ what `/deploy` and CI use), so there is one install path.
  captainHook install-hooks            dry run: the unified diff it would make
  captainHook install-hooks --apply    backup, then write ~/.claude/settings.json
    hook command = ~/.local/bin/captainShim hook <event>   ← stable across upgrades
+   a file already spelling it "$HOME/.local/bin/captainShim" (or ${HOME}/…, ~/…)
+   is up to date as-is, and keeps that spelling when an entry is repointed or added
 
  captainHook self rollback|prune|uninstall  ─► sh -s -- --<verb>  < versions/<v>/install.sh
  captainHook self update [--version X]      ─► fetch latest (or vX's) install.sh ─► sh -s -- [--version X]
@@ -101,8 +103,17 @@ folder with the SAME content identity, and the warm daemon keeps serving.
 On a case-insensitive file system (APFS's default) that name already resolves
 to `captainHook`, and a link written under it would rename-replace the real
 entry, so the installer writes it only when the lower-case path is not already
-the same file (`-ef`). A `captainhook` that is not ours is kept. Hooks and
+the same directory entry (the same inode, by `ls -di`). A `captainhook` that is not ours is kept. Hooks and
 settings.json always use the exact names (ADR-0020 d2's 2026-10-19 amendment).
+
+**A settings.json shared by two homes stays home-free.** Kept in a dotfiles
+repo for a Linux and a macOS home, its hook commands name the shim through the
+shell (`"$HOME/.local/bin/captainShim" hook <event>`). install-hooks reads a
+`$HOME/…`, `${HOME}/…` (bare or double-quoted) or bare `~/…` program as the
+path it expands to, so such a file is "up to date"; when it writes into one, it
+writes the same spelling (`ShimSpelling`). Spellings no shell expands
+(`'$HOME/…'`, `"~/…"`) are literal paths. The uninstall refusal recognizes
+the same forms (`wired` in install.sh). ADR-0020 d4's 2026-10-19 amendment.
 
 **Uninstall is two steps, in order.** `captainHook install-hooks --remove
 --apply` takes captAInHook out of the harness config (the binary is needed to
