@@ -41,7 +41,8 @@ public static class DaemonHost
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
         int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null,
         string? uiDir = null, string? handlersPath = null, string? mailDir = null,
-        string? watchPath = null, TimeSpan? watchPoll = null, string? childrenDir = null)
+        string? watchPath = null, TimeSpan? watchPoll = null, string? childrenDir = null,
+        string? legacyTrail = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -86,6 +87,33 @@ public static class DaemonHost
         var reap = childrenDir is null ? Task.CompletedTask : OrphanReaper.RunAsync(childrenDir);
         var ledger = childrenDir is null ? null : SpawnLedger.Open(childrenDir);
         if (ledger is not null) SpawnLedger.Current = ledger;
+
+        // ---- the 0.1.3 window's shell commands, out of the trail (ADR-0009 d8)
+        // Once, in the background: copy the trail's `tool.shell` lines into
+        // shell-history.0.jsonl so they outlive the trail's rotation. Only when
+        // a trail path arrives — production passes the real one; a test daemon
+        // never reads or writes the live logs.
+        if (legacyTrail is not null)
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    var copied = ShellTrail.MigrateLegacy(legacyTrail);
+                    if (copied >= 0)
+                        Log.Info("daemon", "daemon.shellHistoryMigrated", new LogFields
+                        {
+                            Msg = $"copied {copied} tool.shell line(s) from the trail into {ShellTrail.LegacyPath(legacyTrail)}",
+                            Data = new Dictionary<string, object> { ["lines"] = copied },
+                        });
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("daemon", "daemon.shellHistoryMigrateError", new LogFields
+                    {
+                        Msg = $"shell history migration skipped, retried next start: {ex.Message}",
+                    });
+                }
+            });
 
         // ---- warm up: everything expensive happens BEFORE the bind ----------
         var harnesses = new ReloadingHarnessRegistry(harnessDir);

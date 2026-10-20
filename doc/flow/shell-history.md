@@ -1,9 +1,11 @@
 # Flow: shell history — what agents ran, recorded and searched
 
-Every shell command an agent runs is recorded in the trail as one `tool.shell`
-line, and `captainHook history` searches those lines: by text, session, cwd,
-time and harness, one line per command or the whole multi-line command
-([ADR-0009](../adr/0009-trail-rotation.md) d7, v0.1.3).
+Every shell command an agent runs is recorded as one `tool.shell` line in
+`~/.captainHook/logs/shell-history.jsonl`, kept forever, and `captainHook
+history` searches those lines: by text, session, cwd, time and harness, one
+line per command or the whole multi-line command
+([ADR-0009](../adr/0009-trail-rotation.md) d7, v0.1.3; its own file since d8,
+v0.1.4).
 
 ```
  agent runs a shell command; the host fires PostToolUse
@@ -16,20 +18,25 @@ time and harness, one line per command or the whole multi-line command
    PostToolUse? tool_input.command a non-blank string?   (content, not tool name)
         │ yes                                  │ no → nothing
         ▼                                      ▼
- trail ── tool.shell {command, cwd, harness, tool} + sessionId, dispatchId
+ ShellTrail.Sink ── O_APPEND ──► ~/.captainHook/logs/shell-history.jsonl   (0600, 0700 dir)
+   tool.shell {command, cwd, harness, tool} + sessionId, dispatchId       KEPT FOREVER
+                                                                           (never rotated)
+ daemon start (once, background):  trail's 0.1.3-window tool.shell lines
+   ─► shell-history.0.jsonl   (ShellTrail.MigrateLegacy: temp + rename)
         │
         │      … later, a person (or `hh -a`) …
         ▼
  captainHook history [PATTERN] [--session P] [--since 2d|3h|ISO] [--cwd DIR]
-                     [--harness H] [--limit N] [--full] [--json]
-   ShellTrail.Files: captainHook.<seq>.jsonl (ascending) …, then captainHook.jsonl
+                     [--harness H] [-n|--limit N] [--full] [--json]
+   ShellTrail.HistoryFiles:  shell-history.0.jsonl (or, before a daemon made it,
+                             the trail's segments + active file), then shell-history.jsonl
    ShellTrail.Read:  stream line by line; skip lines not naming tool.shell
                      before parsing; skip torn/unparseable lines
-   filter (all must hold) ─► ring of N (--limit) or straight out
+   filter (all must hold) ─► ring of N (-n/--limit) or straight out
         ▼
  stdout  2026-10-19 14:02  56544d6f  ~/captAInHook  git status
          (cut to the terminal width with …; whole lines into a pipe)
- exit    0 matches · 1 none (stderr explains an empty trail) · 2 usage
+ exit    0 matches · 1 none (stderr explains an empty history) · 2 usage
 ```
 
 ## Why record, and why here
@@ -54,24 +61,33 @@ command that ran is a fact whatever the policy says about handlers, so even
 an event-level deny still records it (pinned by
 `TheCollapsedRun_Records_EvenWhenPolicyDeniesTheEvent`).
 
-## Retention: history sees what the trail still holds
+## Retention: forever, in its own file
 
-- Commands from the first build that records them (0.1.3) onward. A trail
-  with none says so on stderr instead of looking like an empty search.
-- For as long as the trail keeps them. The trail is one unbounded file today;
-  when ADR-0009's segmented archive lands, history already reads the numbered
-  segments before the active file, oldest first.
-- The durable long-term record stays agent-shell-history's file. history is
-  the structured window onto the recent past.
-- Command text is recorded whole, so a token an agent puts on a command line
-  is in the trail, as it would be in a shell history. The trail is 0600 in a
-  0700 directory (ADR-0016 d13).
+- **Kept forever, the owner's explicit choice** (ADR-0009 d8). The trail is
+  days-to-weeks telemetry and will be rotated and capped (roadmap item 32);
+  `shell-history.jsonl` is not the trail and nothing in its policy touches
+  it. Command text is kept whole and indefinitely, so a token an agent puts
+  on a command line stays there, as it would in a shell history. 0600 in the
+  0700 logs dir (ADR-0016 d13).
+- **From 0.1.3 on.** 0.1.3 wrote these lines into the trail itself; a daemon
+  copies them once into `shell-history.0.jsonl` at start, and history reads
+  that copy (or the trail, before the copy exists) ahead of the active file.
+  Nothing recorded since 0.1.3 is lost or doubled. Lines a rolled-back 0.1.3
+  writes to the trail after the copy exists are not picked up.
+- **Older than 0.1.3:** only agent-shell-history's bash-history lines, if that
+  payload was on. A history with nothing in it says so on stderr.
+- **Not in the GUI's trace view**, which streams the trail only.
+- **One writer seam, swapped in tests.** `ShellTrail.Sink` is the trail's
+  O_APPEND primitive (`WireJsonl.Append`) by default; the test suite replaces
+  it at module load, as it does the Log sink, so no test writes a user's
+  history.
 
 ## Reading it back
 
 Streamed, never loaded: `File.ReadLines`, a substring test for
 `"evt":"tool.shell"` before any JSON parse, and at most N entries held for
-`--limit N` (the N most recent matches, printed oldest first). Measured: the
+`-n`/`--limit N` (the N most recent matches, printed oldest first; `-n` as in
+`hh -n`). Measured: the
 maintainer's real 87 MB trail in ~0.2 s; a synthetic 117 MB trail with 133k
 commands in ~1.2 s, memory flat at ~60 MB.
 
@@ -94,11 +110,13 @@ commands in ~1.2 s, memory flat at ~60 MB.
 
 | what | where |
 |---|---|
-| recognition + the `tool.shell` line (`ShellTrail.Command`, `Record`) | `dotnet/captainHook/Core/ShellTrail.cs` |
+| recognition + the `tool.shell` line (`ShellTrail.Command`, `Record`, `Sink`, `HistoryPath`) | `dotnet/captainHook/Core/ShellTrail.cs` |
+| the 0.1.3 window's one-time copy (`MigrateLegacy`, `LegacyPath`), run at daemon start | `ShellTrail.cs`; `Core/DaemonHost.cs` (`legacyTrail`, production-only via `Program.cs`) |
 | called before the policy gate, both sites | `Core/HookRun.cs` (`CollapsedAsync`), `Core/DaemonHost.cs` (`DispatchOneAsync`) |
-| segment order + streaming read (`ShellTrail.Files`, `Read`, `Parse`) | `dotnet/captainHook/Core/ShellTrail.cs` |
+| what history reads, in order (`ShellTrail.HistoryFiles`; the trail's segment order in `Files`) + streaming read (`Read`, `Parse`) | `dotnet/captainHook/Core/ShellTrail.cs` |
 | the verb (args, filters, ring buffer, output shapes, exit codes) | `dotnet/captainHook/Core/HistoryVerb.cs`; `Mode.History` in `dotnet/captainHookWire/Cli.cs`; terminal width in `Program.cs` |
 | trail path | `WireJsonl.DefaultLogPath()` (`CAPTAINHOOK_LOG`, else `~/.captainHook/logs/captainHook.jsonl`) |
-| events | `tool.shell` (src `tool`) |
-| tests | `ShellHistoryTests` (content recognition across tool names, non-shell calls ignored, multi-line whole, both wire sites incl. under a policy deny, torn lines, segment order, every filter, limit, the three output shapes, exit codes, the empty-trail note, the shim refuses the verb); `release/smoke.sh` step 4 (an installed daemon records a `run_shell` PostToolUse and `history --full` finds it, on every release target) |
-| decision | [ADR-0009](../adr/0009-trail-rotation.md) d7 |
+| events | `tool.shell` (src `tool`, in shell-history.jsonl, not the trail); `daemon.shellHistoryMigrated`, `daemon.shellHistoryMigrateError` (src `daemon`, in the trail) |
+| test seam | `ShellTrail.Sink` swapped in `TestInfra` (`CapturedShellHistory` to read it) |
+| tests | `ShellHistoryTests` (content recognition across tool names, non-shell calls ignored, multi-line whole, both wire sites incl. under a policy deny, torn lines, segment order, every filter, limit, the three output shapes, exit codes, the empty-history note, the shim refuses the verb, its own file beside the trail, the 0.1.3 lines read from the trail and then from their migrated copy with nothing doubled, the daemon's migration, `-n`); `release/smoke.sh` step 4 (an installed daemon records a `run_shell` PostToolUse into shell-history.jsonl, 0600, nothing in the trail, and `history --full` finds it, on every release target) |
+| decision | [ADR-0009](../adr/0009-trail-rotation.md) d7, d8 |

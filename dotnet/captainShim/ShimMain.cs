@@ -18,11 +18,22 @@ namespace CaptainHook.Shim;
 // publish per test run.
 public static class ShimMain
 {
+    internal const string ShimUsage =
+        "usage: captainShim hook <event> [--harness NAME] [--no-daemon]\n" +
+        "  the hook command: payload JSON on stdin, effect JSON on stdout (everything else: captainHook help)\n";
+
     public static async Task<int> RunAsync(
         string[] args, Stream stdin, Stream stdout, TextWriter stderr,
         string? deployDir = null, string? socketPathOverride = null)
     {
         var inv = Invocation.Parse(args);
+        if (inv.Mode == Mode.Help)
+        {
+            // Usage, asked for: the shim's whole surface is one verb.
+            using var w = new StreamWriter(stdout, leaveOpen: true);
+            await w.WriteAsync(ShimUsage);
+            return 0;
+        }
         if (inv.Mode is not (Mode.Shim or Mode.Collapsed))
         {
             // The shim is the hook command, nothing else. Engine work belongs
@@ -30,7 +41,7 @@ public static class ShimMain
             // binary. Phrased as "not a hook mode" so a NEW engine verb is
             // refused by default instead of falling through to a dispatch.
             await stderr.WriteLineAsync(
-                "captainShim: hook shim only — run captainHook for --daemon / doctor / actors-demo / ui / mail / version / install-hooks / self / history");
+                "captainShim: hook shim only — run captainHook for --daemon / doctor / actors-demo / ui / mail / version / install-hooks / self / history / help\n" + ShimUsage);
             return 1;
         }
 

@@ -20,7 +20,7 @@ harness's wire format — with a structured JSONL trail the whole way.
 │   parse stdin JSON per the spec's field names ─ canon event name          │
 │   (user-prompt-submit → UserPromptSubmit) ─ mint dispatchId (8 hex)       │
 │   a PostToolUse whose tool_input.command is a string?                     │
-│     record it, before the policy gate (ShellTrail)   ── tool.shell        │
+│     record it, before the policy gate ── tool.shell → shell-history.jsonl │
 │        │                                                                  │
 │        ▼                                                                  │
 │ ctor: snapshot Registry.Specs ──► spawn one supervised                    │
@@ -92,10 +92,20 @@ the rule language, no-drift, poison-and-advance reload — in
 Just before the policy gate, both dispatch sites hand the parsed event to
 `ShellTrail.Record`: a PostToolUse whose `tool_input.command` is a string (a
 shell command that ran, recognised by content, never by the host's tool name)
-becomes one `tool.shell` trail line with the whole command, cwd and harness.
+becomes one `tool.shell` line, with the whole command, cwd and harness, in
+`logs/shell-history.jsonl` (its own file, kept forever, not the trail).
 Before the gate because the policy decides which handlers see an event, not
 whether the command happened. `captainHook history` reads these lines back;
-mechanics in [shell-history.md](shell-history.md) (ADR-0009 d7).
+mechanics in [shell-history.md](shell-history.md) (ADR-0009 d7, d8).
+
+## Which argv dispatches
+
+Only `hook <event>` (and `--daemon`, which serves them). `help`, `--help`,
+`-h` and `<verb> --help` print the usage (stdout, exit 0); any other word, or
+no argument at all, is a usage error on stderr with exit 1 and never a
+dispatch (ADR-0004 d1's 2026-10-19 amendment; exit 1 because a hook's exit 2
+blocks in Claude Code). The echo demo handler is off unless
+`CAPTAINHOOK_ECHO=1`, so with no handlers.json a hook answers the bare Noop.
 
 ## The shim's warm path (ADR-0004, in progress)
 
@@ -315,7 +325,8 @@ relocated.
 | `Registry` (spec registration), `HandlerSpec`, `Dispatcher` (ctor spawns workers), `RunGuarded`, `Merge`, `Trace` | `dotnet/captainHook/Core/Dispatcher.cs` |
 | `Worker<'Req,'Reply>` (ask, reply-then-crash) | `dotnet/captainHookActors/Worker.fs` |
 | `HookEvent`, `Effect`, `IHandler`, `FailMode` | `dotnet/captainHook/Core/Model.cs` |
-| `EchoHandler`, `LatencyProbeHandler` | `dotnet/captainHook/Handlers/Handlers.cs` |
-| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged/abandoned), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared`, `harness.verdictUnsupported` (src `harness`; the last fires from the adapter, which has no dispatchId in scope — it carries `hookEvent` + `adapter` + `verdict`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening` (data `shortDir` when the short per-uid dir is in use) `/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `policy.skip/exclude/malformed/reload` (src `policy`); `doctor.verdict` (src `doctor`); `tool.shell` (src `tool`) |
+| `EchoHandler` (opt-in, `CAPTAINHOOK_ECHO=1`, since 0.1.4), `LatencyProbeHandler` (`CAPTAINHOOK_PROBE=1`) | `dotnet/captainHook/Handlers/Handlers.cs`, gated in `HookRun.BuildDefaultRegistry` |
+| usage + unknown command (`Mode.Help`, `Mode.BadCommand`) | `dotnet/captainHookWire/Cli.cs`, `dotnet/captainHook/Core/UsageVerb.cs`; `UsageTests` |
+| log events | `dispatch.start`, `handler.ok/timeout/error/dead` (`handler.timeout` data carries `classification` = cancelled/wedged/backlogged/abandoned), `side.ok/error/dropped`, `dispatch.done` (src `dispatcher`); `actor.spawn/restart/wedge/escalate/staleExit` (src `sup:dispatcher`); `harness.specInvalid`, `harness.effectUnsupported`, `harness.eventUndeclared`, `harness.verdictUnsupported` (src `harness`; the last fires from the adapter, which has no dispatchId in scope — it carries `hookEvent` + `adapter` + `verdict`); `shim.answered/fallback/deliveryFailed/spawnDaemon/spawnFailed` (src `shim`); `daemon.listening` (data `shortDir` when the short per-uid dir is in use) `/lostRace/rendezvousFailed/badRequest/connError/acceptError/idleExit/drainStart/drained/drainTimeout` (src `daemon`); `harness.reload` (src `harness`); `policy.skip/exclude/malformed/reload` (src `policy`); `doctor.verdict` (src `doctor`); `tool.shell` (src `tool`, written to shell-history.jsonl, not the trail) |
 | pinned by | `dotnet/captainHookTests/CliTests.cs` (mode selection, stdout contract in-process); `ShimClientTests.cs` (warm relay byte-identity, NotDelivered-only fallback, deadline-bounded silent daemon); `AtMostOnceTests.cs` (commit-marker boundary, mid-write deadline → truncated frame dispatches nothing, one-dispatch-per-id accounting); `SoakTests.cs` (round-trip golden wire; 200-dispatch soak: serialization permutation, queue count, escalation under load); `FrameTests.cs` (wire golden bytes); `LockBindTests.cs` (rendezvous); `DispatcherTests.cs`, `LoggingTests.cs` (every dispatch test now runs handlers through the worker path); `ConvergenceTests.cs` (restart/state-reset, escalation fail modes, reply-then-crash speed, per-worker serialization); `ClassificationTests.cs` (timeout-fault classification: uncounted cancellation, wedge abandon+count, backlog, dead fast-fail); `HarnessTests.cs` (registry layering + overrides, adapter golden bytes, capability gate, spec-driven parsing) |
 | decision record | `doc/adr/0002-handlers-as-supervised-actors.md`; `doc/adr/0003-declarative-harness-registry.md`; `doc/adr/0006-dispatch-policy.md` |

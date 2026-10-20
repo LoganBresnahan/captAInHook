@@ -38,21 +38,24 @@ public class ShellHistoryTests : IDisposable
     public void AShellCommandThatRan_IsRecorded_WhateverTheHostCallsTheTool(string toolName)
     {
         using var log = new CapturedLog();
+        using var history = new CapturedShellHistory();
         ShellTrail.Record(Post(toolName, "\"git status\""), "d-1");
 
-        var e = Assert.Single(log.Events, x => x.Evt == "tool.shell");
-        Assert.Equal("git status", e.Fields.Data!["command"]);
-        Assert.Equal("/work/proj", e.Fields.Data!["cwd"]);
-        Assert.Equal("claude-code", e.Fields.Data!["harness"]);
-        Assert.Equal(toolName, e.Fields.Data!["tool"]);
-        Assert.Equal("d-1", e.Fields.DispatchId);
-        Assert.Equal("56544d6f-d8fb-40a5-96ca-d268b27e5bf3", e.Fields.SessionId);
+        var e = Assert.Single(history.Entries);
+        Assert.Equal("git status", e.Command);
+        Assert.Equal("/work/proj", e.Cwd);
+        Assert.Equal("claude-code", e.Harness);
+        Assert.Equal(toolName, e.Tool);
+        Assert.Equal("d-1", e.DispatchId);
+        Assert.Equal("56544d6f-d8fb-40a5-96ca-d268b27e5bf3", e.SessionId);
+        // Its own file since 0.1.4 (ADR-0009 d8): nothing of it in the trail.
+        Assert.DoesNotContain(log.Events, x => x.Evt == "tool.shell");
     }
 
     [Fact]
     public void NotAShellCommand_RecordsNothing()
     {
-        using var log = new CapturedLog();
+        using var history = new CapturedShellHistory();
         ShellTrail.Record(Post("Bash", "\"git status\"", type: "PreToolUse"), "d");   // not yet run
         ShellTrail.Record(Post("Edit", "[\"not\",\"a string\"]"), "d");                // command not a string
         ShellTrail.Record(Post("Bash", "\"   \""), "d");                               // blank
@@ -60,15 +63,15 @@ public class ShellHistoryTests : IDisposable
             JsonDocument.Parse("""{"tool_name":"Read","tool_input":{"file_path":"/x"}}""").RootElement), "d");
         ShellTrail.Record(new HookEvent("PostToolUse", null, null,
             JsonDocument.Parse("[1,2]").RootElement), "d");                                // not even an object
-        Assert.DoesNotContain(log.Events, x => x.Evt == "tool.shell");
+        Assert.Empty(history.Lines);
     }
 
     [Fact]
     public void AMultiLineCommand_IsRecordedWhole()
     {
-        using var log = new CapturedLog();
+        using var history = new CapturedShellHistory();
         ShellTrail.Record(Post("Bash", "\"cat <<'EOF' > x\\nhello\\nEOF\""), "d");
-        Assert.Equal("cat <<'EOF' > x\nhello\nEOF", Assert.Single(log.Events, x => x.Evt == "tool.shell").Fields.Data!["command"]);
+        Assert.Equal("cat <<'EOF' > x\nhello\nEOF", Assert.Single(history.Entries).Command);
     }
 
     /// The collapsed site records BEFORE the policy gate: an event-level deny
@@ -78,7 +81,7 @@ public class ShellHistoryTests : IDisposable
     {
         var policy = Path.Combine(_dir, "dispatch.json");
         File.WriteAllText(policy, """{ "version": 1, "rules": [ { "event": "PostToolUse", "decision": "deny" } ] }""");
-        using var log = new CapturedLog();
+        using var history = new CapturedShellHistory();
         var stdout = new StringWriter();
 
         var exit = await HookRun.CollapsedAsync(new Invocation(Mode.Collapsed, "post-tool-use", "claude-code"),
@@ -87,11 +90,11 @@ public class ShellHistoryTests : IDisposable
 
         Assert.Equal(0, exit);
         Assert.Equal("{}", stdout.ToString());   // denied: the bare Noop
-        var e = Assert.Single(log.Events, x => x.Evt == "tool.shell");
-        Assert.Equal("ls -la", e.Fields.Data!["command"]);
-        Assert.Equal("/w", e.Fields.Data!["cwd"]);
-        Assert.Equal("s-1", e.Fields.SessionId);
-        Assert.NotNull(e.Fields.DispatchId);
+        var e = Assert.Single(history.Entries);
+        Assert.Equal("ls -la", e.Command);
+        Assert.Equal("/w", e.Cwd);
+        Assert.Equal("s-1", e.SessionId);
+        Assert.NotNull(e.DispatchId);
     }
 
     /// The daemon site records too, under the shim's dispatch id.
@@ -100,7 +103,7 @@ public class ShellHistoryTests : IDisposable
     {
         using var dir = new TempRuntimeDir();
         using var stop = new CancellationTokenSource();
-        using var log = new CapturedLog();
+        using var history = new CapturedShellHistory();
         var daemon = Task.Run(() => DaemonHost.RunAsync(dir.Paths, NoOverrides, stop.Token));
         try
         {
@@ -112,9 +115,9 @@ public class ShellHistoryTests : IDisposable
                 "claude-code", Encoding.UTF8.GetBytes("""{"session_id":"s-2","cwd":"/w","tool_name":"run_shell","tool_input":{"command":"make test"}}""")));
             Assert.IsType<ForwardOutcome.Answered>(outcome);
 
-            var e = Assert.Single(log.Events.ToArray(), x => x.Evt == "tool.shell");
-            Assert.Equal("make test", e.Fields.Data!["command"]);
-            Assert.Equal("cafe0042", e.Fields.DispatchId);
+            var e = Assert.Single(history.Entries);
+            Assert.Equal("make test", e.Command);
+            Assert.Equal("cafe0042", e.DispatchId);
         }
         finally
         {
@@ -342,5 +345,89 @@ public class ShellHistoryTests : IDisposable
         var exit = ShimMain.RunAsync(["history"], new MemoryStream(), new MemoryStream(), stderr).GetAwaiter().GetResult();
         Assert.Equal(1, exit);
         Assert.Contains("history", stderr.ToString());
+    }
+
+    // ---- its own file, kept forever (ADR-0009 d8, 0.1.4) ---------------------
+
+    private string Active => Path.Combine(_dir, "shell-history.jsonl");
+    private string Legacy => Path.Combine(_dir, "shell-history.0.jsonl");
+
+    private string[] Commands(params string[] args) =>
+        Lines(History(["--json", .. args]).Out).Select(l => JsonDocument.Parse(l).RootElement.GetProperty("command").GetString()!).ToArray();
+
+    [Fact]
+    public void TheHistoryFile_SitsBesideTheTrail()
+    {
+        Assert.Equal(Active, ShellTrail.HistoryPath(Trail));
+        Assert.Equal(Legacy, ShellTrail.LegacyPath(Trail));
+    }
+
+    /// Before a daemon has migrated them, the 0.1.3 window's lines are read
+    /// straight from the trail, then the history file.
+    [Fact]
+    public void History_ReadsTheTrailsOldLines_ThenTheHistoryFile()
+    {
+        WriteTrail(Line("from 0.1.3", "2026-10-19T09:00:00.000Z"));
+        File.WriteAllLines(Active, [Line("from 0.1.4")]);
+        Assert.Equal(new[] { "from 0.1.3", "from 0.1.4" }, Commands());
+    }
+
+    /// Once migrated, the trail is not read at all: no duplicates, and the
+    /// old lines survive the trail's rotation.
+    [Fact]
+    public void AfterMigration_TheTrailIsNotRead_AndNothingIsDoubled()
+    {
+        WriteTrail(
+            """{"ts":"2026-10-19T08:00:00.000Z","lvl":"info","src":"exec","evt":"exec.spawn","data":{"command":"/p.sh"}}""",
+            Line("from 0.1.3", "2026-10-19T09:00:00.000Z"),
+            Line("torn")[..^5]);
+        File.WriteAllLines(Active, [Line("from 0.1.4")]);
+
+        Assert.Equal(1, ShellTrail.MigrateLegacy(Trail));
+        Assert.Equal(-1, ShellTrail.MigrateLegacy(Trail));   // once
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(Legacy));
+        Assert.Single(File.ReadAllLines(Legacy));
+
+        File.WriteAllText(Trail, "");   // the trail rotated away: history does not care
+        Assert.Equal(new[] { "from 0.1.3", "from 0.1.4" }, Commands());
+    }
+
+    [Fact]
+    public void Migration_WithNothingToCopy_LeavesAnEmptyFile_SoLaterStartsSkipTheScan()
+    {
+        WriteTrail("""{"ts":"2026-10-19T08:00:00.000Z","lvl":"info","src":"exec","evt":"exec.spawn"}""");
+        Assert.Equal(0, ShellTrail.MigrateLegacy(Trail));
+        Assert.Equal("", File.ReadAllText(Legacy));
+        Assert.Empty(Directory.GetFiles(_dir, ".shell-history*"));   // no temp left behind
+    }
+
+    /// The daemon runs the migration at start, in the background, when it is
+    /// handed the trail (production passes the real one).
+    [Fact]
+    public async Task TheDaemon_MigratesAtStart()
+    {
+        WriteTrail(Line("from 0.1.3"));
+        using var dir = new TempRuntimeDir();
+        using var stop = new CancellationTokenSource();
+        var daemon = Task.Run(() => DaemonHost.RunAsync(dir.Paths, NoOverrides, stop.Token, legacyTrail: Trail));
+        try
+        {
+            await PollUntilAsync(() => Task.FromResult(File.Exists(Legacy)), TimeSpan.FromSeconds(15), "legacy file written");
+            Assert.Contains("from 0.1.3", File.ReadAllText(Legacy));
+        }
+        finally
+        {
+            stop.Cancel();
+            Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));
+        }
+    }
+
+    [Fact]
+    public void DashN_IsLimit_AsInHh()
+    {
+        WriteTrail(Enumerable.Range(1, 5).Select(i => Line($"cmd {i}")).ToArray());
+        Assert.Equal(new[] { "cmd 4", "cmd 5" }, Commands("-n", "2"));
+        Assert.Equal(new[] { "cmd 4", "cmd 5" }, Commands("cmd", "-n", "2"));
+        Assert.Equal(2, History("-n").Exit);
     }
 }

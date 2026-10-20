@@ -75,6 +75,23 @@ layer (the Akka re-evaluation below).
    *(Amended 2026-07-06: the gate tripped — see decision 7's amendment. The
    peel-off is scheduled; the engine keeps every mode it has, so "two
    binaries" changes only what the deployed hook command points at.)*
+   *(Amended 2026-10-19, v0.1.4 — only `hook …` and `--daemon` dispatch.)*
+   The parse used to send every argv that was not a verb down the hook path,
+   so `captainhook --help`, `-h`, `help`, a typo, or a bare `captainhook`
+   dispatched a fake UserPromptSubmit through the echo handler (`help` even
+   cold-spawned a daemon), found from a Mac session. `Invocation.Parse` now
+   returns `Help` for `help [verb]`, `--help`, `-h` and `<verb> --help`
+   (usage on stdout, exit 0) and `BadCommand` for anything else that is
+   neither a verb nor a hook word, bare argv included (usage on stderr,
+   **exit 1**, never a dispatch). Exit 1 rather than the usual usage-error 2
+   on purpose: the engine is also a valid hook command, and to Claude Code a
+   hook's exit 2 is a BLOCKING error, so one typo in a hook command would
+   block every prompt or tool call; 1 is visible and non-blocking (and what
+   git answers to an unknown command). The retired "bare invocation reads a
+   payload from stdin" default had no caller: every hook command carries
+   `hook <event>`, and `hook` with no event still lets the payload name it.
+   The shim answers `--help` with its one-verb usage and refuses the rest
+   on stderr, as before. `UsageTests`; smoke step 1.
 2. **Connect-or-fallback: no hook ever waits for warmup — or for silence.**
    The shim tries the socket; on connect failure it does **not** wait — it
    dispatches in-process (collapsed) for *this* event and spawns a detached

@@ -1,10 +1,12 @@
 using System.Text.Json;
 using CaptainHook.Actors;
+using CaptainHook.Wire;
 
 namespace CaptainHook.Core;
 
-/// The agent shell-command record (ADR-0009 d7, 2026-10-19): one
-/// `tool.shell` trail line per shell command an agent ran, which is what
+/// The agent shell-command record (ADR-0009 d7, 2026-10-19; its own file
+/// since d8, 2026-10-19): one `tool.shell` line per shell command an agent
+/// ran, appended to `shell-history.jsonl` beside the trail. That file is what
 /// `captainHook history` searches.
 ///
 /// WHAT counts as a shell command is read off the call's CONTENT: a
@@ -20,16 +22,38 @@ namespace CaptainHook.Core;
 /// a command that ran is a fact whatever handlers are allowed to say about it
 /// (the same reasoning that stamps session presence before the gate).
 ///
-/// What this puts in the trail, stated rather than engineered around: the
-/// command text, whole. A token an agent puts on a command line lands here
-/// exactly as it lands in a shell history; the trail is 0600 in a 0700 dir
-/// (ADR-0016 d13). And what history can see is exactly what the trail still
-/// holds: commands from the first build that records them, for as long as
-/// the trail keeps them. The durable long-term record stays agent-shell-
-/// history's file.
+/// Its own file, kept FOREVER (d8, the owner's explicit choice): the trail is
+/// days-to-weeks telemetry and will be rotated and capped (roadmap item 32);
+/// command history is not, and nothing in the trail's policy ever touches
+/// this file. Stated plainly: the command text is kept whole and
+/// indefinitely, so a token an agent puts on a command line stays here as it
+/// would in a shell history. 0600 in the 0700 logs dir (ADR-0016 d13), written
+/// with the trail's own O_APPEND primitive so the shim and the daemon never
+/// clobber each other's lines.
+///
+/// The 0.1.3 window wrote these lines into the trail itself. A daemon copies
+/// them once into `shell-history.0.jsonl` (`MigrateLegacy`) so they outlive
+/// the trail's rotation; until then history reads them from the trail.
 public static class ShellTrail
 {
     internal const string Evt = "tool.shell";
+
+    /// The active command-history file: `shell-history.jsonl` beside the
+    /// trail (so `CAPTAINHOOK_LOG` moves both, and a sandboxed HOME holds both).
+    public static string HistoryPath(string? trailPath = null) =>
+        Path.Combine(Path.GetDirectoryName(trailPath ?? WireJsonl.DefaultLogPath()) ?? ".", HistoryFile);
+
+    /// The 0.1.3 window's lines, copied once out of the trail (`MigrateLegacy`).
+    public static string LegacyPath(string? trailPath = null) =>
+        Path.Combine(Path.GetDirectoryName(trailPath ?? WireJsonl.DefaultLogPath()) ?? ".", LegacyFile);
+
+    internal const string HistoryFile = "shell-history.jsonl";
+    internal const string LegacyFile = "shell-history.0.jsonl";
+
+    /// Where a rendered line goes: an O_APPEND write to `HistoryPath()` (dir
+    /// 0700, file 0600). Tests swap it (TestInfra) so the suite never writes
+    /// the user's real history, exactly as they swap the Log sink.
+    internal static Action<string> Sink = line => WireJsonl.Append(HistoryPath(), line);
 
     /// Emit the `tool.shell` line for `e` if it is a shell command that ran;
     /// otherwise do nothing. Never throws: a hook must not fail because its
@@ -46,15 +70,72 @@ public static class ShellTrail
             // recognition never reads it.
             if (e.Payload.TryGetProperty("tool_name", out var tn) && tn.ValueKind == JsonValueKind.String)
                 data["tool"] = tn.GetString()!;
-            Log.Info("tool", Evt, new LogFields
+            // The trail's own line shape, so one reader parses both files.
+            Sink(new LogEvent(DateTime.UtcNow, "info", "tool", Evt, new LogFields
             {
                 DispatchId = dispatchId,
                 SessionId = e.SessionId,
                 HookEvent = e.Type,
                 Data = data,
-            });
+            }).ToJson());
         }
         catch (Exception) { /* the record is best-effort; the hook is not */ }
+    }
+
+    /// Copy the trail's `tool.shell` lines (the 0.1.3 window, before d8 gave
+    /// them their own file) into `shell-history.0.jsonl`, once. Written to a
+    /// temp file and renamed into place, so a reader sees all of it or none,
+    /// and a crash mid-copy leaves nothing behind but a temp the next run
+    /// replaces. Two daemons racing (a deploy handoff) both write the same
+    /// lines and the second rename wins harmlessly. An empty file is written
+    /// when the trail holds none, so later starts skip the scan. Returns the
+    /// lines copied, or -1 when the file already existed. A daemon calls this
+    /// in the background at start; history never writes.
+    public static int MigrateLegacy(string trailPath)
+    {
+        var target = LegacyPath(trailPath);
+        if (File.Exists(target)) return -1;
+        var dir = Path.GetDirectoryName(target) ?? ".";
+        var tmp = Path.Combine(dir, $".{LegacyFile}.{Environment.ProcessId}.tmp");
+        const string marker = "\"evt\":\"" + Evt + "\"";
+        var copied = 0;
+        Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        using (var fs = new FileStream(tmp, new FileStreamOptions
+        {
+            Mode = FileMode.Create, Access = FileAccess.Write,
+            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        }))
+        using (var w = new StreamWriter(fs, new System.Text.UTF8Encoding(false)) { NewLine = "\n" })
+        {
+            foreach (var file in Files(trailPath))
+            {
+                IEnumerable<string> lines;
+                try { lines = File.ReadLines(file); }
+                catch (Exception) { continue; }
+                foreach (var line in lines)
+                {
+                    if (!line.Contains(marker, StringComparison.Ordinal) || Parse(line) is null) continue;
+                    w.WriteLine(line);
+                    copied++;
+                }
+            }
+        }
+        File.Move(tmp, target, overwrite: true);
+        return copied;
+    }
+
+    /// The files history reads, oldest first: the 0.1.3 window (the migrated
+    /// copy, or the trail itself until a daemon has made it), then the active
+    /// command-history file.
+    public static IReadOnlyList<string> HistoryFiles(string trailPath)
+    {
+        var files = new List<string>();
+        var legacy = LegacyPath(trailPath);
+        if (File.Exists(legacy)) files.Add(legacy);
+        else files.AddRange(Files(trailPath));
+        var active = HistoryPath(trailPath);
+        if (File.Exists(active)) files.Add(active);
+        return files;
     }
 
     /// The command a PostToolUse ran, or null when `e` is not a shell call.
@@ -73,11 +154,11 @@ public static class ShellTrail
         DateTimeOffset Ts, string? SessionId, string? Cwd, string? Harness, string? Tool,
         string Command, string? DispatchId);
 
-    /// Every file that may hold the trail, oldest first: ADR-0009 d3's
+    /// Every file that may hold the TRAIL, oldest first: ADR-0009 d3's
     /// numbered segments (`<stem>.<seq>.jsonl`, seq ascending) and then the
     /// active file. Segmentation is designed but not built, so today this is
-    /// the active file alone; reading the segments now means history needs no
-    /// change on the day rotation lands.
+    /// the active file alone. Only the migration and history's pre-migration
+    /// fallback read the trail now.
     public static IReadOnlyList<string> Files(string activePath)
     {
         var files = new List<string>();

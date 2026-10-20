@@ -442,6 +442,7 @@ public class ExecRegistrationTests
     [Fact]
     public async Task CollapsedAsync_WithHandlersPath_ChildInjectReachesStdout()
     {
+        using var echo = new EchoOn();   // the echo answer is this test's round-trip proof (opt-in since 0.1.4)
         // The go-live proof for the collapsed wire site: a real handlers.json
         // + a real collapsed run ⇒ the child's inject is IN the hook answer.
         var path = Path.Combine(Path.GetTempPath(), "handlers-" + Guid.NewGuid().ToString("N") + ".json");

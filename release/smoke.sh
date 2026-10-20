@@ -10,10 +10,11 @@
 #
 # Proves, in order: the links resolve to the real versioned folder, and the
 # lower-case `captainhook` runs the engine (its own link only on a
-# case-sensitive file system); install-hooks
+# case-sensitive file system); `--help` prints usage and an unknown command
+# dispatches nothing; the echo demo is off by default; install-hooks
 # writes a settings file (a temp one under this HOME); a cold hook spawns the
 # daemon; a warm hook is answered by it, and an agent's shell command it
-# recorded is found by `captainHook history`; a shipped payload runs through bosun
+# recorded (in shell-history.jsonl, 0600) is found by `captainHook history`; a shipped payload runs through bosun
 # from its payloads/ link; zero wire skew; doctor sees a healthy daemon; the
 # daemon idle-exits on its own; and, under an XDG_RUNTIME_DIR too long for a
 # socket, a daemon still comes up — in the short per-uid dir
@@ -65,6 +66,10 @@ for f in "$HOME/.claude/settings.json" "$HOME/.captainHook/handlers.json"; do
 done
 if [ ! -x "$SHIM" ] || [ ! -x "$ENGINE" ]; then fail "no installed captainShim/captainHook under $BIN_DIR"; fi
 export CAPTAINHOOK_IDLE_MS="$IDLE_MS"
+# The echo demo handler is opt-in since 0.1.4; the cold/warm round trip below
+# reads its answer as the proof that a hook went through the engine and back.
+# (Step 1 checks the default, without it, answers the bare Noop.)
+export CAPTAINHOOK_ECHO=1
 # Where the daemon meets its shims: ASK the engine — the choice (preferred dir,
 # or the short per-uid one when a socket would not fit) is the wire lib's, and
 # a script that recomputed it would drift from it.
@@ -101,6 +106,21 @@ fi
 "$BIN_DIR/captainhook" version | grep -q '^captainHook ' || fail "captainhook does not run the engine"
 if [ "$case_sensitive" = 1 ]; then pass "captainhook alias: its own link (case-sensitive file system)"
 else pass "captainhook alias: none needed, the name already resolves (case-insensitive file system)"; fi
+
+# Usage is asked for, never dispatched: --help prints it and exits 0; an
+# unknown word is an error on stderr, exit 1, with no hook and nothing on stdout.
+usage=$("$ENGINE" --help </dev/null) || fail "captainHook --help exited non-zero"
+printf '%s\n' "$usage" | grep -q '^usage: captainHook' || fail "captainHook --help printed no usage: $usage"
+before=$(count dispatch.start)
+if out=$("$ENGINE" hepl </dev/null 2>/dev/null); then fail "an unknown command exited 0"; fi
+[ -z "$out" ] || fail "an unknown command wrote to stdout: $out"
+[ "$(count dispatch.start)" = "$before" ] || fail "an unknown command dispatched a hook"
+pass "captainHook --help prints usage (exit 0); an unknown command dispatches nothing (exit 1)"
+
+# The echo demo is off by default: a hook with no handlers answers the bare Noop.
+noop=$( (unset CAPTAINHOOK_ECHO; printf '{"prompt":"smoke-default"}' | "$SHIM" hook user-prompt-submit --no-daemon 2>/dev/null) )
+[ "$noop" = "{}" ] || fail "without CAPTAINHOOK_ECHO a prompt still got an answer: $noop"
+pass "echo off by default: a prompt with no handlers answers {}"
 "$ENGINE" version | sed 's/^/        /'
 
 # 2. install-hooks into a temp settings file: dry run writes nothing, --apply writes
@@ -151,7 +171,10 @@ printf '%s' '{"tool_name":"run_shell","tool_input":{"command":"echo smoke-histor
 hist() { "$ENGINE" history smoke-history --session smokehist --full </dev/null 2>/dev/null; }
 seen() { hist | grep -q '^ *line two$'; }
 wait_for 5 seen || fail "history did not find the recorded command: $(hist)"
-pass "history found the agent's command (tool.shell), multi-line and whole"
+HIST=$HOME/.captainHook/logs/shell-history.jsonl
+case $(ls -l "$HIST" 2>/dev/null) in -rw-------*) ;; *) fail "$HIST is missing or not 0600: $(ls -l "$HIST" 2>&1)" ;; esac
+if grep -q '"evt":"tool.shell"' "$TRAIL"; then fail "tool.shell landed in the trail, not in its own file"; fi
+pass "history found the agent's command (tool.shell, in shell-history.jsonl 0600), multi-line and whole"
 
 # 5. a shipped payload runs through bosun, in its own process group
 printf '{"tool_name":"Bash","tool_input":{"command":"true"},"session_id":"smoke"}' | "$SHIM" hook pre-tool-use >/dev/null 2>&1

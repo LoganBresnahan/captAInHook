@@ -162,6 +162,7 @@ public class HookRunPolicyDenyTests : IDisposable
     [Fact]
     public async Task EventLevelDeny_StdoutIsByteIdenticalToUneventfulHook()
     {
+        using var echo = new EchoOn();   // the echo answer is this test's round-trip proof (opt-in since 0.1.4)
         // Baseline — a genuinely uneventful hook: Stop has no registered handler,
         // so the dispatch merges to Noop and emits the bare wire form.
         var uneventful = await RunAsync(new Invocation(Mode.Collapsed, "stop", "claude-code"), "{}");
@@ -232,6 +233,7 @@ public class HookRunPolicyDenyTests : IDisposable
     [Fact]
     public async Task AllowPolicyFile_DoesNotShortCircuit_DispatchRunsNormally()
     {
+        using var echo = new EchoOn();   // the echo answer is this test's round-trip proof (opt-in since 0.1.4)
         // A version-only file (default allow, no rules) leaves the pipeline
         // untouched — the echo still fires.
         var (exit, stdout, _) = await RunAsync(Ups, """{"prompt":"hi"}""", policyPath: PolicyFile("""{ "version": 1 }"""));
@@ -242,6 +244,7 @@ public class HookRunPolicyDenyTests : IDisposable
     [Fact]
     public async Task AbsentPolicyFile_IsTodaysBehavior()
     {
+        using var echo = new EchoOn();   // the echo answer is this test's round-trip proof (opt-in since 0.1.4)
         // A path to a file that does not exist => Absent => allow all.
         var missing = Path.Combine(_dir, "no-such-dispatch.json");
         var (exit, stdout, _) = await RunAsync(Ups, """{"prompt":"hi"}""", policyPath: missing);
@@ -252,6 +255,7 @@ public class HookRunPolicyDenyTests : IDisposable
     [Fact]
     public async Task NullPolicyPath_IsTodaysBehavior()
     {
+        using var echo = new EchoOn();   // the echo answer is this test's round-trip proof (opt-in since 0.1.4)
         // No policy path at all (the pre-slice default) => allow all.
         var (exit, stdout, _) = await RunAsync(Ups, """{"prompt":"hi"}""");
         Assert.Equal(0, exit);

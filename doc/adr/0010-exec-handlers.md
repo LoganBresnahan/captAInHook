@@ -147,6 +147,19 @@ its lessons are imported wholesale (§ Pattern lineage).
    Semantics follow the established tri-state + strictness split:
    - **Absent ⇒ zero exec handlers** — today's behavior, zero cost to users
      who never asked (ADR-0005 d2's rhyme).
+     *(2026-10-19 amendment, v0.1.4 — and zero CODED handlers by default.)*
+     The built-in echo handler (a "captAInHook: <event> seen @ <time>"
+     inject on SessionStart, UserPromptSubmit and PostToolUse, plus an
+     `audit.echo` trail line per call) was registered unconditionally, so
+     every prompt in every session paid tokens for a line that said nothing.
+     It is now opt-in with `CAPTAINHOOK_ECHO=1`, read when the registry is
+     built (so a daemon freezes it at start, like `CAPTAINHOOK_PROBE`,
+     ADR-0004 N1). It stays as the "is captAInHook alive?" demo; the health
+     check is `captainHook doctor`. **Behaviour change on upgrade:** agents
+     no longer see the "seen @" line, and a hook with no handlers answers the
+     bare Noop (`{}`). Tests that read the echo answer as their round-trip
+     proof opt in (`EchoOn`), as the release smoke does; `EchoOptInTests` and
+     smoke step 1 pin the default.
    - **Invalid entry ⇒ skipped loudly, valid siblings register** (ADR-0003's
      warn-and-skip precedent — registration config, not authorization).
    - **Whole file malformed ⇒ zero exec handlers + a loud per-dispatch trail

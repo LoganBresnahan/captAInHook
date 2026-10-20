@@ -6,21 +6,22 @@ using CaptainHook.Wire;
 namespace CaptainHook.Core;
 
 // `captainHook history [pattern]`: search the shell commands agents ran, as
-// the trail recorded them (`tool.shell`, ShellTrail). Oldest first, like a
-// shell history; `--limit N` keeps the N most recent matches.
+// recorded in `shell-history.jsonl` (`tool.shell`, ShellTrail). Oldest first,
+// like a shell history; `-n`/`--limit N` keeps the N most recent matches
+// (`-n` as in `hh -n`).
 //
-// It sees exactly what the trail still holds: commands from the first build
-// that records them (0.1.3), for as long as the trail keeps them. The durable
-// long-term record is agent-shell-history's file; this is the searchable,
-// structured window over the recent past (session, cwd, time, harness).
+// It sees every command recorded since 0.1.3: the file is kept forever
+// (ADR-0009 d8), and the 0.1.3 window's lines, which went into the trail, are
+// read from their migrated copy (or the trail, before a daemon has copied
+// them).
 //
-// The trail is streamed, never loaded: one line in memory at a time (the
-// limit's ring buffer holds at most N entries). Human verb: stdout on purpose.
+// Streamed, never loaded: one line in memory at a time (the limit's ring
+// buffer holds at most N entries). Human verb: stdout on purpose.
 public static class HistoryVerb
 {
     internal const string Usage =
         "usage: captainHook history [PATTERN] [--session ID-PREFIX] [--since 2d|3h|30m|ISO-DATE] " +
-        "[--cwd DIR] [--harness NAME] [--limit N] [--full] [--json]";
+        "[--cwd DIR] [--harness NAME] [-n|--limit N] [--full] [--json]";
 
     internal sealed record Options(
         string? Pattern, string? Session, DateTimeOffset? Since, string? Cwd, string? Harness,
@@ -41,10 +42,10 @@ public static class HistoryVerb
         }
 
         var path = trailPath ?? WireJsonl.DefaultLogPath();
-        var files = ShellTrail.Files(path);
+        var files = ShellTrail.HistoryFiles(path);
         if (files.Count == 0)
         {
-            stderr.WriteLine($"captainHook history: no trail at {path}");
+            stderr.WriteLine($"captainHook history: no command history at {ShellTrail.HistoryPath(path)} (and no trail at {path})");
             return 1;
         }
 
@@ -66,8 +67,8 @@ public static class HistoryVerb
 
         if (recorded == 0)
             stderr.WriteLine(
-                "captainHook history: the trail holds no shell commands yet. Recording began in 0.1.3 (`tool.shell`); " +
-                "older commands are only in agent-shell-history's file, if that payload was on.");
+                "captainHook history: no shell commands recorded yet. Recording began in 0.1.3 (`tool.shell`, in " +
+                $"{ShellTrail.HistoryPath(path)}); older commands are only in agent-shell-history's file, if that payload was on.");
         return matched > 0 ? 0 : 1;
     }
 
@@ -106,9 +107,9 @@ public static class HistoryVerb
                     if (ParseSince(s, now) is not { } t) { error = $"--since '{s}': expected 30m, 3h, 2d, 1w or a date"; return null; }
                     since = t;
                     break;
-                case "--limit":
+                case "--limit" or "-n":
                     if (Value() is not { } l || !int.TryParse(l, NumberStyles.None, CultureInfo.InvariantCulture, out var lim) || lim < 1)
-                    { error = "--limit needs a positive whole number"; return null; }
+                    { error = $"{a} needs a positive whole number"; return null; }
                     limit = lim;
                     break;
                 case "-h" or "--help":

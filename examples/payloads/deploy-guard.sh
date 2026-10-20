@@ -44,4 +44,4 @@ esac
 printf '%s' "$envelope" | grep -qE '(^|[^A-Za-z0-9_-])(rm|mv|cp|chmod|chown|ln|tee|truncate|rsync|install|unlink|rmdir)([^A-Za-z0-9_-]|$)' \
   || allow
 
-printf '{"effect":"decide","verdict":"ask","reason":"command touches the live captAInHook install — /deploy (install.sh) is the sanctioned path","dispatchId":"%s"}\n' "$id"
+printf '{"effect":"decide","verdict":"ask","reason":"this command modifies captAInHook'"'"'s installed files — use `captainhook self update` to change the installed version","dispatchId":"%s"}\n' "$id"

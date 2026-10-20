@@ -28,13 +28,24 @@ public static class HookRun
     /// spuriously spawns for a single-shot hook (ADR-0010 d3: "spawn, serve
     /// THE one dispatch, terminate at drain"). The teardown-at-drain half is
     /// `CollapsedAsync`'s `DisposeHandlersAsync` call.
+    /// CAPTAINHOOK_ECHO=1: register the echo demo handler (off by default).
+    internal static bool EchoEnabled => Environment.GetEnvironmentVariable("CAPTAINHOOK_ECHO") == "1";
+
     public static Registry BuildDefaultRegistry(string? handlersPath = null, TimeSpan? harnessTimeoutHint = null,
                                                 TimeSpan? drainBudgetHint = null, string? collapsedEvent = null)
     {
-        var registry = new Registry()
-            .On("SessionStart", new EchoHandler())
-            .On("UserPromptSubmit", new EchoHandler())
-            .On("PostToolUse", new EchoHandler());
+        var registry = new Registry();
+        // The echo handler — the "is captAInHook alive?" demo: a "seen @"
+        // inject on SessionStart, UserPromptSubmit and PostToolUse plus an
+        // audit.echo trail line. OFF by default since 0.1.4: on every real
+        // prompt it spent tokens to say nothing (`captainHook doctor` is the
+        // health check). CAPTAINHOOK_ECHO=1 opts in, read here, so a daemon
+        // freezes it at start like CAPTAINHOOK_PROBE (ADR-0004 N1).
+        if (EchoEnabled)
+            registry
+                .On("SessionStart", new EchoHandler())
+                .On("UserPromptSubmit", new EchoHandler())
+                .On("PostToolUse", new EchoHandler());
 
         // Fan-out demo probe: +150ms and a second inject on every UserPromptSubmit.
         // Opt-in via env so a LIVE deployment doesn't tax every real prompt with it.

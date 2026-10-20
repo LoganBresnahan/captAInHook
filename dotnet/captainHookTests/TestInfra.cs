@@ -22,7 +22,34 @@ internal static class TestLogSink
     {
         Log.SetSink(_ => { });
         WireLogBridge.Bind();
+        // The command-history file (ShellTrail, ADR-0009 d8) is its own
+        // writer, not a Log sink: swapped the same way, or every test that
+        // dispatches a PostToolUse would append to the user's real
+        // ~/.captainHook/logs/shell-history.jsonl.
+        ShellTrail.Sink = _ => { };
     }
+}
+
+/// Capture `tool.shell` lines for the life of a test, then restore the no-op.
+internal sealed class CapturedShellHistory : IDisposable
+{
+    public System.Collections.Concurrent.ConcurrentQueue<string> Lines { get; } = new();
+    public CapturedShellHistory() => ShellTrail.Sink = Lines.Enqueue;
+    public void Dispose() => ShellTrail.Sink = _ => { };
+
+    /// The captured lines, parsed back the way history reads them.
+    public ShellTrail.Entry[] Entries => Lines.Select(ShellTrail.Parse).OfType<ShellTrail.Entry>().ToArray();
+}
+
+/// CAPTAINHOOK_ECHO=1 for the life of a test (or a fixture): the echo demo
+/// handler is off by default since 0.1.4, and the tests that read its answer
+/// as a round-trip proof opt in, as a user would. Tests run sequentially, so
+/// a process-wide env flip is safe; a daemon reads it once, at start.
+internal sealed class EchoOn : IDisposable
+{
+    private readonly string? _saved = Environment.GetEnvironmentVariable("CAPTAINHOOK_ECHO");
+    public EchoOn() => Environment.SetEnvironmentVariable("CAPTAINHOOK_ECHO", "1");
+    public void Dispose() => Environment.SetEnvironmentVariable("CAPTAINHOOK_ECHO", _saved);
 }
 
 /// Lambda-based handler so each test states its behavior inline.

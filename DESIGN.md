@@ -102,6 +102,9 @@ Effect (only the subset valid for the event is honored):
 - `echo` handler: on `SessionStart` / `UserPromptSubmit`,
   `Inject("captAInHook: <event> seen @ <ts>")`; on `PostToolUse`, log. Proves
   the full round-trip — event in → effect out → visible in the agent's context.
+  *(Since v0.1.4 the echo is opt-in, `CAPTAINHOOK_ECHO=1`: it proved the
+  round trip, and on every real prompt it then only spent tokens. ADR-0010
+  d4's 2026-10-19 amendment.)*
 
 ## ADR-000 — Runtime: DEFERRED (build as a comparison harness)
 

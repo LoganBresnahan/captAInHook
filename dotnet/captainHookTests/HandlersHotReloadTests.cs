@@ -340,6 +340,7 @@ public class HandlersHotReloadTests : IDisposable
     [Fact]
     public async Task Reconcile_LeavesCodedHandlersUntouched()
     {
+        using var echo = new EchoOn();   // the echo answer is this test's round-trip proof (opt-in since 0.1.4)
         // Built via BuildDefaultRegistry (coded EchoHandler on UserPromptSubmit
         // + a oneshot exec entry). Dropping the exec entry must leave the coded
         // handler registered — coded handlers are frozen, never reconciled.

@@ -48,14 +48,44 @@ public enum Mode
     /// the trail recorded them (`tool.shell`). Its arguments are its own (the
     /// engine hands it args[1..]). Engine-only; the shim refuses it.
     History,
+    /// `help`, `--help`, `-h`, or `<verb> --help|-h` — print the usage to
+    /// stdout, exit 0. EventName carries the verb asked about, if any.
+    Help,
+    /// Anything that is neither a verb nor a hook dispatch — an unknown word,
+    /// a stray flag, or no arguments at all. Usage to stderr, exit 1, and
+    /// NEVER a dispatch (before 0.1.4 every such argv fell through to a
+    /// UserPromptSubmit). EventName carries the offending word (null: none).
+    BadCommand,
 }
 
 /// One parsed invocation: the mode plus the hook-dispatch arguments that shim
 /// and collapsed modes share. Daemon/ActorsDemo ignore EventName/HarnessName.
 public sealed record Invocation(Mode Mode, string? EventName, string HarnessName)
 {
+    /// The engine's verbs: the first word that selects a non-hook mode.
+    private static readonly string[] Verbs =
+        ["actors-demo", "doctor", "ui", "mail", "version", "--version", "install-hooks", "self", "history"];
+
+    /// The words a hook dispatch (or the daemon) may start with.
+    private static readonly string[] HookWords = ["hook", "--harness", "--daemon", "--no-daemon"];
+
+    private static bool IsHelp(string a) => a is "help" or "--help" or "-h";
+
     public static Invocation Parse(string[] args)
     {
+        // Usage, asked for: `help [verb]`, `--help`, `-h`, `<verb> --help`.
+        // Checked first, so a help request can never reach a dispatch.
+        if (args.Length > 0 && IsHelp(args[0]))
+            return new(Mode.Help, args.Length > 1 ? args[1] : null, "claude-code");
+        if (args.Length > 1 && (Verbs.Contains(args[0]) || args[0] == "hook") && args[1] is "--help" or "-h")
+            return new(Mode.Help, args[0], "claude-code");
+        // Nothing, or a word that is neither a verb nor a hook dispatch: a
+        // human typo, never a fake event. Only `hook …` / `--daemon` dispatch.
+        if (args.Length == 0 || !(Verbs.Contains(args[0]) || HookWords.Contains(args[0])))
+            return new(Mode.BadCommand, args.Length > 0 ? args[0] : null, "claude-code");
+        if (Array.IndexOf(args, "hook") < 0 && Array.IndexOf(args, "--daemon") < 0 && !Verbs.Contains(args[0]))
+            return new(Mode.BadCommand, args[0], "claude-code");
+
         if (args.Length > 0 && args[0] == "actors-demo")
             return new(Mode.ActorsDemo, null, "claude-code");
         if (args.Length > 0 && args[0] == "doctor")

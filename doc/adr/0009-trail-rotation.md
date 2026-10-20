@@ -1,7 +1,8 @@
 # ADR-0009 — Trail growth: lock the resume-cursor contract now, defer segmented archive
 
-**Status:** Accepted; amended 2026-10-19 (d7: the trail records agent shell
-commands, and `captainHook history` reads them back)
+**Status:** Accepted; amended 2026-10-19 by d7 (v0.1.3: agent shell commands
+are recorded, and `captainHook history` reads them back) and d8 (v0.1.4: they
+move to their own file, kept forever)
 **Date:** 2026-07-09
 
 ## Context
@@ -122,7 +123,7 @@ thing: the id contract.**
      gate at the tool seam, not to holes in a record.
    - **What history can see is what the trail still holds:** commands from
      the first build that records them (0.1.3), for as long as the trail
-     keeps them. It says so when the trail holds none. The durable long-term
+     keeps them. *(Superseded by d8: their own file, kept forever.)* It says so when the trail holds none. The durable long-term
      record stays agent-shell-history's file.
    - **Reading:** streamed, one line at a time (a substring test for the
      event before any JSON parse; ~1.2 s and ~60 MB flat over a synthetic
@@ -134,6 +135,40 @@ thing: the id contract.**
      trail grow faster than it did. "Growth bites" is closer, so the
      trail-bounding phase is now a roadmap item (32) rather than a revisit
      trigger only.
+
+### Amendment 2026-10-19 (v0.1.4) — the split this ADR's trigger foresaw
+
+8. **`tool.shell` moves to its own file, `logs/shell-history.jsonl`, kept
+   FOREVER.** This ADR's revisit trigger, "log-role and trail-role retention
+   needs diverge ⇒ split", fired one release after d7: the trail is about to
+   be rotated and capped (roadmap item 32, ~30 days), and command history
+   should not age out with telemetry. **Retention is the owner's explicit
+   choice (2026-10-19, "yes forever"): the file is never rotated, capped or
+   pruned by anything in the trail's policy.** That means the command text,
+   and any secret an agent put on a command line, is kept indefinitely,
+   exactly as a shell history would keep it. Stated so nobody discovers it.
+   - **Writer:** `ShellTrail.Record`, at the same two wire sites, before the
+     policy gate, renders the trail's own line shape (`LogEvent.ToJson`, so
+     one reader parses both) and appends it through the trail's O_APPEND
+     primitive (`WireJsonl.Append`: dir 0700, file 0600), so the shim and the
+     daemon never clobber each other's lines. It is a separate seam from the
+     Log sink (`ShellTrail.Sink`), swapped for a no-op in the test suite the
+     same way, so no test writes a user's history. The file sits beside the
+     trail, so `CAPTAINHOOK_LOG` (or a sandboxed HOME) moves both.
+   - **The 0.1.3 window** wrote these lines into the trail. A daemon copies
+     them once, in the background at start, into `shell-history.0.jsonl`
+     (temp file + rename: all or nothing; racing daemons write the same lines
+     and the second rename wins; an empty file when there were none, so later
+     starts skip the scan; `daemon.shellHistoryMigrated`). history reads that
+     copy, or the trail itself until a daemon has made it, then the active
+     file, so nothing recorded since 0.1.3 is lost or doubled. Accepted edge:
+     lines a rolled-back 0.1.3 writes to the trail after the copy exists are
+     not picked up.
+   - **Item 32 must not cap the trail before the copy exists**: its rotation
+     either runs the migration first or refuses to drop a segment holding
+     uncopied `tool.shell` lines.
+   - **The GUI trace view no longer shows `tool.shell`**: it streams the trail
+     only. Commands are `captainHook history`'s, not the live trace's.
 
 ### The 0007 ↔ 0009 hand-off — so both halves get done at the right time
 

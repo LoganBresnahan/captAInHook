@@ -56,6 +56,7 @@ switch (inv.Mode)
             handlersPath: ExecHandlersFile.ResolvePath(),
             watchPath: WatchRules.ResolvePath(),
             childrenDir: CaptainHook.Handlers.ChildRecords.Dir,
+            legacyTrail: WireJsonl.DefaultLogPath(),
             sse: heartbeat is null ? null : new SseOptions(WireJsonl.DefaultLogPath(), Heartbeat: heartbeat));
     }
 
@@ -112,6 +113,15 @@ switch (inv.Mode)
         // Human command (ADR-0020 d8): runs install.sh against the install this
         // engine lives in, with the terminal handed straight through.
         return CaptainHook.Install.SelfVerb.Run(args[1..], Console.Out, Console.Error);
+
+    case Mode.Help:
+        // Human command: usage to stdout on purpose (Core/UsageVerb.cs).
+        return CaptainHook.Core.UsageVerb.Help(Console.Out);
+
+    case Mode.BadCommand:
+        // Never a dispatch: an unknown word or a bare invocation is a human
+        // mistake, answered on stderr with exit 1 (non-blocking to a harness).
+        return CaptainHook.Core.UsageVerb.BadCommand(inv.EventName, Console.Error);
 
     case Mode.History:
     {

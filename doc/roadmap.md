@@ -1104,6 +1104,35 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [x] **36. The echo demo is opt-in** — the built-in echo handler injected
+  "captAInHook: <event> seen @ …" into every prompt of every session (tokens,
+  no information) and logged `audit.echo` per tool call. Off by default now;
+  `CAPTAINHOOK_ECHO=1` opts in (frozen at daemon start, like
+  `CAPTAINHOOK_PROBE`); `captainHook doctor` is the health check. Behaviour
+  change on upgrade, stated in [ADR-0010](adr/0010-exec-handlers.md) d4's
+  2026-10-19 amendment. Echo-dependent tests opt in (`EchoOn`), as does the
+  release smoke; `EchoOptInTests` and smoke step 1 pin the default.
+  **Shipped (v0.1.4).**
+
+- [x] **35. `--help` never dispatches** — `captainhook --help`, `-h`, `help`
+  and any unknown word used to fall through to a fake UserPromptSubmit
+  (`help` cold-spawned a daemon). Now `help`/`--help`/`-h`/`<verb> --help`
+  print usage (exit 0), and anything else, bare argv included, is a usage
+  error on stderr with exit 1 (not 2, which Claude Code treats as a blocking
+  hook error), never a dispatch. [ADR-0004](adr/0004-daemon-topology.md) d1's
+  2026-10-19 amendment; `UsageVerb`; `UsageTests`; smoke step 1.
+  **Shipped (v0.1.4).**
+
+- [x] **34. Command history in its own file, kept forever** — `tool.shell`
+  moves from the trail to `logs/shell-history.jsonl` (same O_APPEND writer,
+  0600 in the 0700 dir), never rotated or capped: the owner's explicit
+  choice, command text and any secrets on command lines included. A daemon
+  copies the 0.1.3 window's lines out of the trail once
+  (`shell-history.0.jsonl`); history reads that, then the active file. Also:
+  `history -n N` (as in `hh -n`), and deploy-guard's ask reason now points
+  at `captainhook self update`. [ADR-0009](adr/0009-trail-rotation.md) d8;
+  `ShellHistoryTests`; smoke step 4. **Shipped (v0.1.4).**
+
 - [x] **33. install-hooks keeps a shared settings.json home-free** — the
   maintainer's `~/.claude/settings.json` moves into dotfiles for WSL and the
   Mac, so its hook commands read `"$HOME/.local/bin/captainShim" hook
@@ -1119,9 +1148,10 @@ run live*. The framework underneath is what exists today.
   since item 29 it also carries every agent command whole, so it grows faster.
   Build [ADR-0009](adr/0009-trail-rotation.md) d3–d6 as its implementation
   plan orders them (segmented writer, daemon-owned rotation, segment-aware
-  tail, `?tail=N`) and amend ADR-0007 d5 in the same change. `history`
-  already reads `<stem>.<seq>.jsonl` segments oldest first, so it needs no
-  change.
+  tail, `?tail=N`) with a retention cap (default ~30 days, configurable) and
+  amend ADR-0007 d5 in the same change. Never touches shell-history.jsonl
+  (item 34), and must not drop a segment before the 0.1.3 window's
+  `tool.shell` lines are copied out (ADR-0009 d8). ADR first, reviewed.
 
 - [x] **31. `~` in handlers.json — one file, two homes** — a handlers.json
   kept in a dotfiles repo has to serve `/home/oof` and `/Users/dogdrool`. A

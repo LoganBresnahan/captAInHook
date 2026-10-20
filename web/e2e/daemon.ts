@@ -182,6 +182,9 @@ export async function startDaemon(opts: StartDaemonOptions = {}): Promise<Daemon
     ...process.env,
     XDG_RUNTIME_DIR: runtimeDir,
     CAPTAINHOOK_LOG: trailPath,
+    // The echo demo handler is opt-in since 0.1.4; the seeded views (a fired
+    // hook's inject, the Handlers view's coded row) were built with it on.
+    CAPTAINHOOK_ECHO: "1",
     CAPTAINHOOK_HARNESS_DIR: join(sandbox, "no-harness"),
     CAPTAINHOOK_DISPATCH_FILE: dispatchPath,
     CAPTAINHOOK_HANDLERS_FILE: handlersPath,

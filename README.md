@@ -145,10 +145,16 @@ bare `~`: no `$VAR`, nothing mid-string).
 
 `captainHook history [pattern]` searches the shell commands your agents ran:
 `--session <id-prefix>`, `--since 2d|3h|<date>`, `--cwd <dir>`, `--harness`,
-`--limit N`, `--full` for whole multi-line commands, `--json` for scripts. It
-sees what the trail still holds: commands recorded since 0.1.3, for as long as
-`~/.captainHook/logs/captainHook.jsonl` keeps them
+`-n`/`--limit N`, `--full` for whole multi-line commands, `--json` for
+scripts. Every command since 0.1.3 is kept in
+`~/.captainHook/logs/shell-history.jsonl`, forever: never rotated, so command
+text (and any secret typed on a command line) stays, as in a shell history
 ([doc/flow/shell-history.md](doc/flow/shell-history.md)).
+
+`captainHook help` lists every command. Is it working? `captainHook doctor`
+reports the daemon and its children. Before 0.1.4 every prompt also got a
+"captAInHook: … seen @ …" line; that echo is now opt-in (`CAPTAINHOOK_ECHO=1`
+in the environment your agent starts from), a demo, not a health check.
 
 **Nice-to-haves:**
 
@@ -230,9 +236,9 @@ both architectures, and by sandbox runs on Apple-silicon hardware
   [ADR-0020](doc/adr/0020-release-archives-and-install.md)).
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
-  kept pure for the hook protocol. It also records every shell command an
-  agent ran (`tool.shell`), which `captainHook history` searches
-  ([ADR-0009](doc/adr/0009-trail-rotation.md) d7).
+  kept pure for the hook protocol. Every shell command an agent ran is
+  recorded in its own file, kept forever, which `captainHook history`
+  searches ([ADR-0009](doc/adr/0009-trail-rotation.md) d7–d8).
 - **Tests** — xunit suite (1,600+, green twice in a row as the ship bar) plus
   web unit tests and Playwright E2E; the `/shipshape` skill verifies
   coverage, docs, and logging conventions.

@@ -12,6 +12,9 @@ namespace CaptainHook.Tests;
 
 public class DaemonHostTests : IAsyncLifetime
 {
+    // The echo answer is these tests' round-trip proof (opt-in since 0.1.4); on
+    // before the fixture's daemon starts, which is when a daemon reads it.
+    private readonly EchoOn _echo = new();
     private readonly TempRuntimeDir _dir = new();
     private readonly CancellationTokenSource _stop = new();
     private Task<int>? _daemon;
@@ -40,6 +43,7 @@ public class DaemonHostTests : IAsyncLifetime
         if (_daemon is not null)
             Assert.Equal(0, await _daemon.WaitAsync(TimeSpan.FromSeconds(10)));
         _dir.Dispose();
+        _echo.Dispose();
     }
 
     [Fact]
@@ -135,6 +139,9 @@ public class DaemonRaceTests
 // file per dispatch, driven over the real ShimClient wire.
 public class DaemonPolicyTests : IAsyncLifetime
 {
+    // The echo answer is these tests' round-trip proof (opt-in since 0.1.4); on
+    // before the fixture's daemon starts, which is when a daemon reads it.
+    private readonly EchoOn _echo = new();
     private readonly TempRuntimeDir _dir = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly string _policyDir =
@@ -168,6 +175,7 @@ public class DaemonPolicyTests : IAsyncLifetime
         if (_daemon is not null)
             Assert.Equal(0, await _daemon.WaitAsync(TimeSpan.FromSeconds(10)));
         _dir.Dispose();
+        _echo.Dispose();
         try { Directory.Delete(_policyDir, recursive: true); } catch { }
     }
 

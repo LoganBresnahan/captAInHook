@@ -182,6 +182,7 @@ public class ShortRuntimeDirTests : IDisposable
     [Fact]
     public async Task LongXdgRuntimeDir_DaemonBindsInTheShortDir_ShimAnswersWarm_DoctorReadsIt()
     {
+        using var echo = new EchoOn();   // the echo answer is this test's round-trip proof (opt-in since 0.1.4)
         var original = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         var longDir = "/tmp/chk-long-" + new string('x', 110);
         var realShort = ShortRuntimeDir.PathFor(Uid);
