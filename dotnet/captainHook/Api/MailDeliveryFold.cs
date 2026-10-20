@@ -84,7 +84,7 @@ public static class MailDeliveryFold
     public const int MaxRecords = 500;
 
     /// Fold `mail.deliver` lines out of the trail file. Every failure answers
-    /// "nothing yet", never an error — the same answer `TrailLength` gives, and
+    /// "nothing yet", never an error — the same answer `TrailId.End` gives, and
     /// for the same reason: a snapshot whose delivery history is missing is a
     /// picture with an honest gap, while a 500 is no picture at all.
     public static MailDeliveryFoldResult Read(string? path, long maxScanBytes = MaxScanBytes, int maxRecords = MaxRecords)

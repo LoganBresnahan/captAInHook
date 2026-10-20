@@ -205,9 +205,14 @@ public sealed class ApiReadModel
         // would put it in neither (a loss, which nothing can recover). The
         // window is two in-process reads wide; the direction of its error is
         // this line's placement.
+        // The trail's current end as a resume id (TrailId.End, ADR-0021 rule
+        // 5): the same id a subscriber with no Last-Event-ID starts at, and the
+        // same "nothing yet" answer for an unreadable or not-yet-created trail.
+        // It leaves as a string; every reader downstream treats it as a token
+        // (ADR-0009 d2).
         var trailEventId = _trailPath is null
             ? null
-            : TrailLength(_trailPath).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            : CaptainHook.Core.TrailId.End(_trailPath).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         var lines = _mail.Read();
         // The frontier stops BEFORE an unterminated tail — MailCursors.Pending's
@@ -289,21 +294,6 @@ public sealed class ApiReadModel
             fold.Complete,
             MailThreads.Closures(complete),
             MailEnvelope.HopBudget);
-    }
-
-    /// The trail's current end — the same stat `TrailSubscription` takes when a
-    /// subscriber arrives with no `Last-Event-ID`, and deliberately the same
-    /// failure answer: an unreadable or not-yet-created trail is "nothing yet",
-    /// never an error. A trail that does not exist has length 0, which in this
-    /// id space is also "from the earliest still-reachable point" — and that is
-    /// correct here rather than dangerous, because there are no bytes to replay.
-    /// This is the ONE place the id's numeric nature is known; it leaves as a
-    /// string and every reader downstream treats it as a token (ADR-0009 d2).
-    private static long TrailLength(string path)
-    {
-        try { return new FileInfo(path).Length; }
-        catch (IOException) { return 0; }
-        catch (UnauthorizedAccessException) { return 0; }
     }
 
     private static MailCursorDto Cursor(MailPendingView v, bool named) => new(

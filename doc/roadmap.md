@@ -1157,7 +1157,10 @@ run live*. The framework underneath is what exists today.
   built** — `TrailKeeper` (rotation under a lock, `.trail-seq`, mtime
   retention, the d8 guard), shipped dark; it also fixed both trail writers,
   whose single create-and-reopen retry could drop a line racing a rotation.
-  Slices 2 (segment-aware cursor) and 3 (readers, rotation on) to come.
+  **Slice 2 built** — `TrailCursor` follows rotations (no reset; a deleted
+  segment resets to the oldest left), ids are `TrailId` ((seq − 1) × 2^40 +
+  offset, so today's ids are unchanged). Slice 3 (readers, rotation on) to
+  come.
 
 - [x] **31. `~` in handlers.json — one file, two homes** — a handlers.json
   kept in a dotfiles repo has to serve `/home/oof` and `/Users/dogdrool`. A

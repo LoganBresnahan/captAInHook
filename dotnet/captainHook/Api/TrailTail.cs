@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.Channels;
 using CaptainHook.Actors;
+using CaptainHook.Core;
 
 namespace CaptainHook.Api;
 
@@ -13,8 +14,10 @@ namespace CaptainHook.Api;
 // Mechanics pinned by the ADR:
 //   * portable STAT-POLL, not inotify (Linux-only) — hook rates make polling
 //     cheap, and the poll interval is the only latency added;
-//   * SSE event id = BYTE OFFSET after the line's trailing '\n', so a
-//     reconnect's Last-Event-ID resumes exactly: zero duplicate, zero loss;
+//   * SSE event id = the POSITION after the line's trailing '\n', so a
+//     reconnect's Last-Event-ID resumes exactly: zero duplicate, zero loss.
+//     Since ADR-0021 a position is (segment, byte offset) packed into one
+//     integer (TrailId); in the trail's first file it is the byte offset;
 //   * the tailer is SCHEMA-BLIND: it ships complete lines as opaque strings and
 //     never parses them, so the trail's third consumer (N4) adds no schema
 //     coupling beyond "newline-delimited" — the golden-pinned emitters stay the
@@ -33,9 +36,13 @@ namespace CaptainHook.Api;
 //     self-heals by discarding forward to the next boundary, so a bogus id can
 //     never emit garbage half-lines.
 //   * FILE LIFECYCLE — not-yet-created reads as "nothing yet" (never an
-//     error); TRUNCATION/replacement (length < offset) resets the cursor to 0
-//     and surfaces an explicit Reset event (id: 0) so the client knows the id
-//     space restarted; EOF just keeps polling.
+//     error); ROTATION (the daemon's keeper renames the active file to a
+//     numbered segment) is FOLLOWED: drain the renamed file, wait one grace
+//     for lines that raced the rename, step to the next — no reset (ADR-0021
+//     rule 6); a DELETED segment (retention) resets forward, to the next one;
+//     TRUNCATION/replacement of the active file in place (length < offset)
+//     resets it to offset 0 and surfaces an explicit Reset event; EOF just
+//     keeps polling.
 
 /// One poll's outcome: complete lines (each with the byte offset AFTER its
 /// '\n' — the SSE id that resumes exactly past it), whether the file was
@@ -44,66 +51,193 @@ namespace CaptainHook.Api;
 /// oversized lines were skipped (surfaced to the subscriber as a gap).
 public sealed record TrailPoll(IReadOnlyList<TrailLine> Lines, bool Reset, bool More, int Skipped = 0);
 
+/// One complete line and its resume id: the TrailId just past its '\n' (in
+/// the trail's first file, exactly that byte offset).
 public sealed record TrailLine(long EndOffset, string Text);
 
-/// A single subscriber's cursor over the trail file. NOT thread-safe — each
-/// subscriber owns one and polls it from one task.
+/// A single subscriber's cursor over the trail — across its rotations
+/// (ADR-0021 rule 6). NOT thread-safe — each subscriber owns one and polls it
+/// from one task.
+///
+/// The position is (Seq, Offset): a segment number and a byte offset in that
+/// file, published as one id (`TrailId`, rule 5). The file for Seq is the
+/// renamed segment `<stem>.<Seq><ext>` if it exists, else the active file when
+/// Seq is the active number. Each poll resolves that BY NAME, so a rotation
+/// between polls is simply seen: the segment name now exists, the cursor keeps
+/// reading it from its offset, and once it has stayed at that segment's end
+/// for one grace period (lines that raced the rename land in it within
+/// microseconds), it steps to Seq+1 at offset 0 — as many steps as rotations
+/// happened, never assuming one (N1). No `reset` for a rotation; a reset only
+/// when the cursor's segment was deleted (re-anchored FORWARD, at the next
+/// segment that exists), for an id from a segment that does not exist yet, or
+/// for the active file truncated or replaced in place (today's rule). The
+/// active number is resolved every poll, never cached, and a directory or
+/// descriptor failure is a quiet poll, never a throw or a spin.
 public sealed class TrailCursor
 {
+    /// How long a renamed segment must sit at its end before the cursor moves
+    /// on: a writer that opened the path just before the rename still lands
+    /// its line in the renamed file.
+    internal static readonly TimeSpan RenameGrace = TimeSpan.FromSeconds(1);
+
     private readonly string _path;
+    private readonly Func<long> _clock;
     private bool _align;      // offset came from a client: trust it only after proving it sits on a boundary
     private bool _skipping;   // mid-way through discarding a line longer than the read window
+    private long? _eofSince;  // monotonic ms when a renamed segment was first seen fully drained
 
-    public TrailCursor(string path, long startOffset, bool alignForward = false)
+    /// `startId` is a TrailId (a client's Last-Event-ID, or TrailId.End for
+    /// "from now"); `clock` is the monotonic source the rename grace is
+    /// measured by (invariant 2).
+    public TrailCursor(string path, long startId, bool alignForward = false, Func<long>? clock = null)
     {
         _path = path;
-        Offset = Math.Max(0, startOffset);
+        (Seq, Offset) = TrailId.Decode(startId);
         _align = alignForward && Offset > 0;
+        _clock = clock ?? (() => Environment.TickCount64);
     }
 
-    /// The byte offset the next poll reads from. Rests on a line boundary
-    /// except transiently while an unaligned resume discards toward one.
+    /// The segment number the next poll reads from.
+    public long Seq { get; private set; }
+
+    /// The byte offset in that segment the next poll reads from. Rests on a
+    /// line boundary except transiently while an unaligned resume discards
+    /// toward one.
     public long Offset { get; private set; }
+
+    /// The position as one resume id (`TrailId`).
+    public long Id => TrailId.Encode(Seq, Offset);
 
     /// Read whatever complete lines are available, up to `maxBytes` of them —
     /// a huge backlog is delivered across repeated polls (More=true) so one
     /// poll can never balloon memory or starve cancellation.
     public TrailPoll Poll(int maxBytes = 128 * 1024)
     {
-        FileStream fs;
-        try
+        // Bounded walk: each turn either returns or steps Seq forward, and
+        // there are never more renamed segments than rotations.
+        for (var turn = 0; turn < 1024; turn++)
         {
-            // ReadWrite|Delete share: the emitters keep appending (and a rotation
-            // may unlink) while we read — the reader must never block a writer.
-            fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        }
-        catch (IOException)   // FileNotFound/DirectoryNotFound: nothing to read (yet)
-        {
-            if (Offset == 0) return new TrailPoll([], Reset: false, More: false);
-            // The file we were mid-way through vanished: a rotation/removal.
-            // Reset once; a recreated file starts a fresh id space at 0.
-            return ResetCursor(more: false);
-        }
-        catch (UnauthorizedAccessException)   // unreadable: quiet, like absent
-        {
-            return new TrailPoll([], Reset: false, More: false);
-        }
-
-        using (fs)
-        {
+            var segment = TrailKeeper.SegmentPath(_path, Seq);
+            bool renamed;
+            long active;
             try
             {
-                return ReadFrom(fs, maxBytes);
+                renamed = File.Exists(segment);
+                // Resolved EVERY poll, never cached: a cached "this is the
+                // active file" outlives a rename the cursor never saw (renamed
+                // and then deleted between two polls) and reads the next file
+                // under the old number — silently, at a stale offset.
+                active = renamed ? 0 : TrailKeeper.ActiveSeq(_path);
             }
-            catch (Exception ex) when (ex is EndOfStreamException or IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // The file shrank/vanished BETWEEN the length stat and the read
-                // (a truncation racing this poll). Quietly yield; the next poll
-                // sees len < Offset and resets — one beat of latency, never a
-                // dead subscription.
+                // The logs dir is unreadable, gone, or out of descriptors:
+                // quiet, like an absent file — never a throw, never a spin.
                 return new TrailPoll([], Reset: false, More: false);
             }
+
+            if (!renamed && Seq != active)
+            {
+                // A rename may have landed between the two checks above: if
+                // the segment name exists now, this is a rotation, not a loss.
+                if (File.Exists(segment)) continue;
+                if (Seq > active) return ResetTo(active);   // an id from a segment that never existed
+                // Our segment is gone (retention, or deleted by hand): the
+                // honest answer is a reset, re-anchored FORWARD at the next
+                // segment that exists — never back at the oldest, which a gap
+                // in the numbers would turn into an endless replay loop.
+                long next;
+                try { next = TrailKeeper.Segments(_path).Select(x => x.Seq).Where(x => x > Seq).DefaultIfEmpty(active).Min(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return new TrailPoll([], Reset: false, More: false);
+                }
+                return ResetTo(next);
+            }
+
+            FileStream fs;
+            try
+            {
+                // ReadWrite|Delete share: the emitters keep appending (and the
+                // keeper may rename or delete) while we read — the reader must
+                // never block a writer.
+                fs = new FileStream(renamed ? segment : _path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                if (renamed) continue;                  // deleted under us: resolve again
+                if (File.Exists(segment)) continue;     // renamed under us: follow it
+                if (Offset == 0) return new TrailPoll([], Reset: false, More: false);   // nothing yet
+                // The active file vanished with no rename: removed by hand.
+                // Reset once; a recreated file starts at offset 0.
+                return ResetCursor(more: false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Unreadable, or out of descriptors: quiet, try next beat.
+                return new TrailPoll([], Reset: false, More: false);
+            }
+
+            TrailPoll poll;
+            using (fs)
+            {
+                // Opened the active name, but a rotation may have raced the
+                // open and this handle may be the NEXT file: if the segment
+                // name exists now, or the active number moved on, drop it and
+                // resolve again by name.
+                if (!renamed && (File.Exists(segment) || SafeActiveSeq() != Seq)) continue;
+                try
+                {
+                    poll = ReadFrom(fs, maxBytes);
+                }
+                catch (Exception ex) when (ex is EndOfStreamException or IOException)
+                {
+                    // The file shrank/vanished BETWEEN the length stat and the
+                    // read (a truncation racing this poll). Quietly yield; the
+                    // next poll sees len < Offset and resets — one beat of
+                    // latency, never a dead subscription.
+                    return new TrailPoll([], Reset: false, More: false);
+                }
+            }
+
+            if (poll.Reset || poll.Lines.Count > 0 || poll.More || poll.Skipped > 0 || !renamed)
+            {
+                if (poll.Lines.Count > 0 || poll.More) _eofSince = null;
+                return poll;
+            }
+
+            // A renamed segment, fully drained (a torn last line that will
+            // never complete is abandoned with it). Wait out the grace for
+            // lines that raced the rename, then step to the next segment.
+            var now = _clock();
+            if (_eofSince is not { } since)
+            {
+                _eofSince = now;
+                return new TrailPoll([], Reset: false, More: false);
+            }
+            if (TimeSpan.FromMilliseconds(now - since) < RenameGrace)
+                return new TrailPoll([], Reset: false, More: false);
+            Seq++;
+            Offset = 0;
+            _align = false;
+            _skipping = false;
+            _eofSince = null;
         }
+        // Only persistent races reach here; yield a beat rather than spin.
+        return new TrailPoll([], Reset: false, More: false);
+    }
+
+    private long SafeActiveSeq()
+    {
+        try { return TrailKeeper.ActiveSeq(_path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Seq; }
+    }
+
+    private TrailPoll ResetTo(long seq)
+    {
+        Seq = seq;
+        return ResetCursor(more: true);
     }
 
     private TrailPoll ResetCursor(bool more)
@@ -111,6 +245,7 @@ public sealed class TrailCursor
         Offset = 0;
         _align = false;
         _skipping = false;
+        _eofSince = null;
         return new TrailPoll([], Reset: true, More: more);
     }
 
@@ -224,7 +359,7 @@ public sealed class TrailCursor
                 var lineLen = i - lineStart;
                 if (lineLen > 0 && buf[i - 1] == '\r') lineLen--;   // tolerate CRLF trails
                 lines.Add(new TrailLine(
-                    EndOffset: Offset + i + 1,
+                    EndOffset: TrailId.Encode(Seq, Offset + i + 1),
                     Text: Encoding.UTF8.GetString(buf, lineStart, lineLen)));
                 lineStart = i + 1;
             }
@@ -296,9 +431,13 @@ public sealed class TrailSubscription
         string path, long? lastEventId,
         TimeSpan? poll = null, TimeSpan? heartbeat = null, int? capacity = null)
     {
-        var start = lastEventId ?? CurrentLength(path);
+        var start = lastEventId ?? TrailId.End(path);
         Anchor = start;
-        _cursor = new TrailCursor(path, start, alignForward: lastEventId is > 0);
+        // Always aligned: a client id is proven against the '\n' before it, and
+        // a "from now" end can land inside a line still being written (a long
+        // one spans page-wise size updates) — unaligned, the boundary check
+        // would read that as a replaced file and replay it from offset 0.
+        _cursor = new TrailCursor(path, start, alignForward: true);
         _poll = poll ?? TimeSpan.FromMilliseconds(200);
         _heartbeat = heartbeat ?? TimeSpan.FromSeconds(15);
         _capacity = Math.Max(1, capacity ?? 256);
@@ -315,13 +454,6 @@ public sealed class TrailSubscription
 
     /// Evictions not yet surfaced as a gap marker — test observability.
     internal long DroppedSoFar => Volatile.Read(ref _dropped);
-
-    private static long CurrentLength(string path)
-    {
-        try { return new FileInfo(path).Length; }
-        catch (IOException) { return 0; }
-        catch (UnauthorizedAccessException) { return 0; }
-    }
 
     /// Pump events to `write` until cancellation or a write failure (a closed
     /// client). Never throws for either — both are normal subscription ends.

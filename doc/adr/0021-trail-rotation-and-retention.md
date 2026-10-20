@@ -98,15 +98,15 @@ the build "until growth bites". Three things changed:
    Those lines are lost to history by ADR-0009 d8's accepted edge, and pruning
    them later loses nothing that history ever had.
 
-5. **The SSE id becomes `seq × 2^40 + localOffset`.** ADR-0009 d4 designed
+5. **The SSE id becomes `(seq − 1) × 2^40 + localOffset` (`TrailId`).** ADR-0009 d4 designed
    a cumulative byte count across segments. That needs every earlier
    segment's final size, and rule 1's race makes that size unfinal: a line
    that lands in a just-renamed segment shifts every later base, so ids
    already handed out would silently move. An encoded `(segment, offset)`
    pair is immune to that and still a single monotonic integer, so d2's
    contract holds with no client change:
-   - the active file's segment number is one more than the highest renamed
-     segment, so a line keeps its id when its file is renamed;
+   - the active file's segment number is one more than the high-water mark
+     (rule 1), so a line keeps its id when its file is renamed;
    - 2^40 bytes (1 TiB) per segment and up to 2^13 segments stay below 2^53,
      so the id survives any client that parses it as a JSON number. Because
      `.trail-seq` only grows, the segment count is the number of rotations
@@ -116,8 +116,12 @@ the build "until growth bites". Three things changed:
      a day; the trail then grows unbounded, but every id stays valid. The GUI
      does not: it keeps the id as a string and echoes it verbatim
      (`web/src/sse.ts`, `mailStream.ts`);
-   - today's ids (offsets in a never-rotated file, segment 0) mean exactly
-     what they did, so a client resuming across the upgrade continues.
+   - the first file is segment 1, so `seq − 1` makes its ids exactly today's
+     byte offsets: an id issued before the upgrade means what it meant, and
+     resumes into what is now `captainHook.1.jsonl` after the first rotation.
+     *(As built in slice 2: the draft said `seq × 2^40` with "segment 0" for
+     today's ids, but the first rotation names the original file segment 1;
+     `seq − 1` makes the two agree with no special case.)*
 
 6. **The tailer follows a rotation without a `reset`.** `TrailCursor` keeps
    its stat-poll and reopen-per-poll model. When `captainHook.<its seq>.jsonl`
@@ -127,10 +131,30 @@ the build "until growth bites". Three things changed:
    offset 0. Several rotations can happen between two polls (a burst, or the
    smoke's tiny segments), so the cursor walks `seq, seq+1, …` up to the
    active file, draining each, and never assumes a single step. Only a cursor whose segment has been deleted gets a `reset`
-   (d2: "earliest still-reachable"), re-anchored at the oldest segment.
+   (d2), re-anchored **forward**, at the next segment that exists (or the
+   active file).
    Truncation of the active file without a rename (a person running
    `: > captainHook.jsonl`) keeps today's `reset`. `MailWatcher` uses the
    same cursor and inherits all of this.
+   *(Slice 2's adversarial verify broke the first draft five ways, each now
+   fixed and pinned by a test in `TrailRotationCursorTests`:
+   A. re-anchoring a deleted segment at the OLDEST one turned a gap in the
+   numbers (a kept future-mtime segment, a stubborn or hand-deleted one) into
+   an endless reset-and-replay loop; it re-anchors forward now.
+   B. a rename landing between the cursor's "does the segment name exist?"
+   and "what is the active number?" read as a deleted segment and reset; it
+   re-checks the name first.
+   C. a cached "this is the active file" outlived a rename the cursor never
+   saw (renamed and deleted between two polls) and read the next file under
+   the old number, losing lines silently later; the active number is now
+   resolved every poll and re-checked after the open.
+   D. out of descriptors (or an unreadable logs dir), the cursor spun at
+   More=true or threw out of MailWatcher's pump; those are quiet polls now.
+   E. (older than rotation) a "from now" start landing mid-line read as a
+   replaced file and replayed the whole active file; every subscription and
+   the watcher now align forward.
+   Accepted, not fixed: each renamed segment costs one grace (1 s) to walk,
+   even when later ones exist; at one rotation a minute it never shows.)*
 
 7. **The other readers.** `TrailEventId` becomes the id of the active file's
    current end (rule 5's encoding), so the GUI's snapshot-then-stream join
@@ -141,9 +165,10 @@ the build "until growth bites". Three things changed:
 
 8. **Deferred again:** `GET /events?tail=N` (ADR-0009 d5). It is a read
    convenience, independent of bounding the disk, and lands best after rule
-   6 has proven itself. ADR-0007 d5 is amended in the same change that ships
-   rule 6, as ADR-0009's hand-off requires: from "byte offset in the file" to
-   rule 5's encoding.
+   6 has proven itself. ADR-0007 d5 is amended, as ADR-0009's hand-off
+   requires, from "byte offset in the file" to rule 5's encoding, in the
+   change that turns rotation on (slice 3): that is when its wording becomes
+   false. Until then every id is still a byte offset in the one file.
 
 ## Consequences
 
@@ -196,14 +221,15 @@ the build "until growth bites". Three things changed:
    a release smoke step that forces a tiny segment size and proves rotation,
    a resumed stream across it, and pruning.
 
-## Ground truth (slice 1 built; slices 2–3 to come)
+## Ground truth (slices 1–2 built; slice 3 to come)
 
 | what | where |
 |---|---|
 | keeper (rotate, lock, `.trail-seq`, prune, d8 guard), shipped dark | `Core/TrailKeeper.cs` (slice 1); started by `DaemonHost` in slice 3; `TrailKeeperTests` |
 | the segment model readers share (`Segments`, `HighWater`, `ActiveSeq`, `SegmentPath`) | `Core/TrailKeeper.cs`; `ShellTrail.Files` reads through it |
 | writers' create-and-reopen loop (rule 1's finding) | `captainHookWire/PosixTrail.cs` (`OpenAttempts`), `captainHookActors/Logging.fs` (`PosixTrail.append`) |
-| segment-aware cursor | `Api/TrailTail.cs` (`TrailCursor`) |
+| segment-aware cursor (slice 2): resolve by name each poll, re-resolve when a rotation races the open, drain + `RenameGrace` + step, walk many rotations, reset only for a deleted or future segment | `Api/TrailTail.cs` (`TrailCursor`: `Seq`, `Offset`, `Id`); `TrailRotationCursorTests` (mutation-checked: no grace, no grace marker, ids without seq, jump-to-active, never follow a rename — each fails a test) |
+| the id | `TrailId` (`Encode`, `Decode`, `End`) in `Core/TrailKeeper.cs`; used by `TrailSubscription`, `MailWatcher`, `ApiReadModel` (`trailEventId`) |
 | readers | `Api/ApiReadModel.cs` (`TrailEventId`), `Api/MailDeliveryFold.cs`, `Core/MailWatcher.cs`, `Core/ShellTrail.cs` |
 | events | `trail.rotate`, `trail.rotateError`, `trail.prune`, `trail.pruneHeld`, `trail.seqExhausted` (src `trail`) |
 | high-water mark | `logs/.trail-seq` (written under `logs/.rotate.lock`) |

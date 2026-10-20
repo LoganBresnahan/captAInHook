@@ -237,3 +237,40 @@ public sealed class TrailKeeper
         catch (IOException) { return null; }
     }
 }
+
+/// The trail's resume id (ADR-0021 rule 5): `(seq − 1) × 2^40 + offset`, one
+/// monotonic integer naming a byte position in a segment. `seq` is the file's
+/// segment number, which it keeps when the keeper renames it, so a line's id
+/// never changes; the first file (seq 1) has ids exactly equal to its byte
+/// offsets, which is what every id meant before rotation existed. Opaque to
+/// clients (ADR-0009 d2): only this type and TrailCursor ever decode one.
+public static class TrailId
+{
+    internal const int OffsetBits = 40;
+    private const long OffsetMask = (1L << OffsetBits) - 1;
+
+    public static long Encode(long seq, long offset) => ((seq - 1) << OffsetBits) + offset;
+
+    public static (long Seq, long Offset) Decode(long id)
+    {
+        if (id < 0) id = 0;
+        return ((id >> OffsetBits) + 1, id & OffsetMask);
+    }
+
+    /// The id of the trail's current end, for a "from now" reader. The
+    /// segment number and the length are read twice-checked, so a rotation
+    /// between them cannot pair the old number with the new file's length.
+    public static long End(string activePath)
+    {
+        for (var i = 0; i < 8; i++)
+        {
+            var seq = TrailKeeper.ActiveSeq(activePath);
+            long len;
+            try { len = new FileInfo(activePath).Length; }
+            catch (IOException) { len = 0; }
+            catch (UnauthorizedAccessException) { len = 0; }
+            if (TrailKeeper.ActiveSeq(activePath) == seq) return Encode(seq, len);
+        }
+        return Encode(TrailKeeper.ActiveSeq(activePath), 0);
+    }
+}

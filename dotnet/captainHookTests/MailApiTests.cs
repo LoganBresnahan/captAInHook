@@ -519,7 +519,7 @@ public class MailApiTests
             AppContext.BaseDirectory, "..", "..", "..", "..", "captainHook", "Api", "ApiReadModel.cs")));
         var body = src[src.IndexOf("public MailDto? Mail(long since)", StringComparison.Ordinal)..];
 
-        var stamp = body.IndexOf("TrailLength(_trailPath)", StringComparison.Ordinal);
+        var stamp = body.IndexOf("TrailId.End(_trailPath)", StringComparison.Ordinal);
         var read = body.IndexOf("_mail.Read()", StringComparison.Ordinal);
 
         Assert.True(stamp >= 0, "the trail stamp moved or was renamed — this pin must move with it");

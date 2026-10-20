@@ -177,7 +177,7 @@ public sealed class MailWatcher : IAsyncDisposable
             path => path is null ? RoleKinds.None : RoleKinds.From(ExecHandlersFile.Resolve(path)));
         // From the END: what happened before this daemon is on disk as ages
         // (`nudges.jsonl`), not in the tail. Trusted offset — our own stat.
-        _cursor = new TrailCursor(options.TrailPath, CurrentLength(options.TrailPath));
+        _cursor = new TrailCursor(options.TrailPath, TrailId.End(options.TrailPath), alignForward: true);   // the end may sit mid-line
         // The factory is the restart: a fresh instance LOADS the durable state.
         _worker = Worker<WatchTrigger, WatchStep>.Supervised(_sup, ActorId, () =>
         {
@@ -207,7 +207,7 @@ public sealed class MailWatcher : IAsyncDisposable
             Msg = "mail watcher up — evaluating on mail.append / mail.cursorAdvance and one held deadline",
             Data = new Dictionary<string, object>
             {
-                ["trail"] = _o.TrailPath, ["fromOffset"] = _cursor.Offset,
+                ["trail"] = _o.TrailPath, ["fromOffset"] = _cursor.Id,
                 ["pollMs"] = _poll.TotalMilliseconds, ["watch"] = _o.WatchPath,
                 ["handlers"] = _o.HandlersPath ?? "<none>", ["mailDir"] = _o.MailDir,
             },
@@ -371,13 +371,6 @@ public sealed class MailWatcher : IAsyncDisposable
                 Interlocked.Decrement(ref _inFlight);
             }
         });
-    }
-
-    private static long CurrentLength(string path)
-    {
-        try { return new FileInfo(path).Length; }
-        catch (IOException) { return 0; }
-        catch (UnauthorizedAccessException) { return 0; }
     }
 
     /// One live instance of the actor: the brain's memory, loaded from disk at
