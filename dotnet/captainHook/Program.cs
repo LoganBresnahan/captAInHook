@@ -55,6 +55,7 @@ switch (inv.Mode)
             apiPort: ApiHost.ResolvePort(Environment.GetEnvironmentVariable("CAPTAINHOOK_API_PORT")),
             handlersPath: ExecHandlersFile.ResolvePath(),
             watchPath: WatchRules.ResolvePath(),
+            childrenDir: CaptainHook.Handlers.ChildRecords.Dir,
             sse: heartbeat is null ? null : new SseOptions(WireJsonl.DefaultLogPath(), Heartbeat: heartbeat));
     }
 

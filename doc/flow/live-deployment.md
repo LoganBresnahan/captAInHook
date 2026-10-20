@@ -65,7 +65,10 @@ leaves behind.
   (`daemon.drainStart` → `daemon.drained` [+ `daemon.drainChildren` /
   `daemon.drainCut`] in the trail). `kill -9` remains safe too — the kernel
   releases the lock, the next prompt collapses and respawns — though a -9
-  skips the child phase (doctor's orphan report is the phase-8 backstop).
+  skips the child phase: what it leaves (a resident ignoring stdin EOF, a
+  forked grandchild, an in-flight oneshot) is killed by the NEXT daemon's
+  boot reap (`daemon.reapOrphan`, ADR-0010's 2026-10-19 amendment); until
+  one starts, `doctor` reports it.
   Never delete `.lock` files.
 - **Sweep leftovers**: `~/.local/bin/captainHook doctor` — dead
   pidfiles/sockets removed, pid-reused records cleaned without signaling the

@@ -67,7 +67,7 @@ public class DoctorOrphansTests : IDisposable
     [Fact]
     public void DefaultOwnerGuard_NonDaemonOwnerPid_IsOrphan()
     {
-        // The real IsCaptainHookDaemon guard: a live owner pid whose cmdline is
+        // The real owner guard (ChildRecords.OwnerAlive): a live owner pid whose cmdline is
         // NOT a captainHook --daemon (here a plain sleep, standing in for a
         // recycled daemon pid) counts as "owner gone" ⇒ the child is an orphan.
         // Proves pid-reuse of the DAEMON pid can't mask a genuine orphan.

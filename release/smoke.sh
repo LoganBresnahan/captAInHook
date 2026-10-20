@@ -14,7 +14,9 @@
 # from its payloads/ link; zero wire skew; doctor sees a healthy daemon; the
 # daemon idle-exits on its own; and, under an XDG_RUNTIME_DIR too long for a
 # socket, a daemon still comes up — in the short per-uid dir
-# /tmp/captainhook-<uid> (ADR-0004 d3); `captainHook self prune` keeps the
+# /tmp/captainhook-<uid> (ADR-0004 d3); a SIGKILLed daemon's leftover children
+# (an EOF-deaf resident, a forked grandchild, an in-flight oneshot) die when the
+# next daemon starts (ADR-0010); `captainHook self prune` keeps the
 # current version and removes a stale one; and `captainHook self uninstall`
 # refuses while the hooks are wired, then removes the install once they are
 # not — so the smoke ENDS uninstalled. Prints the hook latencies. Exit 0 = pass.
@@ -172,7 +174,79 @@ short_gone() { ! short_pid; }
 wait_for $(( IDLE_MS / 1000 + 30 )) short_gone || fail "the short-dir daemon did not idle-exit"
 pass "long XDG_RUNTIME_DIR: daemon in $SHORT (0700), cold ${LONG_COLD_MS}ms, warm answered, doctor names it, idle-exited"
 
-# 10. self prune: the version folder's own install.sh, run by the engine
+# 10. a SIGKILLed daemon's leftovers die when the next daemon starts
+# (ADR-0010, 2026-10-19 amendment). Measured on v0.1.1: a resident that
+# ignores stdin EOF, a resident's forked grandchild and a oneshot mid-run all
+# outlived a SIGKILLed daemon, and nothing ever killed them. Now the next
+# daemon's boot reap does — from the resident records and the dead daemon's
+# oneshot ledger.
+P=$HOME/smoke-payloads
+mkdir -p "$P"
+# A resident's loop: answer each envelope with a noop echoing its dispatchId.
+# shellcheck disable=SC2016  # the payload's $e and $id, expanded when it runs
+LOOP='while IFS= read -r e; do id=$(printf "%s" "$e" | sed -n "s/.*\"dispatchId\":\"\([^\"]*\)\".*/\1/p"); printf "{\"effect\":\"noop\",\"dispatchId\":\"%s\"}\n" "$id"; done'
+cat > "$P/deaf.sh" <<EOF
+#!/bin/sh
+# ignores stdin EOF: when its daemon's pipe closes, it sleeps on
+echo \$\$ > "$P/deaf.pid"
+printf '{"ready":1}\n'
+$LOOP
+exec sleep 100000
+EOF
+cat > "$P/forker.sh" <<EOF
+#!/bin/sh
+# forks a long-lived grandchild into its own process group
+sleep 100000 </dev/null >/dev/null 2>&1 &
+echo \$! > "$P/grandchild.pid"
+printf '{"ready":1}\n'
+$LOOP
+EOF
+cat > "$P/slow.sh" <<EOF
+#!/bin/sh
+# a oneshot still running when the kill lands
+echo \$\$ > "$P/slow.pid"
+cat >/dev/null
+exec sleep 600
+EOF
+chmod +x "$P/deaf.sh" "$P/forker.sh" "$P/slow.sh"
+HANDLERS=$HOME/.captainHook/handlers.json
+cp "$HANDLERS" "$HANDLERS.smoke-saved"
+cat > "$HANDLERS" <<EOF
+{"version":1,"handlers":[
+ {"name":"deaf","command":"$P/deaf.sh","events":["user-prompt-submit"],"mode":"resident"},
+ {"name":"forker","command":"$P/forker.sh","events":["user-prompt-submit"],"mode":"resident"},
+ {"name":"slow","command":"$P/slow.sh","events":["stop"],"mode":"oneshot","budgetMs":30000}
+]}
+EOF
+alive() { s=$(ps -o stat= -p "$1" 2>/dev/null) || return 1; case $s in *Z*|'') return 1 ;; esac; }
+dpid() { sed 's/.*"Pid":\([0-9]*\).*/\1/' "$RUNDIR/captaind-$id.pid" 2>/dev/null; }
+printf '{"session_id":"smoke"}' | "$SHIM" hook session-end >/dev/null 2>&1   # cold: spawns a daemon
+residents_up() { [ -s "$P/deaf.pid" ] && [ -s "$P/grandchild.pid" ] && has_pid; }
+wait_for 30 residents_up || fail "the orphan-test residents never started"
+printf '{"session_id":"smoke"}' | "$SHIM" hook stop >/dev/null 2>&1 &   # in flight when the kill lands
+STOP_HOOK=$!
+wait_for 15 test -s "$P/slow.pid" || fail "the slow oneshot never started"
+D=$(dpid); DEAF=$(cat "$P/deaf.pid"); GRAND=$(cat "$P/grandchild.pid"); SLOW=$(cat "$P/slow.pid")
+kill -9 "$D"
+wait "$STOP_HOOK" 2>/dev/null || true
+dead() { ! alive "$D"; }
+wait_for 10 dead || fail "the daemon survived SIGKILL"
+if ! { alive "$DEAF" && alive "$GRAND" && alive "$SLOW"; }; then
+  fail "precondition: not every orphan outlived the SIGKILLed daemon (deaf=$DEAF grandchild=$GRAND slow=$SLOW)"
+fi
+reaps=$(count daemon.reapOrphan)
+printf '{"session_id":"smoke"}' | "$SHIM" hook session-end >/dev/null 2>&1   # the next daemon
+reaped() { ! alive "$DEAF" && ! alive "$GRAND" && ! alive "$SLOW"; }
+wait_for 20 reaped || fail "the next daemon left orphans alive (deaf=$DEAF grandchild=$GRAND slow=$SLOW)"
+got=$(( $(count daemon.reapOrphan) - reaps ))
+[ "$got" -ge 3 ] || fail "expected 3 daemon.reapOrphan lines, got $got"
+doc=$("$ENGINE" doctor)
+if printf '%s\n' "$doc" | grep -q ': orphan'; then fail "doctor still reports orphans after the reap: $doc"; fi
+mv "$HANDLERS.smoke-saved" "$HANDLERS"
+wait_for $(( IDLE_MS / 1000 + 30 )) gone || fail "the reaping daemon did not idle-exit"
+pass "SIGKILLed daemon: its EOF-deaf resident, forked grandchild and in-flight oneshot reaped by the next daemon ($got daemon.reapOrphan)"
+
+# 11. self prune: the version folder's own install.sh, run by the engine
 # (ADR-0020 d8) — keeps the current version, removes a stale one.
 cur=$(basename "$base")
 mkdir -p "$INSTALL_DIR/versions/0.0.0-smoke" && echo 0.0.0-smoke > "$INSTALL_DIR/versions/0.0.0-smoke/VERSION"
@@ -183,7 +257,7 @@ printf '%s\n' "$out" | grep -q "removed 0.0.0-smoke" || fail "self prune did not
 [ -x "$INSTALL_DIR/versions/$cur/captainHook" ] || fail "self prune removed the current version"
 pass "self prune: kept $cur (current), removed a stale version"
 
-# 11. self uninstall: refused while settings.json still runs the shim, then
+# 12. self uninstall: refused while settings.json still runs the shim, then
 # done once install-hooks has taken the hooks out.
 if out=$("$ENGINE" self uninstall </dev/null 2>&1); then fail "self uninstall ran while the hooks were wired: $out"; fi
 printf '%s\n' "$out" | grep -q 'install-hooks --remove --apply' || fail "self uninstall refused without naming the fix: $out"

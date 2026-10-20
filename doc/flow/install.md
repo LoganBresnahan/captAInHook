@@ -14,7 +14,8 @@ what `/deploy` and CI use), so there is one install path.
                         + ui/ + payloads/ + install.sh + LICENSE NOTICE VERSION       │
                       install.sh --archive <tgz>   into a temp HOME                   │
                       release/smoke.sh   cold · warm · bosun · doctor · idle ·        │
-                                         long runtime dir · self prune/uninstall      │
+                                         long runtime dir · orphan reap ·             │
+                                         self prune/uninstall                         │
                       ─► only if every target passed: publish                         │
                          captainhook-<v>-<os>-<arch>.tar.gz × N, SHA256SUMS, install.sh
                                                                                       │

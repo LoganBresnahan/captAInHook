@@ -175,6 +175,9 @@ public sealed class ExecHandler(
                 $"exec handler '{name}': cannot start '{command}' — {ex.Message}");
         }
         Track(proc, e, ctx);
+        // The daemon's oneshot ledger (null outside a daemon): the line a
+        // SIGKILLed daemon's successor reaps this child by (OrphanReaper).
+        SpawnLedger.Current?.Spawned(proc.Id, command, name, e.Type);
 
         var spawnData = new Dictionary<string, object>
         {
@@ -374,9 +377,14 @@ public sealed class ExecHandler(
         throw new ObjectDisposedException(null, $"exec handler '{name}': torn down");
     }
 
+    /// Every conclusion — answered, exited, killed — passes here once, which
+    /// is where the ledger hears the dispatch let go of the child.
     private void Untrack(Process proc)
     {
-        lock (_liveLock) _liveChildren.Remove(proc);
+        bool had;
+        int pid;
+        lock (_liveLock) had = _liveChildren.Remove(proc, out pid);
+        if (had) SpawnLedger.Current?.Done(pid);
     }
 
     /// Teardown — the Dispatcher's seam (supervised replacement, escalation,
@@ -398,6 +406,7 @@ public sealed class ExecHandler(
         {
             var (proc, pid) = (kv.Key, kv.Value);
             var how = await ProcessGroup.TermThenKillAsync(pid, Pgrouped, proc, KillGrace);
+            SpawnLedger.Current?.Done(pid);
             if (how != "gone")
                 Log.Warn("exec", "exec.kill", new LogFields
                 {

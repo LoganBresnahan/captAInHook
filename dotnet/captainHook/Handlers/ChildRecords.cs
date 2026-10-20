@@ -15,9 +15,15 @@ namespace CaptainHook.Handlers;
 ///
 /// Everything here is best-effort: a record failure never fails a spawn, a
 /// delete failure never fails a kill — the record is evidence, not lifecycle.
-/// Oneshot children are deliberately NOT recorded (two file ops on the
-/// dispatch critical path — the item-12 tax; short-lived anyway; phase-8
-/// revisit).
+/// Oneshot children get no record of their own (two file ops on the dispatch
+/// critical path — the item-12 tax); a daemon's oneshots go in its
+/// append-only SpawnLedger instead, which the next daemon's OrphanReaper reads.
+///
+/// Liveness is the GROUP's, never the leader's alone (ADR-0010, 2026-10-19
+/// amendment): a leader that exited can leave members alive in its process
+/// group — a forked grandchild, the measured case — and a record is stale
+/// only once the whole group is empty. `Classify` is the one verdict the
+/// sweep, doctor and the boot reap all read.
 internal static class ChildRecords
 {
     /// Test seam (the harness-dir idiom): the suite must never write the
@@ -38,9 +44,92 @@ internal static class ChildRecords
         SweepOnce();
     }
 
+    /// `DaemonStartTime` is the owning daemon's own start-time identity (0 in
+    /// records written before 0.1.2): with it, "is the owner alive" is the
+    /// same pid + start-time proof as the child's, not a cmdline guess.
     internal sealed record Record(
         int Pid, long StartTime, string Command, string Entry, string Event,
-        string Mode, int DaemonPid, DateTimeOffset SpawnedAt);
+        string Mode, int DaemonPid, DateTimeOffset SpawnedAt, long DaemonStartTime = 0);
+
+    /// This process's start-time identity — what its records name as owner.
+    internal static long SelfStartTime => _selfStart ??= ProcStartTime(Environment.ProcessId);
+    private static long? _selfStart;
+
+    /// What a record's pid is now.
+    internal enum ChildState
+    {
+        /// Leader dead and its group empty: nothing left — a stale record.
+        Gone,
+        /// The pid is alive but started at another time: recycled onto a
+        /// stranger. The original group is gone too — the kernel never hands
+        /// out a pid still in use as a process-group id — so: stale.
+        Reused,
+        /// Leader alive, start time proven equal.
+        Alive,
+        /// Leader alive, but the record has no start time to prove it with
+        /// (unreadable at spawn): kept, reported, never signaled.
+        Unproven,
+        /// Leader dead, yet kill(-pid, 0) finds its group: members (a forked
+        /// grandchild) outlived it. Still the ORIGINAL group, by the same
+        /// kernel rule — a pgid's number is not reissued while the group lives.
+        GroupSurvives,
+    }
+
+    /// The probes `Classify` reads, injectable so the decision table is
+    /// testable without staging every process shape.
+    internal sealed record Probes(Func<int, bool> PidAlive, Func<int, bool> GroupAlive, Func<int, long> StartTime)
+    {
+        internal static readonly Probes Real = new(
+            pid => ProcessGroup.IsAlive(pid, pgroup: false, proc: null),
+            pid => ProcessGroup.IsAlive(pid, pgroup: true, proc: null),
+            ProcStartTime);
+    }
+
+    internal static ChildState Classify(int pid, long recordedStart, Probes? probes = null)
+    {
+        var p = probes ?? Probes.Real;
+        if (!p.PidAlive(pid)) return p.GroupAlive(pid) ? ChildState.GroupSurvives : ChildState.Gone;
+        if (recordedStart == 0) return ChildState.Unproven;
+        return p.StartTime(pid) == recordedStart ? ChildState.Alive : ChildState.Reused;
+    }
+
+    internal static bool IsStale(ChildState s) => s is ChildState.Gone or ChildState.Reused;
+
+    /// Is the record's owning engine still alive? With a recorded owner start
+    /// time, exactly the child's proof. Without one (a pre-0.1.2 record), the
+    /// old guard: a live captainHook process that is not this one — a boot
+    /// reap runs before its daemon spawns anything, so a record naming this
+    /// pid is a dead predecessor's that happened to share it.
+    internal static bool OwnerAlive(Record rec, Probes? probes = null)
+    {
+        var p = probes ?? Probes.Real;
+        if (!p.PidAlive(rec.DaemonPid)) return false;
+        if (rec.DaemonStartTime != 0) return p.StartTime(rec.DaemonPid) == rec.DaemonStartTime;
+        return rec.DaemonPid != Environment.ProcessId && IsCaptainHookProcess(rec.DaemonPid);
+    }
+
+    /// A live captainHook engine, in ANY mode — a collapsed run owns the
+    /// records of the residents it degrades to oneshot lifecycle, and its
+    /// children are no orphans while it runs. Linux: argv names captainHook;
+    /// macOS: the executable path does (ADR-0012 d3).
+    internal static bool IsCaptainHookProcess(int pid)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                return File.ReadAllText($"/proc/{pid}/cmdline").Split('\0')
+                    .Any(a => a.Contains("captainHook", StringComparison.Ordinal));
+            }
+            catch { return false; }   // can't read cmdline: cannot prove a live owner
+        }
+        try
+        {
+            using var proc = System.Diagnostics.Process.GetProcessById(pid);
+            return (proc.MainModule?.FileName ?? "").Contains("captainHook", StringComparison.Ordinal);
+        }
+        catch { return false; }
+    }
 
     /// Write the record for a just-spawned resident child. Returns the path
     /// (for the confirmed-death delete) or null when best-effort failed.
@@ -54,16 +143,8 @@ internal static class ChildRecords
             SweepOnce();
             var path = Path.Combine(Dir, $"child-{pid}.json");
             var rec = new Record(pid, ProcStartTime(pid), command, entry, evt,
-                                 "resident", Environment.ProcessId, DateTimeOffset.UtcNow);
-            // Atomic write (temp + rename): a deploy handoff legitimately
-            // overlaps two daemons, and the incumbent's sweep must never
-            // read — and delete-as-unparseable — a successor's half-written
-            // record.
-            var tmp = path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(rec));
-            try { File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
-            catch (Exception) { }
-            File.Move(tmp, path, overwrite: true);
+                                 "resident", Environment.ProcessId, DateTimeOffset.UtcNow, SelfStartTime);
+            WriteAtomic(path, rec);
             return path;
         }
         catch (Exception ex)
@@ -75,6 +156,18 @@ internal static class ChildRecords
             });
             return null;
         }
+    }
+
+    /// Atomic write (temp + rename): a deploy handoff legitimately overlaps
+    /// two daemons, and the incumbent's sweep must never read — and
+    /// delete-as-unparseable — a successor's half-written record.
+    internal static void WriteAtomic(string path, Record rec)
+    {
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(rec));
+        try { File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+        catch (Exception) { }
+        File.Move(tmp, path, overwrite: true);
     }
 
     /// Delete at CONFIRMED GROUP DEATH (never mere leader exit — the
@@ -120,17 +213,12 @@ internal static class ChildRecords
         catch (Exception) { return 0; }   // gone, or start time unreadable
     }
 
-    /// Does the pid exist at all (zombies count, per the /proc semantics this
-    /// replaces)? POSIX kill(pid, 0) — works identically on Linux and macOS,
-    /// so the sweep needs no /proc (ADR-0012 decision 3).
-    private static bool PidExists(int pid) =>
-        ProcessGroup.IsAlive(pid, pgroup: false, proc: null);
-
-    /// Once per process: sweep records whose pid is gone or whose starttime
-    /// no longer matches (pid reused) — pre-phase-8 hygiene so the dir cannot
-    /// grow unboundedly across daemon crashes. A LIVE record that still
-    /// matches is left alone even if its daemon died: that is precisely the
-    /// orphan evidence doctor-orphans will want.
+    /// Once per process: sweep records whose group is empty or whose pid was
+    /// reused — hygiene so the dir cannot grow unboundedly across daemon
+    /// crashes. A LIVE record is left alone even if its daemon died, and so is
+    /// one whose leader exited while its group lives on: that is precisely the
+    /// orphan evidence the boot reap and doctor read. (Liveness via signal 0 —
+    /// POSIX on both targets, no /proc, ADR-0012 d3.)
     private static void SweepOnce()
     {
         if (Interlocked.Exchange(ref _swept, 1) == 1) return;
@@ -141,8 +229,7 @@ internal static class ChildRecords
                 try
                 {
                     var rec = JsonSerializer.Deserialize<Record>(File.ReadAllText(f));
-                    if (rec is null || !PidExists(rec.Pid)
-                        || (rec.StartTime != 0 && ProcStartTime(rec.Pid) != rec.StartTime))
+                    if (rec is null || IsStale(Classify(rec.Pid, rec.StartTime)))
                         File.Delete(f);
                 }
                 catch (Exception) { File.Delete(f); }   // unparseable = no evidence value

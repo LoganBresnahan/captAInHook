@@ -170,27 +170,27 @@ public static class Doctor
         return verdicts;
     }
 
-    /// Report ORPHANED resident children (ADR-0010 phase 8, doctor-orphans):
-    /// the SAME double-guarded verdict template as the daemon reap, aimed at a
-    /// second entity class — `~/.captainHook/children/child-<pid>.json`. An
-    /// orphan is a child that escaped every kill path: its record's pid is
-    /// still ALIVE with a MATCHING /proc starttime (the pid-reuse guard — a
-    /// recycled pid running something else has a different starttime), yet its
-    /// owning daemon is GONE (the canonical door a resident dies through is its
-    /// daemon's SIGTERM/SIGKILL; a daemon that was itself SIGKILLed before it
-    /// could drain leaves its children behind). REPORT-ONLY: doctor NEVER
-    /// signals the child — a misclassification is a wrong trail line, never a
-    /// killed live process (why this slice needs no adversarial verify). Stale
-    /// records (dead pid / starttime drift / unparseable) are cleaned in
-    /// passing — the same hygiene ChildRecords.SweepOnce does at daemon start,
-    /// available on demand here. `childrenDir` and `isDaemonAlive` are test
-    /// seams (the suite must never read the live children tree, and must be able
-    /// to force the owner dead).
-    public static IReadOnlyList<DoctorVerdict> SweepOrphans(
-        string? childrenDir = null, Func<int, bool>? isDaemonAlive = null)
+    /// Report ORPHANED children (ADR-0010 phase 8, doctor-orphans; group-aware
+    /// since the 2026-10-19 amendment): the SAME verdict template as the
+    /// daemon reap, aimed at `~/.captainHook/children/` — resident records
+    /// `child-<pid>.json`, plus each dead daemon's oneshot ledger
+    /// `daemon-<pid>.spawns`. An orphan outlived its owner: its record's pid
+    /// is ALIVE with a MATCHING start time (the pid-reuse guard), or its
+    /// leader exited while its PROCESS GROUP lives on (a forked grandchild —
+    /// the measured case the leader-only check used to sweep as stale,
+    /// erasing the only evidence) — and the owning engine is gone.
+    /// REPORT-ONLY: doctor NEVER signals; the next daemon start kills what it
+    /// reports (OrphanReaper — the same ChildRecords.Classify verdicts).
+    /// Stale records (group empty / pid reused / unparseable) are cleaned in
+    /// passing, the hygiene ChildRecords.SweepOnce does at daemon start;
+    /// ledgers are only read — the next boot reap owns them. `childrenDir`
+    /// and `isDaemonAlive` are test seams (the suite must never read the live
+    /// children tree, and must be able to force the owner dead).
+    internal static IReadOnlyList<DoctorVerdict> SweepOrphans(
+        string? childrenDir = null, Func<ChildRecords.Record, bool>? isDaemonAlive = null)
     {
         var dir = childrenDir ?? ChildRecords.Dir;
-        var ownerAlive = isDaemonAlive ?? IsCaptainHookDaemon;
+        var ownerAlive = isDaemonAlive ?? (r => ChildRecords.OwnerAlive(r));
         var verdicts = new List<DoctorVerdict>();
         if (!Directory.Exists(dir)) return verdicts;
 
@@ -205,26 +205,32 @@ public static class Doctor
                 continue;
             }
 
-            // Child gone, or pid reused (starttime drift): a stale record, not
-            // an orphan — sweep it, don't report it. Liveness via signal 0
-            // (IsAlive), not /proc existence — same semantics (zombies count),
-            // POSIX on both targets (ADR-0012 d3).
-            if (!IsAlive(rec.Pid)
-                || (rec.StartTime != 0 && ChildRecords.ProcStartTime(rec.Pid) != rec.StartTime))
+            // Group empty, or pid reused: a stale record, not an orphan —
+            // sweep it, don't report it. Liveness via signal 0, POSIX on both
+            // targets (ADR-0012 d3).
+            var state = ChildRecords.Classify(rec.Pid, rec.StartTime);
+            if (ChildRecords.IsStale(state))
             {
                 TryDelete(f);
                 continue;
             }
 
-            // Alive + identity-proven. Owned by a LIVE captainHook daemon? Then
-            // healthy — that daemon will kill it at drain; not an orphan.
-            if (ownerAlive(rec.DaemonPid)) continue;
+            // Owned by a LIVE engine? Then healthy — it kills its own.
+            if (ownerAlive(rec)) continue;
+            verdicts.Add(Orphan($"child-{rec.Pid}", rec, state));
+        }
 
-            // Alive child, dead/foreign owning daemon ⇒ ORPHAN. Report only.
-            verdicts.Add(new DoctorVerdict(
-                $"child-{rec.Pid}", "orphan",
-                $"resident '{rec.Entry}' (event {rec.Event}, pid {rec.Pid}) outlived its daemon " +
-                $"(pid {rec.DaemonPid}, gone) — still running; kill the process group or run the payload's own cleanup"));
+        foreach (var ledger in Directory.EnumerateFiles(dir, "daemon-*.spawns").OrderBy(x => x, StringComparer.Ordinal))
+        {
+            IReadOnlyList<ChildRecords.Record> inFlight;
+            try { inFlight = SpawnLedger.InFlight(ledger); }
+            catch { continue; }
+            foreach (var rec in inFlight)
+            {
+                var state = ChildRecords.Classify(rec.Pid, rec.StartTime);
+                if (ChildRecords.IsStale(state) || ownerAlive(rec)) continue;
+                verdicts.Add(Orphan($"oneshot-{rec.Pid}", rec, state));
+            }
         }
 
         foreach (var v in verdicts)
@@ -236,32 +242,15 @@ public static class Doctor
         return verdicts;
     }
 
-    /// Is `pid` a LIVE captainHook daemon (not a reused pid)? The child-owner
-    /// guard: alive AND its cmdline names captainHook with --daemon. A dead pid,
-    /// or one recycled onto an unrelated process, both mean the owning daemon is
-    /// gone — so its live child is an orphan.
-    private static bool IsCaptainHookDaemon(int pid)
+    private static DoctorVerdict Orphan(string id, ChildRecords.Record rec, ChildRecords.ChildState state)
     {
-        if (!IsAlive(pid)) return false;
-        if (OperatingSystem.IsLinux())
-        {
-            try
-            {
-                var argv = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0');
-                return argv.Any(a => a.Contains("captainHook", StringComparison.Ordinal)) && argv.Contains("--daemon");
-            }
-            catch { return false; }   // can't read cmdline: cannot prove a live owner
-        }
-        // macOS (ADR-0012 d3, the DefaultIsOurs pattern): executable-name proof
-        // without argv — the same N3 residue (no --daemon check off-Linux). A
-        // misread here is a wrong doctor.orphan trail line, never a signal:
-        // orphan reporting stays report-only by construction.
-        try
-        {
-            using var proc = System.Diagnostics.Process.GetProcessById(pid);
-            return (proc.MainModule?.FileName ?? "").Contains("captainHook", StringComparison.Ordinal);
-        }
-        catch { return false; }
+        var what = $"{rec.Mode} '{rec.Entry}' (event {rec.Event}, pid {rec.Pid})";
+        var detail = state == ChildRecords.ChildState.GroupSurvives
+            ? $"{what} exited, but its process group outlived its daemon (pid {rec.DaemonPid}, gone) — "
+              + $"members still running; the next daemon start kills the group, or: kill -TERM -{rec.Pid}"
+            : $"{what} outlived its daemon (pid {rec.DaemonPid}, gone) — still running; "
+              + "the next daemon start kills it, or kill its process group yourself";
+        return new DoctorVerdict(id, "orphan", detail);
     }
 
     private static void TryDelete(string path)

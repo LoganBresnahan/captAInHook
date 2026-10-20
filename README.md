@@ -199,7 +199,8 @@ both architectures, and by sandbox runs on Apple-silicon hardware
   `~/.captainHook/handlers.json` (any language; strict JSON wire on
   stdin/stdout): `oneshot` spawn-per-dispatch or `resident` daemon-held warm
   children with readiness handshake, per-handler budgets, a stripped env
-  allowlist, group-kill discipline, hot reload, and orphan detection.
+  allowlist, group-kill discipline, hot reload, and orphan cleanup (a
+  SIGKILLed daemon's leftover children are killed when the next one starts).
   Working retriever/memory demo scripts in `examples/payloads/`
   ([ADR-0010](doc/adr/0010-exec-handlers.md)).
 - **Install UX + trust model** — the GUI installs/edits/uninstalls handlers

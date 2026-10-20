@@ -258,6 +258,70 @@ its lessons are imported wholesale (§ Pattern lineage).
      degrade; the winning rung rides `exec.spawn` as `spawner=`. The kill
      half, the pid/pgid identity, and every semantic above are unchanged:
      bosun also execs in place.)*
+     *(**2026-10-19 amendment — a hard daemon death, and who reaps after
+     it.** Every orderly path above kills children as groups; a daemon
+     that is SIGKILLed (OOM killer, `kill -9`, a doctor escalation past its
+     grace) runs none of them. Measured against the installed v0.1.1, in a
+     sandbox, on Linux (x86_64, WSL2) and macOS (26.7.1, arm64) with
+     identical results — three residents (one that exits on stdin EOF, one
+     that ignores EOF, one that forks `sleep &` into its group) and a oneshot
+     mid-run (`sleep 600`), survivors matched by pid + start time:*
+
+     | child | SIGKILL | idle-exit | SIGTERM drain | SIGKILL, next hook starts a daemon, doctor |
+     |---|---|---|---|---|
+     | resident, exits on EOF | dies on EOF | killed | killed | dies on EOF |
+     | resident, ignores EOF | **alive at 60 s** | killed | killed | **alive at 60 s**; doctor reports it, nothing kills it |
+     | forked grandchild | **alive at 60 s** | killed | killed | **alive at 60 s, invisible**: the sweep deleted its leader's record |
+     | oneshot mid-run | **alive** until its own end | n/a | cut at the drain deadline (~10 s), fail-open | **alive**; never recorded |
+
+     *Two holes. (1) Liveness keyed on the LEADER: `ChildRecords.SweepOnce`
+     and doctor read "leader pid gone" as stale and deleted the record while
+     its group still had members — the grandchild's only evidence (the same
+     bug class the kill path's group-aware `IsAlive` already fixed). (2)
+     Oneshots had no record at all. So: **(a) the boot reap** —
+     `OrphanReaper`, run by every daemon that wins its rendezvous, BEFORE it
+     spawns anything (so no record it acts on can be its own), kills in the
+     background (a 2 s grace never delays the bind). Per record whose owner
+     is not a live engine: leader alive with matching start time ⇒ TERM the
+     group → 2 s → KILL; leader dead but `kill(-pgid, 0)` finds the group ⇒
+     the same group kill; leader alive with another start time ⇒ pid reused,
+     delete only; no recorded start time ⇒ unprovable, never signaled. A
+     dead leader's live group is still the ORIGINAL group: the kernel never
+     reissues a pid still in use as a pgid (doc/platform.md § Process
+     groups). One `daemon.reapOrphan` per kill. The owner check gained the
+     same identity proof as the child: records now carry `DaemonStartTime`,
+     and a collapsed run — not a `--daemon` — counts as a live owner of the
+     degraded residents it runs (the cold path starts a daemon WHILE a
+     collapsed run is mid-hook; the old `--daemon`-only guard would have let
+     the new daemon kill them). **(b) Group-aware staleness** — one verdict,
+     `ChildRecords.Classify`, read by the sweep, doctor and the reap: a
+     record is stale only when its whole group is empty or its pid was
+     reused; doctor reports the surviving-group case and stays report-only.
+     **(c) The oneshot spawn ledger** — `children/daemon-<pid>.spawns`, one
+     append-only line per oneshot spawn and a `Done` line when the dispatch
+     lets go, on an fd held open for the daemon's life: two `write(2)`s per
+     spawn, no create, unlink or fsync — not the two file ops per spawn the
+     item-12 tax refused. The Done line is what makes it safe: the reap's
+     candidates are exactly the spawns in flight at the death, never every
+     oneshot the daemon ever ran (whose recycled pids could otherwise draw a
+     kill). The boot reap turns a dead daemon's in-flight entries into
+     ordinary records (a second hard death mid-reap still leaves them
+     findable) and deletes the ledger; an orderly exit deletes its own —
+     unless the drain's child phase timed out, when it stays for the next
+     boot. Collapsed runs keep no ledger: they are bounded by the hook that
+     runs them. **Rejected: `prctl(PR_SET_PDEATHSIG)` in bosun** (bosun's
+     `--pdeathsig`). [ADR-0014](0014-bosun-spawn-wrapper.md) d5 already
+     deferred it because it fires when the parent's forking THREAD exits,
+     and the engine spawns from pooled threads — it would kill healthy
+     payloads; that still holds. The measurement adds two more reasons: it
+     is Linux-only (macOS has no equivalent short of a resident watcher, and
+     bosun execs in place, so nothing stays to watch), and it signals only
+     the direct child — the forked grandchild, one of the three measured
+     survivors, is out of its reach. Records + a boot reap cover all three
+     on both OSes.
+     Residual, accepted like doctor's: a pid recycled onto a stranger that
+     itself leads a group, dies, and leaves members, all between the death
+     and the next daemon start.)*
    - Escalated workers fast-fail per fail mode, unchanged.
 
 7. **Latency doctrine is loud guidance, not a hard gate.** Config may put any
@@ -382,7 +446,11 @@ child-process specifics; children that speak MCP.
   child pid alive + `/proc` starttime matches + owning daemon gone/not-a-live-
   captainHook-daemon ⇒ ORPHAN, reported via `doctor.orphan`, REPORT-ONLY (never
   signals the child: a misclassification is a wrong trail line, not a killed
-  process); stale records are swept in passing). The reload reuses the exact
+  process); stale records are swept in passing). *(2026-10-19: report-only
+  stays doctor's — the KILL now belongs to the next daemon start, the boot
+  reap of decision 6's amendment; staleness and the owner check became
+  group-aware and identity-proven there, and oneshots gained the spawn
+  ledger.)* The reload reuses the exact
   restart/drain kill paths (a
   CHANGE rides `TrackSwap`, a REMOVE the fire-and-forget disposal the drain
   awaits), so the leak surface does not grow with the new seam — the reconcile
@@ -634,16 +702,18 @@ doctor-orphans + observability):
 | oneshot adapter (answer/exit race, reply-then-linger, echo-if-present-must-match) | `dotnet/captainHook/Handlers/ExecHandler.cs` |
 | resident runtime (`ChildState` machine, three-way readiness race, lock-step + mandatory echo, `IEagerStart`, fail-mode-while-warming) | `dotnet/captainHook/Handlers/ResidentExecHandler.cs` |
 | kill mechanics (group TERM→grace→KILL, group-aware liveness) + spawn-prefix rungs (ADR-0014: `SpawnPrefix`/`Resolve`/`Prefix`, argv in `ExecHandler.BuildPsi`) | `dotnet/captainHook/Handlers/ProcessGroup.cs` |
-| child pid/identity records + once-per-process sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
-| doctor-orphans (report-only; double-guard: pid+starttime identity, live-owner check) | `dotnet/captainHook/Core/Doctor.cs` (`SweepOrphans`, `IsCaptainHookDaemon`), `Program.cs` (doctor verb) |
+| child pid/identity records + once-per-process sweep; the one staleness verdict (`Classify`, group-aware) + owner identity (`OwnerAlive`, `DaemonStartTime`) | `dotnet/captainHook/Handlers/ChildRecords.cs` |
+| boot-time orphan reap (plan before the first spawn, kill in the background) | `dotnet/captainHook/Handlers/OrphanReaper.cs`, wired in `Core/DaemonHost.cs` (`childrenDir`, production-only via `Program.cs`) |
+| oneshot spawn ledger (`daemon-<pid>.spawns`: spawn + Done lines) | `dotnet/captainHook/Handlers/SpawnLedger.cs`; appended from `ExecHandler` (spawn, `Untrack`, teardown) |
+| doctor-orphans (report-only; group-aware; resident records + dead daemons' ledgers) | `dotnet/captainHook/Core/Doctor.cs` (`SweepOrphans`), `Program.cs` (doctor verb) |
 | observability (child state + expected-vs-registered) | `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot` correlation, `HandlerStatus`), `Handlers/ResidentExecHandler.cs`, `Api/ApiReadModel.cs` (`Handlers()` join), `Api/ApiDtos.cs` (`HandlerDto`/`HandlersDto`/`ExpectedHandlerDto`), `web/src/SupervisionPanel.tsx` (renamed `HandlersPanel.tsx` by ADR-0015 d6) |
 | teardown seam (`IEagerStart`, `TrackSwap` admission, `DisposeHandlersAsync`, `SubscribeEscalated`) | `dotnet/captainHook/Core/Dispatcher.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | hot-reload seam (`Reconcile` diff, `AssignIds` id stability, `ExecFingerprint` injective config identity, volatile `_runners` swap, `ReloadingHandlers` stat-gate) + `Supervisor.Remove` | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | registration file (tri-state, strict parse, budget/readiness bounds) | `dotnet/captainHook/Core/ExecHandlersFile.cs` |
 | registration wiring (warns, resident degrade-not-stub, drain-child phase, harness/drain hints, per-dispatch reconcile) | `dotnet/captainHook/Core/HookRun.cs`, `Core/DaemonHost.cs` |
-| trail events (src `exec`) | `exec.spawn`, `exec.ready`, `exec.notReady`, `exec.answered`, `exec.exit`, `exec.stderr`, `exec.kill`, `exec.protocolError`, `exec.recordError` |
+| trail events (src `exec`) | `exec.spawn`, `exec.ready`, `exec.notReady`, `exec.answered`, `exec.exit`, `exec.stderr`, `exec.kill`, `exec.protocolError`, `exec.recordError`, `exec.ledgerError` |
 | trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout`, `handlers.residentDegraded`, `handlers.collapsedTeardownTimeout`, `handlers.reload` |
 | collapsed degrade + demo payloads | `Core/HookRun.cs` (`collapsedEvent` filter + teardown-at-drain), `examples/payloads/` (retriever resident + memory oneshot + handlers.json) |
-| trail events (src `dispatcher`/`daemon`/`sup`/`doctor`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout`, `actor.remove`, `doctor.orphan` |
-| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, CHANGE-mid-dispatch misattribution guard, resident-child-state Snapshot, the add-then-remove daemon E2E), `DoctorOrphansTests` (alive-orphan reported, healthy-owned ignored, stale/pid-reuse/corrupt swept), `ApiReadEndpointsTests` (child state null on coded, expected-vs-registered join), the Handlers-view e2e |
+| trail events (src `dispatcher`/`daemon`/`sup`/`doctor`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout`, `daemon.reapOrphan`, `daemon.reapError`, `actor.remove`, `doctor.orphan` |
+| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, CHANGE-mid-dispatch misattribution guard, resident-child-state Snapshot, the add-then-remove daemon E2E), `DoctorOrphansTests` (alive-orphan reported, healthy-owned ignored, stale/pid-reuse/corrupt swept), `OrphanReaperTests` (the five-state verdict table, owner identity, plan targets/deletes, ledger in-flight/adoption/close, real perl-made groups: live orphan + dead-leader group killed, pid-reused never signaled, doctor reports both shapes, the daemon-start wiring), `release/smoke.sh` step 10 (a SIGKILLed installed daemon's three survivors reaped by the next one — Linux and macOS in CI), `ApiReadEndpointsTests` (child state null on coded, expected-vs-registered join), the Handlers-view e2e |
 | platform facts | `doc/platform.md` § Process groups (spawn wrappers, group signals, pgid persistence) |

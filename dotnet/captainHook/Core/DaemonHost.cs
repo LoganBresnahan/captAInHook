@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using CaptainHook.Actors;
 using CaptainHook.Api;
+using CaptainHook.Handlers;
 using CaptainHook.Mail;
 using CaptainHook.Wire;
 
@@ -40,7 +41,7 @@ public static class DaemonHost
         TimeSpan? idleWindow = null, Func<long>? clock = null, string? policyPath = null,
         int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null,
         string? uiDir = null, string? handlersPath = null, string? mailDir = null,
-        string? watchPath = null, TimeSpan? watchPoll = null)
+        string? watchPath = null, TimeSpan? watchPoll = null, string? childrenDir = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -73,6 +74,18 @@ public static class DaemonHost
             });
             return 0;
         }
+
+        // ---- reap what dead predecessors left (ADR-0010, 2026-10-19 amendment)
+        // Only when a children dir arrives — production passes the real one;
+        // a test daemon that passes none never reads (or signals from) the
+        // live tree. The PLAN runs here, before the dispatcher spawns a
+        // single child, so no record it acts on can be this daemon's own; the
+        // kills run in the background (a 2s grace must not delay the bind)
+        // and the drain awaits them. Then this daemon's own oneshot ledger
+        // opens — after the plan, which read any same-pid predecessor's.
+        var reap = childrenDir is null ? Task.CompletedTask : OrphanReaper.RunAsync(childrenDir);
+        var ledger = childrenDir is null ? null : SpawnLedger.Open(childrenDir);
+        if (ledger is not null) SpawnLedger.Current = ledger;
 
         // ---- warm up: everything expensive happens BEFORE the bind ----------
         var harnesses = new ReloadingHarnessRegistry(harnessDir);
@@ -405,6 +418,7 @@ public static class DaemonHost
         var cutCandidates = stats.Active;
         var childSw = Stopwatch.StartNew();
         var torn = 0;
+        var childrenProven = true;
         try
         {
             // Bounded belt-and-braces: every current disposable is an
@@ -417,6 +431,7 @@ public static class DaemonHost
         }
         catch (TimeoutException)
         {
+            childrenProven = false;
             Log.Warn("daemon", "daemon.drainChildrenTimeout", new LogFields
             {
                 DurMs = childSw.Elapsed.TotalMilliseconds,
@@ -447,6 +462,15 @@ public static class DaemonHost
                     ["resolved"] = cutCandidates - stats.Active,
                 },
             });
+        }
+        // The boot reap's kills are bounded by their own grace (≤ ~3s); the
+        // ledger goes with an orderly exit — kept when the child phase could
+        // not prove its oneshots dead, so the next boot reap still finds them.
+        await ExecHandler.BoundedAsync(reap, TimeSpan.FromSeconds(5));
+        if (ledger is not null)
+        {
+            if (ReferenceEquals(SpawnLedger.Current, ledger)) SpawnLedger.Current = null;
+            ledger.Close(delete: childrenProven);
         }
         return 0;   // `using rv` unlinks socket + pidfile; the lock file stays
     }

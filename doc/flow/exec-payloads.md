@@ -110,6 +110,42 @@ is wiped exactly when the forensic record matters (SIGKILLed daemon) —
 deleted only at confirmed GROUP death; a per-process sweep clears stale
 records (doctor-orphans, phase 8, is then pure read-side).
 
+### After a hard death: the boot reap (2026-10-19 amendment)
+
+Every path above needs a daemon alive to run it. A SIGKILLed daemon tells
+its children nothing but EOF, and measured on both OSes three kinds outlive
+it: a resident that ignores stdin EOF, any member of a resident's group (a
+forked grandchild), and a oneshot mid-run. The NEXT daemon kills them:
+
+```
+ daemon wins its rendezvous (TryAcquire)
+   │
+   ├─ OrphanReaper PLAN — synchronous, before the dispatcher spawns anything
+   │    daemon-*.spawns of a DEAD owner ─► in-flight entries (spawn, no Done)
+   │                                       become child-<pid>.json; ledger deleted
+   │    child-*.json, per record — ChildRecords.Classify:
+   │      Gone (leader dead, group empty) / Reused (start time differs) ─► delete
+   │      owner alive (pid + DaemonStartTime; a collapsed run counts) ─► leave
+   │      Alive (start time proven)          ─► target: kill its group
+   │      GroupSurvives (leader dead, -pgid answers) ─► target: kill the group
+   │      Unproven (no recorded start time)  ─► keep; doctor reports; no signal
+   ├─ SpawnLedger.Open — daemon-<ownpid>.spawns, fd held for the daemon's life
+   ├─ warm up, bind, serve …                     (meanwhile, in the background:)
+   │                                  KILL: TERM group → 2s → KILL, daemon.reapOrphan,
+   │                                        record deleted if it is still the same one
+   └─ drain: … child phase … await the reap (bounded) → ledger closed + deleted
+             (kept when the child phase timed out — the next boot reaps from it)
+```
+
+The ledger is the oneshot's record without the item-12 tax: per spawn, one
+appended line at Process.Start and a `{"Done":pid}` line when the dispatch
+lets go (`Untrack`, or teardown) — two `write(2)`s on an open fd, no create,
+unlink or fsync. The Done lines narrow the reap's candidates to what was in
+flight at the death. Collapsed runs keep none (`SpawnLedger.Current` is null
+outside a daemon; a test daemon passes no `childrenDir`, so it never reads or
+signals from the live tree). Doctor reads the same verdict, reports both
+shapes plus a dead daemon's in-flight oneshots, and still signals nothing.
+
 A child's stderr is drained in full but RECORDED capped: `exec.stderr` carries
 at most `ExecHandler.StderrCap` (2048) characters, and when it cuts, the row
 says so — `truncated: true` plus the `chars` there were, because a reader
@@ -194,12 +230,14 @@ exit never restarts a retired worker), logged `actor.remove`.
 | oneshot adapter (answer/exit race, reply-then-linger, echo-if-present) | `dotnet/captainHook/Handlers/ExecHandler.cs` |
 | resident runtime (state machine, lock-step, mandatory echo, eager start) | `dotnet/captainHook/Handlers/ResidentExecHandler.cs` |
 | kill mechanics (group TERM→grace→KILL, group-aware liveness) + the spawn-prefix rungs (`SpawnPrefix`, `Resolve`, `Prefix`) | `dotnet/captainHook/Handlers/ProcessGroup.cs`; argv assembled in `ExecHandler.BuildPsi` |
-| child records + sweep | `dotnet/captainHook/Handlers/ChildRecords.cs` |
+| child records + sweep + the one staleness verdict (`Classify`, group-aware) + owner identity (`OwnerAlive`) | `dotnet/captainHook/Handlers/ChildRecords.cs` |
+| boot-time orphan reap (plan before the first spawn; background kills; `daemon.reapOrphan`) | `dotnet/captainHook/Handlers/OrphanReaper.cs`; `Core/DaemonHost.cs` (`childrenDir`, passed by `Program.cs` only) |
+| oneshot spawn ledger | `dotnet/captainHook/Handlers/SpawnLedger.cs`; appended by `ExecHandler` (spawn, `Untrack`, `DisposeAsync`) |
 | admission seam (`IEagerStart`, `TrackSwap`, `DisposeHandlersAsync`) | `dotnet/captainHook/Core/Dispatcher.cs` |
 | hot-reload seam (`Reconcile`, `AssignIds`, `ExecFingerprint`, volatile `_runners`, `ReloadingHandlers`, `Supervisor.Remove`) | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
-| doctor-orphans (report-only double-guard) + observability (child state + expected-vs-registered) | `Core/Doctor.cs` (`SweepOrphans`), `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot`), `Api/ApiReadModel.cs` + `Api/ApiDtos.cs`, `web/src/HandlersPanel.tsx` |
+| doctor-orphans (report-only; group-aware; records + dead daemons' ledgers) + observability (child state + expected-vs-registered) | `Core/Doctor.cs` (`SweepOrphans`), `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot`), `Api/ApiReadModel.cs` + `Api/ApiDtos.cs`, `web/src/HandlersPanel.tsx` |
 | registration (tri-state file, warns, resident degrade, per-dispatch reconcile) | `dotnet/captainHook/Core/ExecHandlersFile.cs`, `Core/HookRun.cs` |
-| trail events | `exec.spawn/ready/notReady/answered/exit/stderr/kill/protocolError/recordError`, `handlers.malformed/entrySkipped/slowShape/fieldIgnored/budgetBeyondHarness/budgetBeyondDrain/readinessBeyondBudget/residentFanout/residentDegraded/collapsedTeardownTimeout/reload`, `handler.teardown(-Error)`, `daemon.drainChildren/drainCut/drainChildrenTimeout`, `actor.remove`, `doctor.orphan` |
-| pinned by | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `SpawnPrefixTests` (rung order, degrade, per-rung argv, the bosun `--` contract against a real in-place exec), `ResidentExecHandlerTests` (incl. the daemon E2E), `HandlersHotReloadTests` (reconcile diff + stat-gate + `Supervisor.Remove` + child-state Snapshot), `DoctorOrphansTests`, `ApiReadEndpointsTests` (expected-vs-registered) + the Handlers-view e2e (`panels.spec.ts`) |
+| trail events | `exec.spawn/ready/notReady/answered/exit/stderr/kill/protocolError/recordError/ledgerError`, `handlers.malformed/entrySkipped/slowShape/fieldIgnored/budgetBeyondHarness/budgetBeyondDrain/readinessBeyondBudget/residentFanout/residentDegraded/collapsedTeardownTimeout/reload`, `handler.teardown(-Error)`, `daemon.drainChildren/drainCut/drainChildrenTimeout/reapOrphan/reapError`, `actor.remove`, `doctor.orphan` |
+| pinned by | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `SpawnPrefixTests` (rung order, degrade, per-rung argv, the bosun `--` contract against a real in-place exec), `ResidentExecHandlerTests` (incl. the daemon E2E), `HandlersHotReloadTests` (reconcile diff + stat-gate + `Supervisor.Remove` + child-state Snapshot), `DoctorOrphansTests`, `OrphanReaperTests` (verdict table, ledger, real-group reaps, daemon-start wiring), `release/smoke.sh` step 10 (SIGKILLed installed daemon, both OSes), `ApiReadEndpointsTests` (expected-vs-registered) + the Handlers-view e2e (`panels.spec.ts`) |
 | decisions | `doc/adr/0010-exec-handlers.md` (d1–d9 + amendments); the spawn prefix in `doc/adr/0014-bosun-spawn-wrapper.md` (d1–d5); platform facts in `doc/platform.md` § Process groups |
 | the wrapper itself | <https://github.com/LoganBresnahan/bosun> — pinned by tag + `SHA256SUMS` in `.claude/skills/deploy/SKILL.md` § 1a |

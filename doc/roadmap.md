@@ -1104,6 +1104,22 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [x] **28. A SIGKILLed daemon's children die when the next one starts** —
+  measured 2026-10-19 against the installed v0.1.1, Linux and macOS alike:
+  every orderly path kills children as groups, but after a hard daemon death
+  a resident that ignores stdin EOF, a resident's forked grandchild and a
+  oneshot mid-run all survived, and nothing ever killed them — doctor saw
+  only the first (its leader-only staleness check had deleted the
+  grandchild's record; oneshots had none). **Shipped (v0.1.2):**
+  [ADR-0010](adr/0010-exec-handlers.md) d6's 2026-10-19 amendment — a
+  boot-time reap (`OrphanReaper`: planned before the first spawn, kills in
+  the background, `daemon.reapOrphan`), group-aware staleness and an
+  identity-proven owner check shared by the sweep, doctor and the reap
+  (`ChildRecords.Classify` / `OwnerAlive`), and a per-daemon oneshot spawn
+  ledger (`SpawnLedger`, two appends per spawn). bosun pdeathsig rejected
+  (ADR-0014 d5's thread hazard, Linux-only, never reaches grandchildren).
+  `OrphanReaperTests`; release smoke step 10 on every target.
+
 - [x] **27. `captainHook self` — the installer travels with the install** —
   [ADR-0020](adr/0020-release-archives-and-install.md) d8, the same spec as
   geex's and pharos's `self`. Every archive carries `install.sh`;

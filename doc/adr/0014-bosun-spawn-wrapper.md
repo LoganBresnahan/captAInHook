@@ -102,6 +102,11 @@ executable, no NIF required.
    dedicated long-lived spawn thread lands, or live orphan pressure exceeds
    what `doctor` absorbs. (`--parent` narrows the startup race only; it cannot
    close the pooled-thread hazard. bosun's README documents this edge.)
+   *(2026-10-19: the orphan side of the trigger was answered without it — a
+   measured hard-death leak, closed by a boot-time reap in the next daemon
+   ([ADR-0010](0010-exec-handlers.md) d6, 2026-10-19 amendment), which also
+   reaches the forked grandchildren and macOS that pdeathsig cannot. Stays
+   deferred.)*
 
 ## Rejected alternatives
 
