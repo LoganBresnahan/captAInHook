@@ -183,33 +183,43 @@ public class TrailKeeperTests : IDisposable
     [Fact]
     public async Task ConcurrentAppends_RacingRotations_LoseAndSplitNothing()
     {
-        const int writers = 4, perWriter = 5000;
+        // The writers keep going until the keeper has really raced them: a
+        // fixed line count finished before a 2-core CI runner scheduled the
+        // keeper twice, and the test then proved nothing (and said so).
+        const int writers = 4, minPerWriter = 2000, minRotations = 20;
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
         var k = Keeper(segmentBytes: 2048);
         using var stop = new CancellationTokenSource();
         var rotations = 0;
         var failedAppends = 0;
-        var keeper = Task.Run(async () =>
+        var written = new int[writers];
+        // Dedicated threads, not pool tasks: the race must not depend on how
+        // many cores the runner has.
+        var keeper = Task.Factory.StartNew(() =>
         {
             while (!stop.IsCancellationRequested)
             {
                 if (k.Tick().Rotated is not null) Interlocked.Increment(ref rotations);
-                await Task.Yield();
+                Thread.Yield();
             }
-        });
-        await Task.WhenAll(Enumerable.Range(0, writers).Select(w => Task.Run(() =>
+        }, TaskCreationOptions.LongRunning);
+        await Task.WhenAll(Enumerable.Range(0, writers).Select(w => Task.Factory.StartNew(() =>
         {
-            for (var i = 0; i < perWriter; i++)
+            var i = 0;
+            while (i < minPerWriter || (Volatile.Read(ref rotations) < minRotations && deadline.Elapsed < TimeSpan.FromSeconds(30)))
             {
                 // Both emitters, as in production: the shim's (wire lib) and the daemon's (F#).
                 var line = $"{{\"w\":{w},\"i\":{i},\"pad\":\"{new string('p', 40)}\"}}";
                 if (w % 2 == 0) WireJsonl.Append(Active, line);
                 else if (!CaptainHook.Actors.PosixTrail.append(Active, line + "\n")) Interlocked.Increment(ref failedAppends);
+                i++;
             }
-        })));
+            written[w] = i;
+        }, TaskCreationOptions.LongRunning)));
         stop.Cancel();
         await keeper;
 
-        Assert.True(rotations >= 2, $"the test must actually race rotations (got {rotations})");
+        Assert.True(rotations >= minRotations, $"the test must actually race rotations (got {rotations} in {deadline.Elapsed})");
         var seen = new ConcurrentDictionary<string, int>();
         foreach (var f in ShellTrail.Files(Active))
             foreach (var line in File.ReadLines(f))
@@ -217,9 +227,9 @@ public class TrailKeeperTests : IDisposable
                 Assert.Matches("^\\{\"w\":\\d,\"i\":\\d+,\"pad\":\"p{40}\"\\}$", line);   // whole
                 seen.AddOrUpdate(line[..line.IndexOf(",\"pad", StringComparison.Ordinal)], 1, (_, n) => n + 1);
             }
-        var missing = Enumerable.Range(0, writers).SelectMany(w => Enumerable.Range(0, perWriter).Select(i => $"{{\"w\":{w},\"i\":{i}"))
-            .Where(k => !seen.ContainsKey(k)).ToList();
-        Assert.True(missing.Count == 0, $"[{failedAppends} appends returned false] {missing.Count} lost of {writers * perWriter} over {rotations} rotations: {string.Join(" ", missing.Take(10))}");
+        var missing = Enumerable.Range(0, writers).SelectMany(w => Enumerable.Range(0, written[w]).Select(i => $"{{\"w\":{w},\"i\":{i}"))
+            .Where(key => !seen.ContainsKey(key)).ToList();
+        Assert.True(missing.Count == 0, $"[{failedAppends} appends returned false] {missing.Count} lost of {written.Sum()} over {rotations} rotations: {string.Join(" ", missing.Take(10))}");
         Assert.All(seen.Values, n => Assert.Equal(1, n));             // none doubled
     }
 }
