@@ -51,6 +51,13 @@ the build "until growth bites". Three things changed:
    keeps its per-call `O_APPEND` open (ADR-0004 N3), so a line racing the
    rename lands whole in one file or the other, never lost and never split.
    No writer holds the file open, which is what makes rename-rotation safe.
+   *(Slice 1 finding: "never lost" was not yet true. Both writers created a
+   missing file and reopened it exactly once, and a rotation landing between
+   the create and the reopen dropped the line: 1–3 lines in 20,000 across
+   ~50 racing rotations. Both now loop the create-and-reopen (up to 8 turns,
+   each on a fresh file). The race test drives both emitters and was
+   mutation-checked: one retry fails it in about 5 runs in 12, the loop in 0
+   of 45.)*
 
 2. **Only the daemon rotates; nobody else ever renames or deletes** (ADR-0009
    d6). A `TrailKeeper` in the daemon runs on a monotonic timer (every 60 s,
@@ -189,13 +196,15 @@ the build "until growth bites". Three things changed:
    a release smoke step that forces a tiny segment size and proves rotation,
    a resumed stream across it, and pruning.
 
-## Ground truth (to fill when built)
+## Ground truth (slice 1 built; slices 2–3 to come)
 
 | what | where |
 |---|---|
-| keeper (rotate, lock, prune, d8 guard) | `Core/TrailKeeper.cs` (new), started by `DaemonHost` |
+| keeper (rotate, lock, `.trail-seq`, prune, d8 guard), shipped dark | `Core/TrailKeeper.cs` (slice 1); started by `DaemonHost` in slice 3; `TrailKeeperTests` |
+| the segment model readers share (`Segments`, `HighWater`, `ActiveSeq`, `SegmentPath`) | `Core/TrailKeeper.cs`; `ShellTrail.Files` reads through it |
+| writers' create-and-reopen loop (rule 1's finding) | `captainHookWire/PosixTrail.cs` (`OpenAttempts`), `captainHookActors/Logging.fs` (`PosixTrail.append`) |
 | segment-aware cursor | `Api/TrailTail.cs` (`TrailCursor`) |
 | readers | `Api/ApiReadModel.cs` (`TrailEventId`), `Api/MailDeliveryFold.cs`, `Core/MailWatcher.cs`, `Core/ShellTrail.cs` |
-| events | `trail.rotate`, `trail.prune`, `trail.pruneHeld`, `trail.seqExhausted` (src `trail`) |
+| events | `trail.rotate`, `trail.rotateError`, `trail.prune`, `trail.pruneHeld`, `trail.seqExhausted` (src `trail`) |
 | high-water mark | `logs/.trail-seq` (written under `logs/.rotate.lock`) |
 | env | `CAPTAINHOOK_TRAIL_RETENTION_DAYS`, `CAPTAINHOOK_TRAIL_SEGMENT_MB` |

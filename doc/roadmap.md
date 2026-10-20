@@ -1151,7 +1151,13 @@ run live*. The framework underneath is what exists today.
   tail, `?tail=N`) with a retention cap (default ~30 days, configurable) and
   amend ADR-0007 d5 in the same change. Never touches shell-history.jsonl
   (item 34), and must not drop a segment before the 0.1.3 window's
-  `tool.shell` lines are copied out (ADR-0009 d8). ADR first, reviewed.
+  `tool.shell` lines are copied out (ADR-0009 d8). Designed in
+  [ADR-0021](adr/0021-trail-rotation-and-retention.md) (accepted after review:
+  a durable `.trail-seq` so ids never go backwards). Progress: **slice 1
+  built** — `TrailKeeper` (rotation under a lock, `.trail-seq`, mtime
+  retention, the d8 guard), shipped dark; it also fixed both trail writers,
+  whose single create-and-reopen retry could drop a line racing a rotation.
+  Slices 2 (segment-aware cursor) and 3 (readers, rotation on) to come.
 
 - [x] **31. `~` in handlers.json — one file, two homes** — a handlers.json
   kept in a dotfiles repo has to serve `/home/oof` and `/Users/dogdrool`. A

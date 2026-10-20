@@ -66,16 +66,26 @@ internal static class PosixTrail
     /// Append `text` to `path` as one O_APPEND write. Returns false if the
     /// bytes did not land — every caller is a log sink, so the decision to
     /// swallow stays with them.
+    private const int OpenAttempts = 8;
+
     internal static bool Append(string path, string text)
     {
         var cPath = new byte[Encoding.UTF8.GetByteCount(path) + 1];
         Encoding.UTF8.GetBytes(path, cPath);   // trailing 0 is the NUL terminator
 
-        var fd = sys_open(cPath, O_WRONLY | O_APPEND | O_CLOEXEC);
-        if (fd < 0)
+        // Absent ⇒ create, then open again — in a loop, because the daemon's
+        // trail rotation (ADR-0021) renames the active file away, and it can
+        // do so between our create and our reopen: one retry lost a line in
+        // roughly every fifty racing rotations under test. Each turn creates
+        // a fresh file, so failing them all needs a rotation between every
+        // create and reopen.
+        var fd = -1;
+        for (var attempt = 0; attempt < OpenAttempts && fd < 0; attempt++)
         {
+            fd = sys_open(cPath, O_WRONLY | O_APPEND | O_CLOEXEC);
+            if (fd >= 0) break;
             // Absent file: create it through the BCL (which owns directory
-            // creation and permissions anyway) and open exactly once more.
+            // creation and permissions anyway), then open again.
             if (Marshal.GetLastPInvokeError() != ENOENT) return false;
             try
             {
@@ -107,8 +117,8 @@ internal static class PosixTrail
             }
             catch (Exception) { return false; }
             fd = sys_open(cPath, O_WRONLY | O_APPEND | O_CLOEXEC);
-            if (fd < 0) return false;
         }
+        if (fd < 0) return false;
 
         try
         {

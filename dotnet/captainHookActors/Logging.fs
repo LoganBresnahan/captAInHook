@@ -164,8 +164,14 @@ module internal PosixTrail =
 
         let flags = O_WRONLY ||| O_APPEND ||| O_CLOEXEC
         let mutable fd = sys_open (cPath, flags)
-        if fd < 0 && Marshal.GetLastPInvokeError() = ENOENT then
-            // Absent file: the BCL owns creation (and the directory), then one retry.
+        // Absent ⇒ create, then open again — in a loop, because the daemon's
+        // trail rotation (ADR-0021) can rename the active file away between our
+        // create and our reopen (one retry lost a line in roughly every fifty
+        // racing rotations under test). Mirrors captainHookWire's PosixTrail.
+        let mutable attempts = 1
+        while fd < 0 && attempts < 8 && Marshal.GetLastPInvokeError() = ENOENT do
+            attempts <- attempts + 1
+            // Absent file: the BCL owns creation (and the directory), then retry.
             try
                 // 0600 AT CREATION: the two-argument open(2) above cannot carry
                 // a mode, so this BCL create is the only place on this side

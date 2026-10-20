@@ -156,26 +156,11 @@ public static class ShellTrail
 
     /// Every file that may hold the TRAIL, oldest first: ADR-0009 d3's
     /// numbered segments (`<stem>.<seq>.jsonl`, seq ascending) and then the
-    /// active file. Segmentation is designed but not built, so today this is
-    /// the active file alone. Only the migration and history's pre-migration
-    /// fallback read the trail now.
+    /// active file (TrailKeeper's segment model, ADR-0021). Only the migration
+    /// and history's pre-migration fallback read the trail now.
     public static IReadOnlyList<string> Files(string activePath)
     {
-        var files = new List<string>();
-        var dir = Path.GetDirectoryName(activePath);
-        var stem = Path.GetFileNameWithoutExtension(activePath);
-        var ext = Path.GetExtension(activePath);
-        if (dir is not null && Directory.Exists(dir))
-        {
-            var segments = new List<(long Seq, string Path)>();
-            foreach (var f in Directory.EnumerateFiles(dir, $"{stem}.*{ext}"))
-            {
-                var middle = Path.GetFileName(f)[(stem.Length + 1)..^ext.Length];
-                if (long.TryParse(middle, System.Globalization.NumberStyles.None, null, out var seq))
-                    segments.Add((seq, f));
-            }
-            files.AddRange(segments.OrderBy(s => s.Seq).Select(s => s.Path));
-        }
+        var files = TrailKeeper.Segments(activePath).Select(s => s.Path).ToList();
         if (File.Exists(activePath)) files.Add(activePath);
         return files;
     }
