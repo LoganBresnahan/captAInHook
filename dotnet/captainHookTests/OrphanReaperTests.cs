@@ -31,10 +31,17 @@ public class OrphanReaperTests : IDisposable
     private static Task Until(Func<bool> cond, TimeSpan timeout, string what) =>
         PollUntilAsync(() => Task.FromResult(cond()), timeout, what);
 
-    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "kill")]
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "kill")]
     private static extern int sys_kill(int pid, int sig);
     private static void KillGroup(int pgid) => sys_kill(-pgid, 9);
-    private static bool GroupAlive(int pgid) => sys_kill(-pgid, 0) == 0;
+    /// The production probe's semantics (ProcessGroup.IsAlive): anything but
+    /// ESRCH is alive. On macOS a SIGKILLed member launchd has not reaped yet
+    /// answers EPERM, not ESRCH; reading every -1 as "dead" let a test stop
+    /// waiting while that zombie lingered, then watch the sweep keep the
+    /// record — correctly — and fail (twice on macos-14, 49321d0).
+    private static bool GroupAlive(int pgid) => Answers(-pgid);
+    private static bool Answers(int target) =>
+        sys_kill(target, 0) == 0 || System.Runtime.InteropServices.Marshal.GetLastPInvokeError() != 3 /* ESRCH */;
 
     private static ChildRecords.Record Rec(int pid, long start, int daemonPid = 999_999, long daemonStart = 0,
                                            string mode = "resident", string entry = "e") =>
@@ -73,7 +80,7 @@ public class OrphanReaperTests : IDisposable
         {
             proc.Kill();   // the leader alone: the member stays in its group
             await proc.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-            await Until(() => sys_kill(leader, 0) != 0, TimeSpan.FromSeconds(10), "leader reaped");
+            await Until(() => !Answers(leader), TimeSpan.FromSeconds(10), "leader reaped");
             Assert.True(GroupAlive(leader), "the member keeps the group alive");
         }
         return (leader, member, start);

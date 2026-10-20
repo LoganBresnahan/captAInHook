@@ -137,6 +137,7 @@ switch_link() {  # switch_link <target> <link>
 # entry (the same inode as the link itself, never followed), the file system
 # folds case and there is nothing to do. Hooks never use it; they keep the
 # exact names.
+# shellcheck disable=SC2012  # one known name, and ls -di is the POSIX way to read a link's own inode
 entry_inode() { ls -di "$1" 2>/dev/null | awk '{ print $1 }'; }
 link_alias() {  # link_alias <version-dir>
   a=$BIN_DIR/$ALIAS
@@ -162,6 +163,7 @@ wired() {  # wired <settings>
   set -- "$1" "$BIN_DIR/captainShim"
   case $BIN_DIR in
     "$HOME"/*) r=${BIN_DIR#"$HOME"/}/captainShim
+               # shellcheck disable=SC2088  # literal text to grep for, never expanded
                set -- "$@" "\$HOME/$r" "\${HOME}/$r" "~/$r" ;;
   esac
   f=$1; shift
