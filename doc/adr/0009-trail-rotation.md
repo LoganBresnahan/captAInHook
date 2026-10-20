@@ -1,6 +1,7 @@
 # ADR-0009 — Trail growth: lock the resume-cursor contract now, defer segmented archive
 
-**Status:** Accepted
+**Status:** Accepted; amended 2026-10-19 (d7: the trail records agent shell
+commands, and `captainHook history` reads them back)
 **Date:** 2026-07-09
 
 ## Context
@@ -90,6 +91,49 @@ thing: the id contract.**
    amendment, `PosixTrail`), so decision 6's reasoning is sound as stated —
    and the warning against a held `FileStream` in the impl notes below is
    doubly load-bearing: it would undo this too.)*
+
+### Amendment 2026-10-19 (v0.1.3) — the trail gains a content class
+
+7. **The trail records each shell command an agent ran (`tool.shell`), and
+   `captainHook history` searches them.** Asked for as a search over
+   "commands already in the trail", the premise turned out false: every
+   `command` field in the maintainer's 355k-line, 87 MB trail was
+   `exec.spawn`'s payload path, and the engine never read `tool_input` at
+   all. The owner chose to record rather than to read agent-shell-history's
+   flattened bash-history lines (no cwd, no time, no real multi-line), so
+   history's filters (session, cwd, time, harness) and `--full` work.
+   - **What is recorded:** one `tool.shell` line (src `tool`) per
+     PostToolUse whose `tool_input.command` is a string, with `command`
+     whole, `cwd`, `harness`, the host's `tool` name as display data, and the
+     usual `sessionId`/`dispatchId`/`hookEvent`. Recognised by CONTENT, never
+     by tool name (ADR-0019's lesson: `Bash` and `run_shell` are both
+     shells). PostToolUse only, the line agent-shell-history draws: a command
+     denied or interrupted never ran.
+   - **Where:** both wire sites (`HookRun.CollapsedAsync`,
+     `DaemonHost.DispatchOneAsync`), BEFORE the dispatch-policy gate. The
+     policy decides which handlers see an event; what ran is a fact either
+     way (the reasoning that stamps session presence before the gate). Each
+     hook reaches exactly one site, so a command is recorded once.
+   - **What this changes about the trail:** it was operational telemetry
+     about captAInHook; it now also holds what agents typed. A token on a
+     command line lands here exactly as it lands in a shell history (or in
+     agent-shell-history's file). Stated, not scrubbed: the trail is already
+     0600 in a 0700 dir (ADR-0016 d13), and secret-scrubbing belongs to a
+     gate at the tool seam, not to holes in a record.
+   - **What history can see is what the trail still holds:** commands from
+     the first build that records them (0.1.3), for as long as the trail
+     keeps them. It says so when the trail holds none. The durable long-term
+     record stays agent-shell-history's file.
+   - **Reading:** streamed, one line at a time (a substring test for the
+     event before any JSON parse; ~1.2 s and ~60 MB flat over a synthetic
+     117 MB trail with 133k commands). It reads d3's numbered segments
+     (`<stem>.<seq>.jsonl`, ascending) before the active file, so history
+     needs no change the day rotation lands; today there is only the active
+     file.
+   - **Consequence for this ADR's trigger:** full command text makes the
+     trail grow faster than it did. "Growth bites" is closer, so the
+     trail-bounding phase is now a roadmap item (32) rather than a revisit
+     trigger only.
 
 ### The 0007 ↔ 0009 hand-off — so both halves get done at the right time
 

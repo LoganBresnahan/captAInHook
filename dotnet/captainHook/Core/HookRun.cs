@@ -308,6 +308,10 @@ public static class HookRun
         // emits carries it, so a digest can stitch the whole dispatch back together.
         dispatchId ??= Guid.NewGuid().ToString("N")[..8];
 
+        // The agent's shell command, if this is one that ran (ShellTrail):
+        // recorded before the policy gate, which decides handlers, not history.
+        ShellTrail.Record(evt, dispatchId);
+
         // Dispatch policy (ADR-0006): the ONE shared gate both wire sites call
         // (this and DaemonHost.DispatchOneAsync) so they cannot drift. A
         // short-circuit answers a valid Noop BEFORE the dispatcher is built — no

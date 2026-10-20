@@ -51,11 +51,13 @@ public class DeployGuardTests
     }
 
     // ADR-0020: the versioned install is the live tree too — its versions and
-    // its two bin links — and the legacy ~/.captainHook/bin stays guarded.
+    // its bin links (the lower-case alias since 0.1.3) — and the legacy
+    // ~/.captainHook/bin stays guarded.
     [Theory]
     [InlineData("rm -rf ~/.local/share/captainhook/versions/0.1.0")]
     [InlineData("ln -sf /tmp/evil ~/.local/bin/captainShim")]
     [InlineData("mv x ~/.local/bin/captainHook")]
+    [InlineData("ln -sf /tmp/evil ~/.local/bin/captainhook")]
     [InlineData("cp x ~/.captainHook/bin/captainHook")]
     public async Task AMutationOfTheVersionedInstall_Asks(string command)
     {

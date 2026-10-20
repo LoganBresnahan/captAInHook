@@ -113,6 +113,17 @@ switch (inv.Mode)
         // engine lives in, with the terminal handed straight through.
         return CaptainHook.Install.SelfVerb.Run(args[1..], Console.Out, Console.Error);
 
+    case Mode.History:
+    {
+        // Human command: the matches go to stdout on purpose. The display is
+        // cut to the terminal's width only when stdout IS a terminal; a pipe
+        // gets whole lines.
+        int? width = null;
+        if (!Console.IsOutputRedirected)
+            try { width = Console.WindowWidth; } catch (Exception) { /* no tty size: don't cut */ }
+        return CaptainHook.Core.HistoryVerb.Run(args[1..], Console.Out, Console.Error, width is > 0 ? width : null);
+    }
+
     case Mode.Doctor:
     {
         // Human command, not hook mode: the report goes to stdout on purpose.

@@ -29,6 +29,8 @@ what `/deploy` and CI use), so there is one install path.
    7. switch FILE symlinks (ln -s new tmp && mv -f tmp link):
         ~/.local/bin/captainShim  → versions/<v>/captainShim
         ~/.local/bin/captainHook  → versions/<v>/captainHook
+        ~/.local/bin/captainhook  → versions/<v>/captainHook   (case-sensitive FS only:
+                                    skipped when it already -ef captainHook — APFS)
         payloads/<f>              → versions/<v>/payloads/<f>   (one per file, flat)
    8. previous ← the version the links pointed at before (when it changed)
    9. prune: "kept <v> (current)", "kept <p> (previous)", "removed <x>"
@@ -94,10 +96,18 @@ upgrade.
 but is not stamped into the assemblies, so a docs-only commit produces a new
 folder with the SAME content identity, and the warm daemon keeps serving.
 
+**The lower-case alias is for people, and only where it can exist.**
+`captainhook` runs the same engine, so the command works however it is typed.
+On a case-insensitive file system (APFS's default) that name already resolves
+to `captainHook`, and a link written under it would rename-replace the real
+entry, so the installer writes it only when the lower-case path is not already
+the same file (`-ef`). A `captainhook` that is not ours is kept. Hooks and
+settings.json always use the exact names (ADR-0020 d2's 2026-10-19 amendment).
+
 **Uninstall is two steps, in order.** `captainHook install-hooks --remove
 --apply` takes captAInHook out of the harness config (the binary is needed to
 do it); `captainHook self uninstall` (= `install.sh --uninstall`) then removes
-the links, payload links and versions, keeping `~/.captainHook/`. It refuses
+the links (the alias too), payload links and versions, keeping `~/.captainHook/`. It refuses
 while `settings.json` still runs the shim link, because every hook would then
 fail to start.
 
@@ -127,6 +137,7 @@ then says how to install instead, and one `curl … | sh` fixes it.
 | --- | --- |
 | archive builder | `release/package.sh` |
 | installer (install, upgrade, rollback, prune, uninstall) | `release/install.sh` — also `versions/<v>/install.sh` in every install |
+| the lower-case alias (`link_alias`; removed by `--uninstall` after the real names) | `release/install.sh`; `release/smoke.sh` step 1 (its own link on Linux, no second entry on macOS) and step 12 |
 | `captainHook self` | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; smoke steps 10–11 |
 | per-target smoke test | `release/smoke.sh` |
 | a toolchain-free sandbox run (install → smoke → uninstall inside one directory; how a bare Mac is checked) | `release/sandbox-smoke.sh` |

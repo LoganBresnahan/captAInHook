@@ -1,27 +1,30 @@
 #!/bin/sh
-# deploy-guard — a ONESHOT captAInHook payload (live dogfood, Decide lane).
+# deploy-guard — asks before an agent's shell command modifies captAInHook's
+# installed files. Never denies. Fail-open.
 #
-# Registered on PreToolUse: watches for shell commands that would MUTATE the
-# live deployment — the very tree the installed hook runs from: the versioned
-# install (~/.local/share/captainhook/versions, its ~/.local/bin/captainShim
-# and captainHook links — ADR-0020) or the legacy ~/.captainHook/bin — and
-# answers Decide(ask) so a human confirms; everything else is a fast allow. captAInHook enforcing its own house rule: only /deploy touches
-# the live tree — and even /deploy's swap now pauses for a nod.
+# A ONESHOT payload on PreToolUse. When a tool call names an installed path
+# AND a mutating verb, it answers Decide(ask), so you confirm before the
+# command runs; every other call is a fast allow. The installed files are:
+#   ~/.local/share/captainhook/versions/   the versioned install (ADR-0020)
+#   ~/.local/bin/captainShim, captainHook, captainhook   its links
+#   ~/.captainHook/bin/                    the pre-0.1.0 layout
 #
-# Registered fail-OPEN deliberately for the first live phase: a bug here
-# must degrade to "the hook contributes nothing", never to "every tool call
-# in every session denied". Flip the entry to failMode:"closed" once the
-# trail shows it behaving.
+# Shipped as an example: it does nothing until an entry in handlers.json
+# names it, e.g.
+#   {"name":"deploy-guard","command":"~/.local/share/captainhook/payloads/deploy-guard.sh",
+#    "events":["PreToolUse"],"mode":"oneshot","failMode":"open"}
 #
-# Matching is a raw-line heuristic, no JSON parser: EVERY tool call is
-# inspected, and it asks when a mutation verb AND the live path both appear
-# in the envelope. There is deliberately no tool-name filter: a gate keyed on
-# one host's name for its shell ("Bash") read another host's ("run_shell") as
-# not-my-business and answered allow without looking (ADR-0019). Known gap,
-# unchanged by that: the verb list is shell-shaped, so a file-editing tool
-# writing into the live tree carries no verb and is allowed. A false "ask" is
-# cheap (one extra confirmation); the verdict is never deny, so the guard
-# cannot brick a session.
+# Never denies: the strongest answer is "ask", so a wrong match costs one
+# extra confirmation and can never block a session. Fail-open: register it
+# with failMode "open", so a bug or a crash here means the hook contributes
+# nothing, never that every tool call is refused.
+#
+# Matching is a raw-line heuristic, no JSON parser. EVERY tool call is
+# inspected, whatever the host calls its shell tool: a filter on one host's
+# name ("Bash") once read another host's ("run_shell") as not-a-shell and
+# allowed it unexamined (ADR-0019). Known gap: the verb list is shell-shaped,
+# so a file-editing tool writing into the install carries no verb and is
+# allowed.
 
 field() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'; }
 
@@ -32,7 +35,7 @@ allow() { printf '{"effect":"decide","verdict":"allow","dispatchId":"%s"}\n' "$i
 
 # The live tree not mentioned → allow.
 case $envelope in
-  *'.captainHook/bin'*|*'.local/share/captainhook/versions'*|*'.local/bin/captainShim'*|*'.local/bin/captainHook'*) ;;
+  *'.captainHook/bin'*|*'.local/share/captainhook/versions'*|*'.local/bin/captainShim'*|*'.local/bin/captainHook'*|*'.local/bin/captainhook'*) ;;
   *) allow ;;
 esac
 

@@ -175,14 +175,28 @@ Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
 run as LIVE dogfood on the maintainer's own hooks: `git-orient.sh` (oneshot,
 SessionStart — once-per-session git bearing), `deploy-guard.sh` (oneshot,
 PreToolUse — `Decide(ask)` when any tool call — whatever the host names it — would mutate
-the live install — the versioned `~/.local/share/captainhook` layout and its `~/.local/bin` links
-(ADR-0020), or the legacy `~/.captainHook/bin`; pinned by `DeployGuardTests`), `session-pulse.sh` (oneshot, Stop — per-turn activity
+the installed files — the versioned `~/.local/share/captainhook` layout and its `~/.local/bin` links,
+the lower-case alias included (ADR-0020), or the legacy `~/.captainHook/bin`; never denies, fail-open; pinned by `DeployGuardTests`), `session-pulse.sh` (oneshot, Stop — per-turn activity
 ledger), `doc-pointer.sh` (resident, PreToolUse — warm ground-truth index,
 injects keep-docs-in-sync reminders), and `orient-brief.sh` (oneshot,
 SessionStart — LLM-backed "since last time" brief via `claude -p`, 30min
 cache; ⚠ a payload must not transitively fire its own event — the
 serialized worker self-blocks; orient-brief's `--setting-sources ""` is the
 pattern, roadmap item 17). Field reports: [doc/dogfood/](../dogfood/).
+
+## `~` in handlers.json — one file, two homes
+
+A leading `~/` (or a value that is exactly `~`) in an entry's `command`,
+`args[]` and `cwd` is expanded to the user's home at load (`HomePath.Expand`,
+called from `ExecHandlersFile.ParseEntry`), so one handlers.json in a dotfiles
+repo serves a Linux home and a macOS home alike. Expanded at parse, every
+reader sees the real path: the spawn, `exec.spawn`'s `command`, the child
+records doctor reads, the API, and the reload fingerprint (a change of home
+is a change of config). Nothing else expands: no `~user`, no `$VAR`, nothing
+mid-string (`--flag=~/x` stays as written), and `env` values are left alone.
+A `~/` command that does not exist fails at spawn exactly as the same
+absolute path would, naming the expanded path. ADR-0010 d4's 2026-10-19
+amendment; `HandlerHomeTests`.
 
 ## Hot reload (phase 7) — edit the file, next hook obeys
 
@@ -237,6 +251,7 @@ exit never restarts a retired worker), logged `actor.remove`.
 | hot-reload seam (`Reconcile`, `AssignIds`, `ExecFingerprint`, volatile `_runners`, `ReloadingHandlers`, `Supervisor.Remove`) | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | doctor-orphans (report-only; group-aware; records + dead daemons' ledgers) + observability (child state + expected-vs-registered) | `Core/Doctor.cs` (`SweepOrphans`), `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot`), `Api/ApiReadModel.cs` + `Api/ApiDtos.cs`, `web/src/HandlersPanel.tsx` |
 | registration (tri-state file, warns, resident degrade, per-dispatch reconcile) | `dotnet/captainHook/Core/ExecHandlersFile.cs`, `Core/HookRun.cs` |
+| leading-`~` expansion of command/args/cwd | `dotnet/captainHook/Core/HomePath.cs`, applied in `ExecHandlersFile.ParseEntry`; `HandlerHomeTests` |
 | trail events | `exec.spawn/ready/notReady/answered/exit/stderr/kill/protocolError/recordError/ledgerError`, `handlers.malformed/entrySkipped/slowShape/fieldIgnored/budgetBeyondHarness/budgetBeyondDrain/readinessBeyondBudget/residentFanout/residentDegraded/collapsedTeardownTimeout/reload`, `handler.teardown(-Error)`, `daemon.drainChildren/drainCut/drainChildrenTimeout/reapOrphan/reapError`, `actor.remove`, `doctor.orphan` |
 | pinned by | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `SpawnPrefixTests` (rung order, degrade, per-rung argv, the bosun `--` contract against a real in-place exec), `ResidentExecHandlerTests` (incl. the daemon E2E), `HandlersHotReloadTests` (reconcile diff + stat-gate + `Supervisor.Remove` + child-state Snapshot), `DoctorOrphansTests`, `OrphanReaperTests` (verdict table, ledger, real-group reaps, daemon-start wiring), `release/smoke.sh` step 10 (SIGKILLed installed daemon, both OSes), `ApiReadEndpointsTests` (expected-vs-registered) + the Handlers-view e2e (`panels.spec.ts`) |
 | decisions | `doc/adr/0010-exec-handlers.md` (d1–d9 + amendments); the spawn prefix in `doc/adr/0014-bosun-spawn-wrapper.md` (d1–d5); platform facts in `doc/platform.md` § Process groups |

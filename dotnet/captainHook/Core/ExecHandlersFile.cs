@@ -205,9 +205,15 @@ public static class ExecHandlersFile
                 v.Add("'events' must not be empty");
         }
 
-        var args = OptStringArray(entry, "args", v) ?? [];
+        // A leading `~/` (or a bare `~`) in command, args and cwd is the
+        // user's home, expanded HERE so every reader downstream (the spawn,
+        // exec.spawn's trail line, child records, doctor, the API) sees the
+        // real path (HomePath; ADR-0010 2026-10-19 amendment). A relative
+        // path still resolves against the spawn's cwd, as before.
+        if (command is not null) command = HomePath.Expand(command);
+        var args = (OptStringArray(entry, "args", v) ?? []).Select(a => HomePath.Expand(a)).ToList();
         var passEnv = OptStringArray(entry, "passEnv", v) ?? [];
-        var cwd = OptString(entry, "cwd", v);
+        var cwd = OptString(entry, "cwd", v) is { } rawCwd ? HomePath.Expand(rawCwd) : null;
 
         var mode = ExecMode.Oneshot;
         if (OptString(entry, "mode", v) is { } m)

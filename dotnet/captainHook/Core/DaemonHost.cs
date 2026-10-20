@@ -578,6 +578,9 @@ public static class DaemonHost
         // showing nothing. Observability only — the dispatch path reads it
         // never, and a stamp is a dictionary write under a tiny lock.
         presence.Seen(evt.SessionId);
+        // The agent's shell command, if this is one that ran (ShellTrail) —
+        // before the gate for the same reason: what ran is not the policy's.
+        ShellTrail.Record(evt, req.DispatchId);
 
         // Dispatch policy (ADR-0006): the SAME shared gate the collapsed path
         // calls, at the identical seam — an event-level deny (or a Malformed

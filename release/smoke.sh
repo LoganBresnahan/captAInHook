@@ -8,9 +8,12 @@
 # so it refuses a home that already has either. Reads the same env install.sh does (CAPTAINHOOK_INSTALL_DIR,
 # CAPTAINHOOK_BIN_DIR) and XDG_RUNTIME_DIR (unset → ~/.captainHook).
 #
-# Proves, in order: the links resolve to the real versioned folder; install-hooks
+# Proves, in order: the links resolve to the real versioned folder, and the
+# lower-case `captainhook` runs the engine (its own link only on a
+# case-sensitive file system); install-hooks
 # writes a settings file (a temp one under this HOME); a cold hook spawns the
-# daemon; a warm hook is answered by it; a shipped payload runs through bosun
+# daemon; a warm hook is answered by it, and an agent's shell command it
+# recorded is found by `captainHook history`; a shipped payload runs through bosun
 # from its payloads/ link; zero wire skew; doctor sees a healthy daemon; the
 # daemon idle-exits on its own; and, under an XDG_RUNTIME_DIR too long for a
 # socket, a daemon still comes up — in the short per-uid dir
@@ -78,6 +81,26 @@ case $base in
   "$real_install"/versions/*/) pass "engine base is the versioned folder: $base" ;;
   *) fail "engine base '$base' is not under $real_install/versions/ — symlink resolution broke co-location" ;;
 esac
+
+# The lower-case alias: its own link where the file system tells names apart;
+# no second entry where it does not (APFS by default): there `captainhook`
+# already IS captainHook, and a link of that name would have replaced it.
+# Either way `captainhook` runs the engine.
+probe=$BIN_DIR/.smoke-case-$$
+: > "$probe"
+if [ -e "$BIN_DIR/.SMOKE-CASE-$$" ]; then case_sensitive=0; else case_sensitive=1; fi
+rm -f "$probe"
+# shellcheck disable=SC2010  # the listing IS the question: which names exist
+lower=$(ls -1A "$BIN_DIR" | grep -cx captainhook || true)
+if [ "$case_sensitive" = 1 ]; then
+  if [ "$lower" != 1 ] || [ ! -L "$BIN_DIR/captainhook" ]; then fail "no captainhook alias link on a case-sensitive file system"; fi
+  [ "$(readlink "$BIN_DIR/captainhook")" = "$(readlink "$ENGINE")" ] || fail "captainhook points at $(readlink "$BIN_DIR/captainhook"), not the engine"
+else
+  [ "$lower" = 0 ] || fail "a second captainhook entry on a case-insensitive file system"
+fi
+"$BIN_DIR/captainhook" version | grep -q '^captainHook ' || fail "captainhook does not run the engine"
+if [ "$case_sensitive" = 1 ]; then pass "captainhook alias: its own link (case-sensitive file system)"
+else pass "captainhook alias: none needed, the name already resolves (case-insensitive file system)"; fi
 "$ENGINE" version | sed 's/^/        /'
 
 # 2. install-hooks into a temp settings file: dry run writes nothing, --apply writes
@@ -120,6 +143,15 @@ t0=$(now_ms)
 printf '{"prompt":"smoke-warm-2","session_id":"smoke"}' | "$SHIM" hook user-prompt-submit >/dev/null 2>&1
 WARM_MS=$(( $(now_ms) - t0 ))
 pass "warm hook answered by the daemon in ${WARM_MS}ms"
+
+# …and the daemon recorded the shell command an agent ran (`tool.shell`, by
+# content: tool_input.command is a string), which `history` finds again, whole.
+printf '%s' '{"tool_name":"run_shell","tool_input":{"command":"echo smoke-history\nline two"},"session_id":"smokehist-1","cwd":"/tmp"}' \
+  | "$SHIM" hook post-tool-use >/dev/null 2>&1 || fail "the post-tool-use hook failed"
+hist() { "$ENGINE" history smoke-history --session smokehist --full </dev/null 2>/dev/null; }
+seen() { hist | grep -q '^ *line two$'; }
+wait_for 5 seen || fail "history did not find the recorded command: $(hist)"
+pass "history found the agent's command (tool.shell), multi-line and whole"
 
 # 5. a shipped payload runs through bosun, in its own process group
 printf '{"tool_name":"Bash","tool_input":{"command":"true"},"session_id":"smoke"}' | "$SHIM" hook pre-tool-use >/dev/null 2>&1
@@ -269,6 +301,7 @@ printf '%s\n' "$out" | grep -q 'install-hooks --remove --apply' || fail "self un
 "$ENGINE" install-hooks --settings "$SETTINGS" --remove --apply >/dev/null
 out=$("$ENGINE" self uninstall </dev/null 2>&1) || fail "self uninstall failed after the hooks were removed: $out"
 if [ -e "$SHIM" ] || [ -e "$ENGINE" ] || [ -e "$INSTALL_DIR/versions" ]; then fail "self uninstall left the install behind: $out"; fi
+if [ -e "$BIN_DIR/captainhook" ] || [ -L "$BIN_DIR/captainhook" ]; then fail "self uninstall left the captainhook alias behind: $out"; fi
 grep -q captainShim "$SETTINGS" && fail "install-hooks --remove left a captainShim hook in $SETTINGS"
 pass "self uninstall: refused while hooks were wired, then removed the links and versions"
 

@@ -1104,6 +1104,43 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [ ] **32. Trail bounding — build ADR-0009's segmented archive** — the trail
+  is one unbounded file (87 MB on the maintainer's machine, 2026-10-19), and
+  since item 29 it also carries every agent command whole, so it grows faster.
+  Build [ADR-0009](adr/0009-trail-rotation.md) d3–d6 as its implementation
+  plan orders them (segmented writer, daemon-owned rotation, segment-aware
+  tail, `?tail=N`) and amend ADR-0007 d5 in the same change. `history`
+  already reads `<stem>.<seq>.jsonl` segments oldest first, so it needs no
+  change.
+
+- [x] **31. `~` in handlers.json — one file, two homes** — a handlers.json
+  kept in a dotfiles repo has to serve `/home/oof` and `/Users/dogdrool`. A
+  leading `~/` (or a bare `~`) in `command`, `args[]` and `cwd` expands to
+  the engine's home at load; nothing else does (no `~user`, `$VAR` or
+  mid-string). [ADR-0010](adr/0010-exec-handlers.md) d4's 2026-10-19
+  amendment; `HomePath`; `HandlerHomeTests`. **Shipped (v0.1.3).**
+
+- [x] **30. A lower-case `captainhook` alias** — install.sh links
+  `~/.local/bin/captainhook` to the engine on a case-sensitive file system
+  only (on APFS's default the name already resolves, and a second link would
+  replace the real one); `--uninstall` removes it; hooks keep the exact
+  names. The shipped deploy-guard guards the alias path too, and its header
+  now speaks to users (asks, never denies, fail-open).
+  [ADR-0020](adr/0020-release-archives-and-install.md) d2's 2026-10-19
+  amendment; `release/smoke.sh` steps 1 and 12 on every target.
+  **Shipped (v0.1.3).**
+
+- [x] **29. `captainHook history` — search what agents ran** — the trail
+  turned out to hold no agent commands at all, so the engine now records one
+  `tool.shell` line per PostToolUse whose `tool_input.command` is a string
+  (content, never tool name; both wire sites, before the policy gate), and
+  `history [pattern]` streams them back with `--session`, `--since`,
+  `--cwd`, `--harness`, `--limit`, `--full` and `--json`. It sees only what
+  the trail still holds (from 0.1.3 on); agent-shell-history's file stays
+  the long-term record. [ADR-0009](adr/0009-trail-rotation.md) d7;
+  [doc/flow/shell-history.md](flow/shell-history.md); `ShellHistoryTests`.
+  **Shipped (v0.1.3).**
+
 - [x] **28. A SIGKILLed daemon's children die when the next one starts** —
   measured 2026-10-19 against the installed v0.1.1, Linux and macOS alike:
   every orderly path kills children as groups, but after a hard daemon death

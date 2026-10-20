@@ -190,6 +190,27 @@ its lessons are imported wholesale (§ Pattern lineage).
      re-validates end-to-end on every reload); the reconcile's own summary
      rides `handlers.reload` (added/removed/changed/kept). Deliberately reuses
      phase 5's kill/drain machinery, proven stable first.)*
+   - **`~` is the user's home in `command`, `args[]` and `cwd`** *(2026-10-19
+     amendment, v0.1.3)*. One handlers.json kept in a dotfiles repo has to
+     serve two machines whose homes differ (`/home/oof` on WSL,
+     `/Users/dogdrool` on the Mac), and a relative command resolves against
+     the spawn's cwd, so before this every path had to be absolute and
+     machine-specific. The loader now expands a **leading `~/`, or a value
+     that is exactly `~`**, to the home the engine roots `~/.captainHook` at
+     (`SpecialFolder.UserProfile`, `HomePath.Expand`), at parse time, so
+     every reader downstream (the spawn, `exec.spawn`'s `command`, child
+     records and doctor, the API, the reload fingerprint) sees the real path.
+     **That is the whole rule**: no `~user`, no `$VAR`, nothing mid-string
+     (`--flag=~/x` is left alone), and `env` values are not path fields and
+     are not touched. That keeps config out of template-language territory
+     (ADR-0003's rule): one fixed, shell-familiar spelling, not an
+     interpolation scheme. A `~/` command that does not exist fails exactly
+     as the same absolute path would (at spawn, naming the expanded path);
+     the loader never checked existence and still does not, and
+     `handlers.malformed` stays what it was, the file-level parse failure.
+     Pinned by `HandlerHomeTests` (leading-only, `~user`/`$VAR`/mid-string
+     untouched, the loader's three fields, a real spawn whose trail names the
+     expanded path).
    - `dispatch.json` (ADR-0006) governs exec handlers **by name, for free** —
      per-event/per-handler policy needs no new mechanism.
 
@@ -709,11 +730,11 @@ doctor-orphans + observability):
 | observability (child state + expected-vs-registered) | `Core/Dispatcher.cs` (`IResidentObservable`, `Snapshot` correlation, `HandlerStatus`), `Handlers/ResidentExecHandler.cs`, `Api/ApiReadModel.cs` (`Handlers()` join), `Api/ApiDtos.cs` (`HandlerDto`/`HandlersDto`/`ExpectedHandlerDto`), `web/src/SupervisionPanel.tsx` (renamed `HandlersPanel.tsx` by ADR-0015 d6) |
 | teardown seam (`IEagerStart`, `TrackSwap` admission, `DisposeHandlersAsync`, `SubscribeEscalated`) | `dotnet/captainHook/Core/Dispatcher.cs`, `dotnet/captainHookActors/Supervision.fs` |
 | hot-reload seam (`Reconcile` diff, `AssignIds` id stability, `ExecFingerprint` injective config identity, volatile `_runners` swap, `ReloadingHandlers` stat-gate) + `Supervisor.Remove` | `dotnet/captainHook/Core/Dispatcher.cs`, `Core/HookRun.cs`, `dotnet/captainHookActors/Supervision.fs` |
-| registration file (tri-state, strict parse, budget/readiness bounds) | `dotnet/captainHook/Core/ExecHandlersFile.cs` |
+| registration file (tri-state, strict parse, budget/readiness bounds, leading-`~` expansion of command/args/cwd) | `dotnet/captainHook/Core/ExecHandlersFile.cs`, `Core/HomePath.cs` |
 | registration wiring (warns, resident degrade-not-stub, drain-child phase, harness/drain hints, per-dispatch reconcile) | `dotnet/captainHook/Core/HookRun.cs`, `Core/DaemonHost.cs` |
 | trail events (src `exec`) | `exec.spawn`, `exec.ready`, `exec.notReady`, `exec.answered`, `exec.exit`, `exec.stderr`, `exec.kill`, `exec.protocolError`, `exec.recordError`, `exec.ledgerError` |
 | trail events (src `handlers`) | `handlers.malformed`, `handlers.entrySkipped`, `handlers.slowShape`, `handlers.fieldIgnored`, `handlers.budgetBeyondHarness`, `handlers.budgetBeyondDrain`, `handlers.readinessBeyondBudget`, `handlers.residentFanout`, `handlers.residentDegraded`, `handlers.collapsedTeardownTimeout`, `handlers.reload` |
 | collapsed degrade + demo payloads | `Core/HookRun.cs` (`collapsedEvent` filter + teardown-at-drain), `examples/payloads/` (retriever resident + memory oneshot + handlers.json) |
 | trail events (src `dispatcher`/`daemon`/`sup`/`doctor`) | `handler.teardown(Error)`, `daemon.drainChildren`, `daemon.drainCut`, `daemon.drainChildrenTimeout`, `daemon.reapOrphan`, `daemon.reapError`, `actor.remove`, `doctor.orphan` |
-| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, CHANGE-mid-dispatch misattribution guard, resident-child-state Snapshot, the add-then-remove daemon E2E), `DoctorOrphansTests` (alive-orphan reported, healthy-owned ignored, stale/pid-reuse/corrupt swept), `OrphanReaperTests` (the five-state verdict table, owner identity, plan targets/deletes, ledger in-flight/adoption/close, real perl-made groups: live orphan + dead-leader group killed, pid-reused never signaled, doctor reports both shapes, the daemon-start wiring), `release/smoke.sh` step 10 (a SIGKILLed installed daemon's three survivors reaped by the next one — Linux and macOS in CI), `ApiReadEndpointsTests` (child state null on coded, expected-vs-registered join), the Handlers-view e2e |
+| tests | `ExecWireTests`, `ExecHandlerTests`, `ExecHandlersFileTests`, `KillDisciplineTests`, `ResidentExecHandlerTests` (incl. daemon E2E, FakeClock escalation, records sweep, collapsed-degrade no-orphan E2Es), `DemoPayloadTests` (the committed scripts driven through the daemon), `HandlersHotReloadTests` (fingerprint injectivity, no-churn KEEP, add/remove/change, malformed-kills-all, post-drain refusal, `Supervisor.Remove`, CHANGE-mid-dispatch misattribution guard, resident-child-state Snapshot, the add-then-remove daemon E2E), `DoctorOrphansTests` (alive-orphan reported, healthy-owned ignored, stale/pid-reuse/corrupt swept), `HandlerHomeTests` (d4's `~` amendment: leading-only expansion, a real spawn naming the expanded path), `OrphanReaperTests` (the five-state verdict table, owner identity, plan targets/deletes, ledger in-flight/adoption/close, real perl-made groups: live orphan + dead-leader group killed, pid-reused never signaled, doctor reports both shapes, the daemon-start wiring), `release/smoke.sh` step 10 (a SIGKILLed installed daemon's three survivors reaped by the next one — Linux and macOS in CI), `ApiReadEndpointsTests` (child state null on coded, expected-vs-registered join), the Handlers-view e2e |
 | platform facts | `doc/platform.md` § Process groups (spawn wrappers, group signals, pgid persistence) |

@@ -90,7 +90,9 @@ curl -fsSL https://github.com/LoganBresnahan/captAInHook/releases/latest/downloa
 The installer verifies the archive's sha256 before unpacking, puts it in
 `~/.local/share/captainhook/versions/<version>/`, and points two file symlinks
 at it: `~/.local/bin/captainShim` (the hook command) and
-`~/.local/bin/captainHook` (everything else). It keeps the previous version
+`~/.local/bin/captainHook` (everything else), plus a lower-case
+`captainhook` alias on a case-sensitive file system (on macOS's default
+case-insensitive APFS that name already works). It keeps the previous version
 for rollback and edits no config: no shell rc file, no
 `~/.claude/settings.json`. Wiring the hooks is a separate step that shows you
 the change first:
@@ -134,7 +136,17 @@ hand or through the GUI. The shipped example payloads live at
 `~/.local/share/captainhook/payloads/` (starter templates, a resident
 retriever, a memory logger, and the payloads dogfooded live on the
 maintainer's own hooks — see [doc/dogfood/](doc/dogfood/) for field
-reports); point a handler's `command` there and it survives upgrades.
+reports); point a handler's `command` there and it survives upgrades. A
+leading `~/` in a handler's `command`, `args` or `cwd` means your home, so one
+handlers.json can serve machines whose homes differ (only a leading `~/` or a
+bare `~`: no `$VAR`, nothing mid-string).
+
+`captainHook history [pattern]` searches the shell commands your agents ran:
+`--session <id-prefix>`, `--since 2d|3h|<date>`, `--cwd <dir>`, `--harness`,
+`--limit N`, `--full` for whole multi-line commands, `--json` for scripts. It
+sees what the trail still holds: commands recorded since 0.1.3, for as long as
+`~/.captainHook/logs/captainHook.jsonl` keeps them
+([doc/flow/shell-history.md](doc/flow/shell-history.md)).
 
 **Nice-to-haves:**
 
@@ -216,7 +228,9 @@ both architectures, and by sandbox runs on Apple-silicon hardware
   [ADR-0020](doc/adr/0020-release-archives-and-install.md)).
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
-  kept pure for the hook protocol.
+  kept pure for the hook protocol. It also records every shell command an
+  agent ran (`tool.shell`), which `captainHook history` searches
+  ([ADR-0009](doc/adr/0009-trail-rotation.md) d7).
 - **Tests** — xunit suite (1,600+, green twice in a row as the ship bar) plus
   web unit tests and Playwright E2E; the `/shipshape` skill verifies
   coverage, docs, and logging conventions.

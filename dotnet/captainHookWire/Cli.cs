@@ -44,6 +44,10 @@ public enum Mode
     /// arguments are its own (the engine hands it args[1..]). Engine-only;
     /// the shim refuses it.
     Self,
+    /// `history [pattern] [flags]` — search the shell commands agents ran, as
+    /// the trail recorded them (`tool.shell`). Its arguments are its own (the
+    /// engine hands it args[1..]). Engine-only; the shim refuses it.
+    History,
 }
 
 /// One parsed invocation: the mode plus the hook-dispatch arguments that shim
@@ -66,6 +70,8 @@ public sealed record Invocation(Mode Mode, string? EventName, string HarnessName
             return new(Mode.InstallHooks, null, "claude-code");
         if (args.Length > 0 && args[0] == "self")
             return new(Mode.Self, null, "claude-code");
+        if (args.Length > 0 && args[0] == "history")
+            return new(Mode.History, null, "claude-code");
 
         string? eventName = null;
         var harnessName = "claude-code";

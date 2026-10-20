@@ -84,6 +84,19 @@ keeps running from the unlinked inodes and the next doctor drains it as
    (GNU only), and BSD `mv` follows a symlink-to-directory destination. Config
    and runtime data stay where they are (`~/.captainHook/`, the rendezvous
    dir) — an upgrade touches binaries only.
+   *(2026-10-19 amendment, v0.1.3 — the lower-case alias.)* The installer
+   also links `captainhook` → the same engine, so the command works however
+   it is typed, but **only on a case-sensitive file system**. On a
+   case-insensitive one (APFS's default) `captainhook` already resolves to
+   `captainHook`, and writing a link under that name would rename-replace the
+   real entry. Detection is the question itself: if the lower-case path
+   already exists and is the same file (`-ef`), there is nothing to write
+   (case-insensitive, or the alias already points at this version). A
+   `captainhook` that is not ours is kept and named. `--uninstall` removes
+   the alias after the real names, so on a case-insensitive disk it is gone
+   with them. Hooks and settings.json keep the exact names; the alias is for
+   people. `release/smoke.sh` step 1 asserts both shapes (its own link on
+   Linux, no second entry on the macOS runners) and step 12 its removal.
 
 3. **`install.sh` — POSIX sh, no sudo, fails closed, edits no config.** It
    resolves the version (latest, or `--version X`), downloads the archive and
@@ -126,8 +139,9 @@ keeps running from the unlinked inodes and the next doctor drains it as
    instead of believing it.
 
 6. **Shipped payloads get stable paths without a template language.**
-   handlers.json keeps literal absolute commands (ADR-0010 unchanged — a
-   relative command keeps meaning relative to the child's cwd). The installer
+   handlers.json keeps literal commands — absolute, or (since ADR-0010 d4's
+   2026-10-19 amendment) starting `~/` for the user's home; a relative
+   command keeps meaning relative to the child's cwd. The installer
    maintains `payloads/` as a real directory of per-file symlinks into the
    current version, so `…/captainhook/payloads/deploy-guard.sh` survives every
    upgrade. Payloads stay FLAT: a payload that finds siblings through
@@ -198,7 +212,7 @@ keeps running from the unlinked inodes and the next doctor drains it as
 | what | where |
 |---|---|
 | archive builder | `release/package.sh` |
-| installer | `release/install.sh` |
+| installer | `release/install.sh` (`activate`, `link_alias` — the case-sensitive-only `captainhook` alias) |
 | bosun pin | `release/bosun.sha256` (tag + digests) |
 | install-hooks | `dotnet/captainHook/Install/InstallHooksVerb.cs` (+ `UnifiedDiff.cs`); `InstallHooksTests` |
 | version | `dotnet/captainHook/Install/VersionVerb.cs` |

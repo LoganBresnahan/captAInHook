@@ -26,6 +26,8 @@
 #   $CAPTAINHOOK_INSTALL_DIR/payloads/<f>    file symlinks into the current version
 #   $CAPTAINHOOK_INSTALL_DIR/previous        the version before the last switch
 #   $CAPTAINHOOK_BIN_DIR/captainShim, captainHook   file symlinks into the current version
+#   $CAPTAINHOOK_BIN_DIR/captainhook   the same engine link, lower-case, only on a
+#                                      case-sensitive file system (see link_alias)
 #
 # This script never edits shell rc files, ~/.claude/settings.json, or
 # ~/.captainHook. Wiring the hooks is a separate, explicit step:
@@ -41,6 +43,7 @@ RELEASES=${CAPTAINHOOK_RELEASE_URL:-https://github.com/LoganBresnahan/captAInHoo
 INSTALL_DIR=${CAPTAINHOOK_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/captainhook}
 BIN_DIR=${CAPTAINHOOK_BIN_DIR:-$HOME/.local/bin}
 ENTRIES="captainShim captainHook"
+ALIAS=captainhook
 
 say() { printf 'captainhook: %s\n' "$*"; }
 # Inline, not read back from "$0": under `curl … | sh` there is no script file.
@@ -126,6 +129,24 @@ switch_link() {  # switch_link <target> <link>
   mv -f "$tmp" "$2"
 }
 
+# The lower-case alias: `captainhook` runs the same engine, however the name
+# is typed. Only where the file system tells the two names apart. On a
+# case-insensitive one (APFS's default) `captainhook` already resolves to
+# `captainHook`, and a link written under that name would REPLACE the real
+# one. So: if the lower-case path already exists and is the same file, there
+# is nothing to do (case-insensitive, or our alias already points at this
+# version). Hooks never use it; they keep the exact names.
+link_alias() {  # link_alias <version-dir>
+  a=$BIN_DIR/$ALIAS
+  if [ -e "$a" ] && [ "$a" -ef "$BIN_DIR/captainHook" ]; then return 0; fi
+  if [ -L "$a" ]; then
+    case $(readlink "$a") in "$INSTALL_DIR"/versions/*) ;; *) say "kept $a (not ours)"; return 0 ;; esac
+  elif [ -e "$a" ]; then
+    say "kept $a (not ours)"; return 0
+  fi
+  switch_link "$1/captainHook" "$a"
+}
+
 HANDLERS=${CAPTAINHOOK_HANDLERS_FILE:-$HOME/.captainHook/handlers.json}
 SETTINGS=$HOME/.claude/settings.json
 
@@ -136,7 +157,9 @@ if [ "$UNINSTALL" = 1 ]; then
     captainHook install-hooks --remove --apply
   then re-run --uninstall (or pass --force to leave them dangling)"
   fi
-  for e in $ENTRIES; do
+  # The alias goes after the real names: on a case-insensitive file system
+  # `captainhook` IS `captainHook`, which is gone by then.
+  for e in $ENTRIES $ALIAS; do
     t=$(readlink "$BIN_DIR/$e" 2>/dev/null) || continue
     case $t in "$INSTALL_DIR"/versions/*) rm -f "$BIN_DIR/$e"; say "removed $BIN_DIR/$e" ;; esac
   done
@@ -169,6 +192,7 @@ activate() {  # activate <version-dir> <version>
     fi
   done
   for e in $ENTRIES; do switch_link "$1/$e" "$BIN_DIR/$e"; done
+  link_alias "$1"
 
   mkdir -p "$INSTALL_DIR/payloads"
   for f in "$1"/payloads/*; do
