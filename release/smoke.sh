@@ -238,8 +238,13 @@ reaps=$(count daemon.reapOrphan)
 printf '{"session_id":"smoke"}' | "$SHIM" hook session-end >/dev/null 2>&1   # the next daemon
 reaped() { ! alive "$DEAF" && ! alive "$GRAND" && ! alive "$SLOW"; }
 wait_for 20 reaped || fail "the next daemon left orphans alive (deaf=$DEAF grandchild=$GRAND slow=$SLOW)"
+# Each daemon.reapOrphan line is written once the kill CONCLUDES — when the
+# group answers kill(-pgid, 0) no more — and an unreaped zombie still answers
+# it. `alive` already calls a zombie dead, so the lines can trail it by up to
+# the 2s grace + KILL beat: poll for them, never read the count once.
+logged() { [ $(( $(count daemon.reapOrphan) - reaps )) -ge 3 ]; }
+wait_for 15 logged || fail "expected 3 daemon.reapOrphan lines, got $(( $(count daemon.reapOrphan) - reaps ))"
 got=$(( $(count daemon.reapOrphan) - reaps ))
-[ "$got" -ge 3 ] || fail "expected 3 daemon.reapOrphan lines, got $got"
 doc=$("$ENGINE" doctor)
 if printf '%s\n' "$doc" | grep -q ': orphan'; then fail "doctor still reports orphans after the reap: $doc"; fi
 mv "$HANDLERS.smoke-saved" "$HANDLERS"
