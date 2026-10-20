@@ -129,9 +129,13 @@ d7) converges both halves: the shim's lines (`shim.answered`, skew, spawn
 decisions) and every collapsed dispatch never pass through the daemon's process,
 so only the file gets the whole story. `TrailCursor` is **schema-blind** — it
 ships opaque newline-delimited bytes, shrinking N4's third-consumer coupling to
-"the trail is newline-delimited". The SSE **event id is the byte offset**, so
-`Last-Event-ID` resumes without loss; no header ⇒ start at the file's current
-end ("from now"). **The hello record carries that anchor** (2026-08-16):
+"the trail is newline-delimited". The SSE **event id is a position** —
+`(seq − 1) × 2^40 + byte offset` in trail segment `seq` (`TrailId`, ADR-0021
+rule 5; in the trail's first file, simply the byte offset) — so
+`Last-Event-ID` resumes without loss, across rotations too; no header ⇒ start
+at the trail's current end ("from now", `TrailId.End`, aligned forward so a
+start inside a line still being written skips that line rather than replaying
+the file). **The hello record carries that anchor** (2026-08-16):
 the first flush is `retry: 1000\nid: <anchor>\n\n` — an id-bearing, data-less
 record, which per the SSE spec sets the client's `Last-Event-ID` and
 dispatches nothing — so a subscriber holds a resume cursor from its very
@@ -152,12 +156,14 @@ from the file), never a growing daemon and never a silent disconnect.
 
 | edge | behavior |
 |---|---|
-| resume at `Last-Event-ID` | seek that byte offset; a partial trailing line is held back (`More`) until its `\n` arrives — ids are exact byte ends, so no dup / no loss |
+| resume at `Last-Event-ID` | decode the segment and byte offset, seek there; a partial trailing line is held back (`More`) until its `\n` arrives — ids are exact byte ends, so no dup / no loss |
+| **rotation** (the daemon's keeper renamed the active file to `captainHook.<seq>.jsonl`, ADR-0021) | **followed, no reset**: the cursor resolves its file by name each poll, drains the renamed segment, holds one grace (1 s) for lines that raced the rename, then steps on — through any number of rotations between polls |
+| segment pruned (retention) | `reset`, re-anchored forward at the next segment that exists (never back at the oldest: a gap in the numbers would loop) |
 | **oversized line** (≥ `maxBytes`, the 128 KiB read window) | **skipped** across polls and surfaced as a `gap` — a line that can never fit the window must not wedge the feed forever (the correctness-threatening find of the sse-trail-tail verify). The 128 KiB window is a HARD limit. |
-| truncation (file shrank) | `reset` event, id space restarts at 0 — the client re-anchors `Last-Event-ID` to 0 |
+| truncation of the active file in place (file shrank, no rename) | `reset` event, the position restarts at the start of that file |
 | mid-line resume (bogus offset) | alignment **self-heals** to the next `\n` boundary (the byte before a legit id is always `\n`) |
 | truncate-then-regrow (255→256) | caught by a boundary-byte re-check every poll, not just on shrink |
-| file absent / vanishes mid-read | quiet — an empty poll, retried; never an exception out of the tailer |
+| file absent / vanishes mid-read; logs dir unreadable or out of descriptors | quiet — an empty poll, retried; never an exception out of the tailer, never a `More` spin |
 | CRLF | trimmed; `\r\n` and `\n` behave identically |
 
 ## The writes — PUT /policy and PUT /handlers, editors of the files
@@ -248,7 +254,7 @@ where a hand edit would follow it.
 | read projection over live Core objects | `dotnet/captainHook/Api/ApiReadModel.cs` (+ `Etag`) |
 | write path (validate → If-Match → atomic temp+rename), `PolicyWriteOutcome` DU, the `policy.write` ledger emit | `dotnet/captainHook/Api/ApiPolicyWriter.cs` (identity via `PolicyContent.Of`, `Core/DispatchPolicy.cs`) |
 | handlers write path (same shape + the d3 skip-refusal), `HandlersWriteOutcome` DU | `dotnet/captainHook/Api/ApiHandlersWriter.cs` |
-| SSE tailer (`TrailCursor`, `TrailSubscription`, `SseEvent`, backpressure) | `dotnet/captainHook/Api/TrailTail.cs` |
+| SSE tailer (`TrailCursor`, `TrailSubscription`, `SseEvent`, backpressure) | `dotnet/captainHook/Api/TrailTail.cs`; the id (`TrailId`) and segment model in `Core/TrailKeeper.cs` (ADR-0021) |
 | response DTOs (camelCase, reflection STJ) + `ApiJson.WriteAsync` | `dotnet/captainHook/Api/ApiDtos.cs`, `ApiJson.cs` |
 | daemon wiring (read model + writer + sse + `onRequest` idle stamp; supersession probe) | `dotnet/captainHook/Core/DaemonHost.cs` |
 | serve counters (Interlocked) | `dotnet/captainHook/Core/ServeStats.cs` |
@@ -257,7 +263,7 @@ where a hand edit would follow it.
 | discovery path | `RendezvousPaths.ApiJsonPath` (`captainHookWire/Rendezvous.cs`) |
 | endpoints | `GET /api/v1/{status,policy,harnesses,handlers,events,mail}`, `PUT /api/v1/{policy,handlers}`, else 404. `GET /mail` takes `?since=<byte offset>` and answers 400 `invalid_since` on anything else; it is the observation surface (ADR-0016 d14) and has no non-GET route — see [mailbox-bus.md](mailbox-bus.md) § *The observation surface* |
 | log events | `api.listening`, `api.stopped`, `api.bindContended`, `api.bindBlocked`, `api.discoveryFailed`, `api.tailError`, `api.handlerError`, `api.loopCrashed`; `daemon.superseded` (src `api`/`daemon`); `policy.write` (src **`policy`** — pairs with `policy.reload`) |
-| pinned by | `ApiHostTests`, `ApiHostInDaemonTests` (listener + hand-off + in-daemon); `ApiAuthGateTests`, `ApiAuthHttpTests` (auth, listener prefix-match); `ApiDiscoveryTests`, `ApiDiscoveryInDaemonTests` (0600, publish⟺holds-port); `ApiPortResolveTests`, `ApiRetryBindTests`, `ApiCutoverTests` (port singleton + two-daemon cutover); `ApiReadEndpointsTests` (read DTOs); `TrailCursorTests`, `TrailSubscriptionTests`, `SseBackpressureTests`, `SseIdleDeferTests`, `ApiSseHttpTests` (SSE edges, backpressure, idle-defer, wedged-Stop bound); `ApiPolicyWriteTests` (write mapping, atomicity probe, end-to-end deny-short-circuit, `PolicyWriteLedgerTests` — the write⇄reload same-hash pin); `ApiHandlersWriteTests` (handlers write mapping, d3 skip-refusal contrast, resolver-interleave atomicity, both-directions next-dispatch daemon E2E) |
+| pinned by | `ApiHostTests`, `ApiHostInDaemonTests` (listener + hand-off + in-daemon); `ApiAuthGateTests`, `ApiAuthHttpTests` (auth, listener prefix-match); `ApiDiscoveryTests`, `ApiDiscoveryInDaemonTests` (0600, publish⟺holds-port); `ApiPortResolveTests`, `ApiRetryBindTests`, `ApiCutoverTests` (port singleton + two-daemon cutover); `ApiReadEndpointsTests` (read DTOs); `TrailCursorTests`, `TrailRotationCursorTests` (rotation follow, mutation-checked), `TrailSubscriptionTests`, `SseBackpressureTests`, `SseIdleDeferTests`, `ApiSseHttpTests` (SSE edges, backpressure, idle-defer, wedged-Stop bound); `ApiPolicyWriteTests` (write mapping, atomicity probe, end-to-end deny-short-circuit, `PolicyWriteLedgerTests` — the write⇄reload same-hash pin); `ApiHandlersWriteTests` (handlers write mapping, d3 skip-refusal contrast, resolver-interleave atomicity, both-directions next-dispatch daemon E2E) |
 | platform facts | `doc/platform.md` § Loopback TCP & managed `HttpListener` (co-bind, SO_REUSEADDR/TIME_WAIT pairwise, teardown-blocks-behind-wedged-write, Host prefix-match); § Runtime directories (0600 token, mtime resolution) |
 | decision record | `doc/adr/0007-management-api.md` (d7 carries the 2026-07-08 supersession amendment) |
 | the policy this API edits | [dispatch-policy.md](dispatch-policy.md) · the dispatch it observes | [hook-dispatch.md](hook-dispatch.md) |

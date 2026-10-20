@@ -23,8 +23,32 @@ namespace CaptainHook.Core;
 /// FileShare.None, released by the kernel on any death, never unlinked. A
 /// keeper that cannot take it skips the tick.
 ///
-/// Shipped dark in slice 1: nothing constructs a keeper yet. Slice 3 starts
-/// it from DaemonHost once the cursor can follow a rename (rule 6).
+/// A daemon starts one (DaemonHost, production-only via Program.cs): a first
+/// tick at start, then one per `TrailKeeperOptions.Tick`.
+/// The keeper's daemon-start configuration (ADR-0021 rule 3), read from the
+/// environment like CAPTAINHOOK_IDLE_MS: retention in days (default 30; 0 =
+/// keep everything), the rotation size in MiB (default 16; fractions allowed
+/// so a smoke can rotate in kilobytes), and the tick (a test knob; 60 s).
+/// Malformed values fall back to the defaults, silently, as IDLE_MS does.
+public sealed record TrailKeeperOptions(string TrailPath, long SegmentBytes, TimeSpan? Retention, TimeSpan Tick)
+{
+    public static TrailKeeperOptions FromEnv(string trailPath)
+    {
+        static double? Num(string name) =>
+            double.TryParse(Environment.GetEnvironmentVariable(name), NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            && !double.IsNaN(v) && !double.IsInfinity(v) ? v : null;
+
+        var days = Num("CAPTAINHOOK_TRAIL_RETENTION_DAYS") is { } d && d >= 0 ? d : 30;
+        var mib = Num("CAPTAINHOOK_TRAIL_SEGMENT_MB") is { } m && m > 0 ? m : 16;
+        var tickMs = Num("CAPTAINHOOK_TRAIL_TICK_MS") is { } t && t >= 10 ? t : 60_000;
+        return new TrailKeeperOptions(
+            trailPath,
+            Math.Max(1, (long)(mib * 1024 * 1024)),
+            days == 0 ? null : TimeSpan.FromDays(days),
+            TimeSpan.FromMilliseconds(tickMs));
+    }
+}
+
 public sealed class TrailKeeper
 {
     /// The segment ceiling: seq × 2^40 + offset must stay below 2^53 (rule 5).

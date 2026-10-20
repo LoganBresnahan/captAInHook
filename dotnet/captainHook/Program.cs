@@ -57,6 +57,9 @@ switch (inv.Mode)
             watchPath: WatchRules.ResolvePath(),
             childrenDir: CaptainHook.Handlers.ChildRecords.Dir,
             legacyTrail: WireJsonl.DefaultLogPath(),
+            // Trail rotation + retention (ADR-0021): CAPTAINHOOK_TRAIL_RETENTION_DAYS
+            // (30; 0 keeps all), CAPTAINHOOK_TRAIL_SEGMENT_MB (16), _TICK_MS (test knob).
+            trailKeeper: TrailKeeperOptions.FromEnv(WireJsonl.DefaultLogPath()),
             sse: heartbeat is null ? null : new SseOptions(WireJsonl.DefaultLogPath(), Heartbeat: heartbeat));
     }
 

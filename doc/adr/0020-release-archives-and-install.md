@@ -97,7 +97,7 @@ keeps running from the unlinked inodes and the next doctor drains it as
    the alias after the real names, so on a case-insensitive disk it is gone
    with them. Hooks and settings.json keep the exact names; the alias is for
    people. `release/smoke.sh` step 1 asserts both shapes (its own link on
-   Linux, no second entry on the macOS runners) and step 12 its removal.
+   Linux, no second entry on the macOS runners) and step 13 its removal.
 
 3. **`install.sh` — POSIX sh, no sudo, fails closed, edits no config.** It
    resolves the version (latest, or `--version X`), downloads the archive and
@@ -233,6 +233,6 @@ keeps running from the unlinked inodes and the next doctor drains it as
 | bosun pin | `release/bosun.sha256` (tag + digests) |
 | install-hooks | `dotnet/captainHook/Install/InstallHooksVerb.cs` (+ `UnifiedDiff.cs`; `ShimSpelling` for home-relative commands); `InstallHooksTests` |
 | version | `dotnet/captainHook/Install/VersionVerb.cs` |
-| self | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; `release/smoke.sh` steps 10–11 |
+| self | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; `release/smoke.sh` steps 12–13 |
 | CI | `.github/workflows/{ci,release,post-release}.yml`, `release/smoke.sh` |
 | mechanics | [doc/flow/install.md](../flow/install.md) |

@@ -253,6 +253,32 @@ public class MailDeliveryPreloadTests
             Directory.GetFileSystemEntries(tmp.Dir, "*", SearchOption.AllDirectories).OrderBy(x => x).ToArray());
     }
 
+    /// ADR-0021 rule 7: the window spans rotations — deliveries in a renamed
+    /// segment still count, and a window that reaches back into one stays a
+    /// suffix of the whole, in order.
+    [Fact]
+    public void Fold_ReadsAcrossARotation()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "chk-foldrot-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var active = Path.Combine(dir, "captainHook.jsonl");
+            File.WriteAllText(Path.Combine(dir, "captainHook.1.jsonl"), Deliver("s1-a", "m-1") + "\n" + Deliver("s1-b", "m-2") + "\n");
+            File.WriteAllText(active, Deliver("act", "m-3") + "\n");
+
+            var whole = MailDeliveryFold.Read(active);
+            Assert.Equal(["s1-a", "s1-b", "act"], whole.Records.Select(r => r.Role).ToArray());
+            Assert.True(whole.Complete);
+
+            var window = (long)new FileInfo(active).Length + Deliver("s1-b", "m-2").Length + 10;
+            var bounded = MailDeliveryFold.Read(active, maxScanBytes: window);
+            Assert.Equal(["s1-b", "act"], bounded.Records.Select(r => r.Role).ToArray());
+            Assert.False(bounded.Complete);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     private static string Deliver(string role, string id) =>
         $$$"""
         {"ts":"2026-08-17T00:00:00.000Z","lvl":"info","src":"mail","evt":"mail.deliver","dispatchId":"d-1","hookEvent":"UserPromptSubmit","sessionId":"s-77","data":{"role":"{{{role}}}","seam":"ambient","vehicle":"inject","envelopeIds":["{{{id}}}"],"renderHash":"h","bytesInjected":11}}

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using CaptainHook.Core;
 using CaptainHook.Wire;
+using static CaptainHook.Tests.TestUtil;
 
 namespace CaptainHook.Tests;
 
@@ -133,8 +134,8 @@ public class TrailKeeperTests : IDisposable
     {
         using var log = new CapturedLog();
         File.Delete(Path.Combine(_dir, "shell-history.0.jsonl"));
-        // Make the copy fail: a directory squats on its temp file's name.
-        Directory.CreateDirectory(Path.Combine(_dir, $".shell-history.0.jsonl.{Environment.ProcessId}.tmp"));
+        // Make the copy fail: a directory squats where the copy must land.
+        Directory.CreateDirectory(Path.Combine(_dir, "shell-history.0.jsonl"));
         Fill(Seg(1), 10); Age(Seg(1), TimeSpan.FromDays(40));
         Fill(Active, 100);
         var k = Keeper(retention: TimeSpan.FromDays(30));
@@ -231,5 +232,83 @@ public class TrailKeeperTests : IDisposable
             .Where(key => !seen.ContainsKey(key)).ToList();
         Assert.True(missing.Count == 0, $"[{failedAppends} appends returned false] {missing.Count} lost of {written.Sum()} over {rotations} rotations: {string.Join(" ", missing.Take(10))}");
         Assert.All(seen.Values, n => Assert.Equal(1, n));             // none doubled
+    }
+
+    // ---- slice 3: configuration and the daemon's keeper ------------------------
+
+    [Fact]
+    public void Options_Defaults_AreThirtyDaysAndSixteenMiB()
+    {
+        foreach (var v in new[] { "CAPTAINHOOK_TRAIL_RETENTION_DAYS", "CAPTAINHOOK_TRAIL_SEGMENT_MB", "CAPTAINHOOK_TRAIL_TICK_MS" })
+            Environment.SetEnvironmentVariable(v, null);
+        var o = TrailKeeperOptions.FromEnv(Active);
+        Assert.Equal(16L * 1024 * 1024, o.SegmentBytes);
+        Assert.Equal(TimeSpan.FromDays(30), o.Retention);
+        Assert.Equal(TimeSpan.FromSeconds(60), o.Tick);
+    }
+
+    [Theory]
+    [InlineData("0", "0.004", "300", null, 4194L, 300)]      // 0 days keeps all; MiB fractions; tick knob
+    [InlineData("7.5", "1", "5", 7.5, 1048576L, 60000)]       // a tick under 10 ms is ignored
+    [InlineData("-1", "abc", "x", 30.0, 16777216L, 60000)]    // malformed: the defaults
+    public void Options_FromEnv(string days, string mb, string tick, double? wantDays, long wantBytes, int wantTickMs)
+    {
+        var saved = new[] { "CAPTAINHOOK_TRAIL_RETENTION_DAYS", "CAPTAINHOOK_TRAIL_SEGMENT_MB", "CAPTAINHOOK_TRAIL_TICK_MS" }
+            .Select(n => (n, Environment.GetEnvironmentVariable(n))).ToArray();
+        try
+        {
+            Environment.SetEnvironmentVariable("CAPTAINHOOK_TRAIL_RETENTION_DAYS", days);
+            Environment.SetEnvironmentVariable("CAPTAINHOOK_TRAIL_SEGMENT_MB", mb);
+            Environment.SetEnvironmentVariable("CAPTAINHOOK_TRAIL_TICK_MS", tick);
+            var o = TrailKeeperOptions.FromEnv(Active);
+            Assert.Equal(wantDays is { } d ? TimeSpan.FromDays(d) : null, o.Retention);
+            Assert.Equal(wantBytes, o.SegmentBytes);
+            Assert.Equal(TimeSpan.FromMilliseconds(wantTickMs), o.Tick);
+        }
+        finally { foreach (var (n, v) in saved) Environment.SetEnvironmentVariable(n, v); }
+    }
+
+    /// The upgrade day on a real machine (the maintainer's trail is ~90 MB):
+    /// with the defaults, the first tick rotates the whole trail ONCE into
+    /// segment 1, whose mtime is its last write — now — so the first prune
+    /// deletes nothing; it ages out 30 days later.
+    [Fact]
+    public void TheFirstTick_OnABigTrail_RotatesOnce_AndPrunesNothing()
+    {
+        using (var fs = new FileStream(Active, FileMode.Create)) fs.SetLength(20L * 1024 * 1024);
+        File.AppendAllText(Active, "\n");
+        File.SetLastWriteTimeUtc(Active, DateTime.UtcNow);
+        var k = new TrailKeeper(Active, 16L * 1024 * 1024, TimeSpan.FromDays(30));
+
+        var first = k.Tick();
+        Assert.Equal(1, first.Rotated);
+        Assert.Equal(0, first.Pruned);
+        Assert.Null(k.Tick().Rotated);                            // the fresh active file is tiny
+        Assert.True(new FileInfo(Seg(1)).Length > 20L * 1024 * 1024);
+        Assert.True(File.Exists(Seg(1)));
+    }
+
+    /// End to end in the daemon: handed keeper options, it rotates by itself
+    /// (first tick at start), after the start-time migration has run.
+    [Fact]
+    public async Task TheDaemon_RunsTheKeeper_AfterTheMigration()
+    {
+        File.Delete(Path.Combine(_dir, "shell-history.0.jsonl"));
+        File.WriteAllText(Active, new string('x', 300) + "\n");
+        using var rt = new TempRuntimeDir();
+        using var stop = new CancellationTokenSource();
+        var opts = new TrailKeeperOptions(Active, 100, TimeSpan.FromDays(30), TimeSpan.FromMilliseconds(50));
+        var daemon = Task.Run(() => DaemonHost.RunAsync(rt.Paths, Path.Combine(_dir, "no-harness"), stop.Token,
+            legacyTrail: Active, trailKeeper: opts));
+        try
+        {
+            await PollUntilAsync(() => Task.FromResult(File.Exists(Seg(1))), TimeSpan.FromSeconds(15), "the keeper rotated");
+            Assert.True(File.Exists(Path.Combine(_dir, "shell-history.0.jsonl")), "the migration ran before the keeper");
+        }
+        finally
+        {
+            stop.Cancel();
+            Assert.Equal(0, await daemon.WaitAsync(TimeSpan.FromSeconds(15)));
+        }
     }
 }

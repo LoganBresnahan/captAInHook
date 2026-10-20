@@ -96,7 +96,9 @@ public static class ShellTrail
         var target = LegacyPath(trailPath);
         if (File.Exists(target)) return -1;
         var dir = Path.GetDirectoryName(target) ?? ".";
-        var tmp = Path.Combine(dir, $".{LegacyFile}.{Environment.ProcessId}.tmp");
+        // Unique per call: the daemon's start-time copy and the keeper's guard
+        // (ADR-0021 rule 4) can run at once in one process.
+        var tmp = Path.Combine(dir, $".{LegacyFile}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
         const string marker = "\"evt\":\"" + Evt + "\"";
         var copied = 0;
         Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

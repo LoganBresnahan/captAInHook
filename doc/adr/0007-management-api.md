@@ -103,7 +103,15 @@ trust surface is N1 of ADR-0006 made worse.
      SSE event id = byte offset in the file, so `Last-Event-ID` reconnects
      resume without loss. *(id semantics superseded by ADR-0009 d2 — treat the
      id as an opaque resume cursor, not a byte offset; this "byte offset" wording
-     is amended when trail segmentation lands.)*
+     is amended when trail segmentation lands.)* *(**Amended by ADR-0009 and
+     ADR-0021, 2026-10-19: segmentation has landed.** The id is an opaque
+     resume cursor (ADR-0009 d2) encoding a position across the trail's
+     rotated segments: `(seq − 1) × 2^40 + byte offset` in segment `seq`
+     (ADR-0021 rule 5). In the trail's first file it equals the byte offset,
+     so every id issued before rotation still resumes. The tailer follows a
+     rotation without a `reset`; a `reset` now means "your position no longer
+     exists" (its segment was pruned, or the active file was truncated in
+     place), re-anchored at the earliest still-reachable point.)*
    - **Backpressure as ADR-0004 d6 reserved it:** a bounded Channel per
      subscriber; a slow consumer gets drop-oldest plus an explicit gap
      marker event (count of dropped lines) rather than growing the daemon or

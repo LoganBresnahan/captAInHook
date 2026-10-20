@@ -99,29 +99,60 @@ public static class MailDeliveryFold
 
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-
-            if (fs.Length > maxScanBytes)
+            // The newest `maxScanBytes` of the trail, across its rotations
+            // (ADR-0021 rule 7): walk back from the active file through the
+            // newest segments until the window is full, then read forward. A
+            // rotation mid-window must not empty the Mail view.
+            var files = new List<(string Path, long Length)>();
+            foreach (var (_, seg) in CaptainHook.Core.TrailKeeper.Segments(path))
+                files.Add((seg, LengthOf(seg)));
+            // No trail at all yet: as before, nothing — and no claim the history
+            // is complete, since there was no file a record could be found in.
+            if (files.Count == 0 && !File.Exists(path)) return new MailDeliveryFoldResult([], false);
+            files.Add((path, LengthOf(path)));
+            var budget = maxScanBytes;
+            var first = files.Count;
+            long skipInFirst = 0;
+            while (first > 0 && budget > 0)
             {
-                // Start inside the file, then discard forward to the next line
-                // boundary — TrailCursor's rule, for the same reason: an offset
-                // that does not rest on a '\n' would hand the parser a half
-                // line. A UTF-8 continuation byte can never be 0x0A, so the
-                // byte split is safe ahead of the decode.
-                fs.Seek(fs.Length - maxScanBytes, SeekOrigin.Begin);
-                complete = false;
-                if (!DiscardToLineBoundary(fs)) return new MailDeliveryFoldResult([], false);
+                first--;
+                var len = files[first].Length;
+                if (len > budget) { skipInFirst = len - budget; budget = 0; }
+                else budget -= len;
             }
+            if (first > 0 || skipInFirst > 0) complete = false;
 
-            using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
-            while (reader.ReadLine() is { } line)
+            for (var f = first; f < files.Count; f++)
             {
-                // A cheap gate, not a decision: `exec.stderr` puts arbitrary
-                // payload output in this file, so a line CONTAINING this text
-                // proves nothing. The parse below is what decides.
-                if (line.Length == 0 || !line.Contains("\"mail.deliver\"", StringComparison.Ordinal)) continue;
-                if (TryParse(line) is { } rec) records.Add(rec);
+                FileStream fs;
+                try
+                {
+                    fs = new FileStream(files[f].Path, FileMode.Open, FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                }
+                catch (FileNotFoundException) { continue; }   // pruned or renamed meanwhile: a gap, already marked incomplete
+                using (fs)
+                {
+                    if (f == first && skipInFirst > 0)
+                    {
+                        // Start inside the file, then discard forward to the next
+                        // line boundary — TrailCursor's rule, for the same reason:
+                        // an offset that does not rest on a '\n' would hand the
+                        // parser a half line. A UTF-8 continuation byte can never
+                        // be 0x0A, so the byte split is safe ahead of the decode.
+                        fs.Seek(Math.Min(skipInFirst, fs.Length), SeekOrigin.Begin);
+                        if (!DiscardToLineBoundary(fs)) continue;
+                    }
+                    using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
+                    while (reader.ReadLine() is { } line)
+                    {
+                        // A cheap gate, not a decision: `exec.stderr` puts arbitrary
+                        // payload output in this file, so a line CONTAINING this text
+                        // proves nothing. The parse below is what decides.
+                        if (line.Length == 0 || !line.Contains("\"mail.deliver\"", StringComparison.Ordinal)) continue;
+                        if (TryParse(line) is { } rec) records.Add(rec);
+                    }
+                }
             }
         }
         catch (IOException) { return new MailDeliveryFoldResult([], false); }
@@ -133,6 +164,12 @@ public static class MailDeliveryFold
             complete = false;
         }
         return new MailDeliveryFoldResult(records, complete);
+    }
+
+    private static long LengthOf(string path)
+    {
+        try { return new FileInfo(path).Length; }
+        catch (IOException) { return 0; }
     }
 
     /// True when the stream now rests just past a '\n'; false when the rest of

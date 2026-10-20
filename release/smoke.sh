@@ -20,7 +20,9 @@
 # socket, a daemon still comes up — in the short per-uid dir
 # /tmp/captainhook-<uid> (ADR-0004 d3); a SIGKILLed daemon's leftover children
 # (an EOF-deaf resident, a forked grandchild, an in-flight oneshot) die when the
-# next daemon starts (ADR-0010); `captainHook self prune` keeps the
+# next daemon starts (ADR-0010); a daemon with a tiny segment size rotates
+# the trail and prunes an aged segment, leaving command history alone
+# (ADR-0021); `captainHook self prune` keeps the
 # current version and removes a stale one; and `captainHook self uninstall`
 # refuses while the hooks are wired, then removes the install once they are
 # not — so the smoke ENDS uninstalled. Prints the hook latencies. Exit 0 = pass.
@@ -306,7 +308,37 @@ mv "$HANDLERS.smoke-saved" "$HANDLERS"
 wait_for $(( IDLE_MS / 1000 + 30 )) gone || fail "the reaping daemon did not idle-exit"
 pass "SIGKILLed daemon: its EOF-deaf resident, forked grandchild and in-flight oneshot reaped by the next daemon ($got daemon.reapOrphan)"
 
-# 11. self prune: the version folder's own install.sh, run by the engine
+# 11. trail rotation and retention (ADR-0021): a daemon started with a tiny
+#     segment size and a fast tick rotates the trail into numbered segments
+#     and keeps the high-water mark; a segment aged past the 30-day retention
+#     is pruned, and only it; command history (kept forever) is not touched.
+LOGS=$HOME/.captainHook/logs
+hist_before=$(wc -l < "$LOGS/shell-history.jsonl" | tr -d ' ')
+export CAPTAINHOOK_TRAIL_SEGMENT_MB=0.004 CAPTAINHOOK_TRAIL_TICK_MS=200
+printf '{"prompt":"smoke-rotate"}' | "$SHIM" hook user-prompt-submit >/dev/null 2>&1   # cold: a daemon with these settings
+seg1() { [ -e "$LOGS/captainHook.1.jsonl" ]; }
+wait_for 20 seg1 || fail "the trail keeper never rotated (no $LOGS/captainHook.1.jsonl)"
+rot2() { printf '{"prompt":"smoke-rotate-more"}' | "$SHIM" hook user-prompt-submit >/dev/null 2>&1; [ -e "$LOGS/captainHook.2.jsonl" ]; }
+wait_for 30 rot2 || fail "no second rotation"
+# The keeper renames first and writes the mark just after: poll for it, never
+# read it once the instant the segment appears (linux-arm64 caught exactly that).
+markseq() { tr -d ' \n' < "$LOGS/.trail-seq" 2>/dev/null || echo 0; }
+mark2() { [ "$(markseq)" -ge 2 ] 2>/dev/null; }
+wait_for 10 mark2 || fail ".trail-seq is '$(markseq)', expected at least 2"
+seq=$(markseq)
+touch -t 200101010000 "$LOGS/captainHook.1.jsonl"   # far past the retention
+pruned() { [ ! -e "$LOGS/captainHook.1.jsonl" ]; }
+wait_for 15 pruned || fail "the aged segment was never pruned"
+[ -e "$LOGS/captainHook.2.jsonl" ] || fail "pruning took a segment inside the retention"
+grep -q '"evt":"trail.prune"' "$LOGS"/captainHook*.jsonl || fail "no trail.prune line in the trail"
+[ -e "$LOGS/shell-history.0.jsonl" ] || fail "the 0.1.3-window copy is missing"
+[ "$(wc -l < "$LOGS/shell-history.jsonl" | tr -d ' ')" -ge "$hist_before" ] || fail "command history lost lines"
+"$ENGINE" history smoke-history </dev/null >/dev/null 2>&1 || fail "history lost the recorded command"
+unset CAPTAINHOOK_TRAIL_SEGMENT_MB CAPTAINHOOK_TRAIL_TICK_MS
+wait_for $(( IDLE_MS / 1000 + 30 )) gone || fail "the rotating daemon did not idle-exit"
+pass "trail rotation: segments up to $seq at 4 KiB, .trail-seq kept, an aged segment pruned, command history untouched"
+
+# 12. self prune: the version folder's own install.sh, run by the engine
 # (ADR-0020 d8) — keeps the current version, removes a stale one.
 cur=$(basename "$base")
 mkdir -p "$INSTALL_DIR/versions/0.0.0-smoke" && echo 0.0.0-smoke > "$INSTALL_DIR/versions/0.0.0-smoke/VERSION"
@@ -317,7 +349,7 @@ printf '%s\n' "$out" | grep -q "removed 0.0.0-smoke" || fail "self prune did not
 [ -x "$INSTALL_DIR/versions/$cur/captainHook" ] || fail "self prune removed the current version"
 pass "self prune: kept $cur (current), removed a stale version"
 
-# 12. self uninstall: refused while settings.json still runs the shim, then
+# 13. self uninstall: refused while settings.json still runs the shim, then
 # done once install-hooks has taken the hooks out.
 if out=$("$ENGINE" self uninstall </dev/null 2>&1); then fail "self uninstall ran while the hooks were wired: $out"; fi
 printf '%s\n' "$out" | grep -q 'install-hooks --remove --apply' || fail "self uninstall refused without naming the fix: $out"

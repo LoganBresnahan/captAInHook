@@ -1143,7 +1143,7 @@ run live*. The framework underneath is what exists today.
   [ADR-0020](adr/0020-release-archives-and-install.md) d4's 2026-10-19
   amendment; `ShimSpelling`; `InstallHooksTests`. **Shipped (v0.1.3).**
 
-- [ ] **32. Trail bounding — build ADR-0009's segmented archive** — the trail
+- [x] **32. Trail bounding — build ADR-0009's segmented archive** — the trail
   is one unbounded file (87 MB on the maintainer's machine, 2026-10-19), and
   since item 29 it also carries every agent command whole, so it grows faster.
   Build [ADR-0009](adr/0009-trail-rotation.md) d3–d6 as its implementation
@@ -1159,8 +1159,13 @@ run live*. The framework underneath is what exists today.
   whose single create-and-reopen retry could drop a line racing a rotation.
   **Slice 2 built** — `TrailCursor` follows rotations (no reset; a deleted
   segment resets to the oldest left), ids are `TrailId` ((seq − 1) × 2^40 +
-  offset, so today's ids are unchanged). Slice 3 (readers, rotation on) to
-  come.
+  offset, so today's ids are unchanged). **Slice 3 built** — the daemon runs
+  the keeper (30 days, 16 MiB by default; `CAPTAINHOOK_TRAIL_RETENTION_DAYS`,
+  `_SEGMENT_MB`, `_TICK_MS`), the Mail view's delivery fold reads across
+  segments, ADR-0007 d5 is amended, and release smoke step 11 rotates and
+  prunes for real. The upgrade day was measured: the whole existing trail
+  becomes segment 1 in one rotation and nothing is pruned. **Shipped
+  (v0.1.5)** once the owner has seen it.
 
 - [x] **31. `~` in handlers.json — one file, two homes** — a handlers.json
   kept in a dotfiles repo has to serve `/home/oof` and `/Users/dogdrool`. A

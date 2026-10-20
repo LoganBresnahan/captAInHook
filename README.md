@@ -236,7 +236,10 @@ both architectures, and by sandbox runs on Apple-silicon hardware
   [ADR-0020](doc/adr/0020-release-archives-and-install.md)).
 - **Structured logging** — one JSONL event stream with dispatch/actor
   correlation (`~/.captainHook/logs/`), human one-liners on stderr, stdout
-  kept pure for the hook protocol. Every shell command an agent ran is
+  kept pure for the hook protocol. The daemon rotates it into 16 MiB
+  segments and keeps 30 days (`CAPTAINHOOK_TRAIL_RETENTION_DAYS`, 0 keeps
+  everything; [ADR-0021](doc/adr/0021-trail-rotation-and-retention.md)); the
+  GUI's live stream follows a rotation without a gap. Every shell command an agent ran is
   recorded in its own file, kept forever, which `captainHook history`
   searches ([ADR-0009](doc/adr/0009-trail-rotation.md) d7–d8).
 - **Tests** — xunit suite (1,600+, green twice in a row as the ship bar) plus

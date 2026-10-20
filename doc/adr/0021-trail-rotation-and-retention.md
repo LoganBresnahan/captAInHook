@@ -1,7 +1,8 @@
 # ADR-0021 — Trail rotation and a retention cap: build ADR-0009's segments, bounded at ~30 days
 
 **Status:** Accepted (2026-10-19) after review: R1 (a durable segment
-high-water mark) and notes N1–N3 folded in. Build in the order below.
+high-water mark) and notes N1–N3 folded in. All three slices built; slice 3
+(rotation on) awaits the owner before merge.
 **Builds on:** [ADR-0009](0009-trail-rotation.md) (the opaque-cursor contract
 d2, the segmented-archive design d3–d6, d8's command-history split),
 [ADR-0007](0007-management-api.md) d5 (SSE ids), [ADR-0004](0004-daemon-topology.md)
@@ -173,7 +174,18 @@ the build "until growth bites". Three things changed:
 ## Consequences
 
 - The trail is bounded: about 30 days, roughly 45 MB at today's rate, plus
-  one segment of slack. A machine that wants the old behaviour sets
+  one segment of slack.
+- **The upgrade day deletes nothing.** On the first daemon start the
+  migration runs first (ADR-0009 d8), then the first tick renames the whole
+  existing trail (90 MB on the maintainer's machine) into segment 1 in one
+  rotation. A rename keeps the file's mtime, which is its last append —
+  moments ago — so the first prune keeps it, and it ages out 30 days later.
+  Measured in a sandbox with the release build and the defaults on a
+  106 MB synthetic trail: 6 `tool.shell` lines copied, one `trail.rotate`
+  (106,090,502 bytes → `captainHook.1.jsonl`), no `trail.prune`, `history`
+  showing the copied commands, and no second rotation on the next hook. (A
+  machine whose trail was last written more than 30 days ago loses it at
+  that first tick: that is the policy, working.) A machine that wants the old behaviour sets
   `CAPTAINHOOK_TRAIL_RETENTION_DAYS=0`.
 - Operational history older than the cap is gone: `exec.stderr`, dispatch
   timings, daemon lifecycles. That is the owner's chosen trade, and the
@@ -221,16 +233,19 @@ the build "until growth bites". Three things changed:
    a release smoke step that forces a tiny segment size and proves rotation,
    a resumed stream across it, and pruning.
 
-## Ground truth (slices 1–2 built; slice 3 to come)
+## Ground truth
 
 | what | where |
 |---|---|
-| keeper (rotate, lock, `.trail-seq`, prune, d8 guard), shipped dark | `Core/TrailKeeper.cs` (slice 1); started by `DaemonHost` in slice 3; `TrailKeeperTests` |
+| keeper (rotate, lock, `.trail-seq`, prune, d8 guard) | `Core/TrailKeeper.cs`; `TrailKeeperTests` |
+| configuration (`TrailKeeperOptions.FromEnv`: retention days, segment MiB, tick) | `Core/TrailKeeper.cs`; passed by `Program.cs`; started by `DaemonHost` (`trailKeeper`: waits for the migration, first tick at start, then per tick until the drain) |
 | the segment model readers share (`Segments`, `HighWater`, `ActiveSeq`, `SegmentPath`) | `Core/TrailKeeper.cs`; `ShellTrail.Files` reads through it |
 | writers' create-and-reopen loop (rule 1's finding) | `captainHookWire/PosixTrail.cs` (`OpenAttempts`), `captainHookActors/Logging.fs` (`PosixTrail.append`) |
 | segment-aware cursor (slice 2): resolve by name each poll, re-resolve when a rotation races the open, drain + `RenameGrace` + step, walk many rotations, reset only for a deleted or future segment | `Api/TrailTail.cs` (`TrailCursor`: `Seq`, `Offset`, `Id`); `TrailRotationCursorTests` (mutation-checked: no grace, no grace marker, ids without seq, jump-to-active, never follow a rename — each fails a test) |
 | the id | `TrailId` (`Encode`, `Decode`, `End`) in `Core/TrailKeeper.cs`; used by `TrailSubscription`, `MailWatcher`, `ApiReadModel` (`trailEventId`) |
-| readers | `Api/ApiReadModel.cs` (`TrailEventId`), `Api/MailDeliveryFold.cs`, `Core/MailWatcher.cs`, `Core/ShellTrail.cs` |
-| events | `trail.rotate`, `trail.rotateError`, `trail.prune`, `trail.pruneHeld`, `trail.seqExhausted` (src `trail`) |
+| readers | `Api/ApiReadModel.cs` (`trailEventId` = `TrailId.End`), `Api/MailDeliveryFold.cs` (the 4 MiB window across the newest segments; `Fold_ReadsAcrossARotation`), `Core/MailWatcher.cs` (a `TrailCursor`, aligned), `Core/ShellTrail.cs` (`Files`, the migration) |
+| release smoke | `release/smoke.sh` step 11: a 4 KiB segment size and a 200 ms tick rotate the trail twice, `.trail-seq` kept, a segment aged past the retention pruned and only it, command history untouched |
+| the ADR-0007 d5 hand-off | discharged in slice 3: ADR-0007 d5 amended, `doc/flow/management-api.md` (id paragraph, `TrailCursor` edge table) |
+| events | `trail.rotate`, `trail.rotateError`, `trail.prune`, `trail.pruneHeld`, `trail.seqExhausted`, `trail.tickError` (src `trail`) |
 | high-water mark | `logs/.trail-seq` (written under `logs/.rotate.lock`) |
 | env | `CAPTAINHOOK_TRAIL_RETENTION_DAYS`, `CAPTAINHOOK_TRAIL_SEGMENT_MB` |

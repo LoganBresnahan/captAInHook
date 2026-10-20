@@ -148,8 +148,8 @@ then says how to install instead, and one `curl … | sh` fixes it.
 | --- | --- |
 | archive builder | `release/package.sh` |
 | installer (install, upgrade, rollback, prune, uninstall) | `release/install.sh` — also `versions/<v>/install.sh` in every install |
-| the lower-case alias (`link_alias`; removed by `--uninstall` after the real names) | `release/install.sh`; `release/smoke.sh` step 1 (its own link on Linux, no second entry on macOS) and step 12 |
-| `captainHook self` | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; smoke steps 10–11 |
+| the lower-case alias (`link_alias`; removed by `--uninstall` after the real names) | `release/install.sh`; `release/smoke.sh` step 1 (its own link on Linux, no second entry on macOS) and step 13 |
+| `captainHook self` | `dotnet/captainHook/Install/SelfVerb.cs`; `SelfVerbTests`; smoke steps 12–13 |
 | per-target smoke test | `release/smoke.sh` |
 | a toolchain-free sandbox run (install → smoke → uninstall inside one directory; how a bare Mac is checked) | `release/sandbox-smoke.sh` |
 | bosun pin | `release/bosun.sha256` |

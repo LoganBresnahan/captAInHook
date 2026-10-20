@@ -42,7 +42,7 @@ public static class DaemonHost
         int? apiPort = null, SseOptions? sse = null, Func<bool>? superseded = null,
         string? uiDir = null, string? handlersPath = null, string? mailDir = null,
         string? watchPath = null, TimeSpan? watchPoll = null, string? childrenDir = null,
-        string? legacyTrail = null)
+        string? legacyTrail = null, TrailKeeperOptions? trailKeeper = null)
     {
         // Daemon-start configuration: the pretty stderr sink defaults OFF in
         // daemon mode — the record is the JSONL file; stderr points at
@@ -93,8 +93,7 @@ public static class DaemonHost
         // shell-history.0.jsonl so they outlive the trail's rotation. Only when
         // a trail path arrives — production passes the real one; a test daemon
         // never reads or writes the live logs.
-        if (legacyTrail is not null)
-            _ = Task.Run(() =>
+        var migration = legacyTrail is null ? Task.CompletedTask : Task.Run(() =>
             {
                 try
                 {
@@ -277,6 +276,33 @@ public static class DaemonHost
         // tab. API requests stamp lastActive via the onRequest callback above.
         // The trigger is the SAME drainCts as SIGTERM: idle-exit and drain
         // agree by construction.
+        // ---- the trail keeper (ADR-0021): rotation by size, retention by age
+        // Production-only (Program.cs passes the options; a test daemon none).
+        // It waits for the start-time migration above, so its first prune can
+        // never race the copy of the 0.1.3 window; then a first tick at once
+        // (a large trail rotates at the first start after an upgrade) and one
+        // per Tick, on the monotonic delay, until the drain. Two daemons in a
+        // handoff serialize on the keeper's own lock.
+        if (trailKeeper is not null)
+            _ = Task.Run(async () =>
+            {
+                var keeper = new TrailKeeper(trailKeeper.TrailPath, trailKeeper.SegmentBytes, trailKeeper.Retention);
+                try { await migration.WaitAsync(drainCts.Token); }
+                catch (OperationCanceledException) { return; }
+                catch (ObjectDisposedException) { return; }
+                while (!drainCts.IsCancellationRequested)
+                {
+                    try { keeper.Tick(); }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("trail", "trail.tickError", new LogFields { Msg = ex.Message });
+                    }
+                    try { await Task.Delay(trailKeeper.Tick, drainCts.Token); }
+                    catch (OperationCanceledException) { return; }
+                    catch (ObjectDisposedException) { return; }
+                }
+            });
+
         var idleMs = (long)(idleWindow ?? TimeSpan.FromMinutes(30)).TotalMilliseconds;
         var idleTick = TimeSpan.FromMilliseconds(Math.Clamp(idleMs / 8.0, 50, 5000));
         _ = Task.Run(async () =>
