@@ -94,8 +94,9 @@ All projects target `net10.0` (.NET 10 SDK). The shim's native form exists only
 at publish (`dotnet publish dotnet/captainShim/captainShim.csproj -c Release -r
 linux-x64`); tests exercise `ShimMain` in IL form through its injected streams.
 **Ship bar: the suite is green twice in a row** (the flaky guard).
-`CAPTAINHOOK_PROBE=1` opts a demo second handler into UserPromptSubmit; off by
-default so live prompts aren't taxed.
+`CAPTAINHOOK_PROBE=1` opts a demo second handler into UserPromptSubmit, and
+`CAPTAINHOOK_ECHO=1` the echo handler (the "seen @" inject; opt-in since
+v0.1.4); both off by default so live prompts aren't taxed.
 
 ## Conventions when you touch code
 
@@ -170,7 +171,7 @@ ADR in the body. End every commit with a `Co-Authored-By: Claude <model>` traile
 - repo / dir: `captAInHook`
 - namespaces: `CaptainHook.Core` / `.Handlers` / `.Demo` (C# engine), `CaptainHook.Wire`
   (wire lib), `CaptainHook.Shim` (AOT shim), `CaptainHook.Actors` (F#)
-- env vars: `CAPTAINHOOK_LOG`, `CAPTAINHOOK_LOG_STDERR`, `CAPTAINHOOK_HARNESS_DIR`, `CAPTAINHOOK_DISPATCH_FILE`, `CAPTAINHOOK_HANDLERS_FILE`, `CAPTAINHOOK_WATCH_FILE`, `CAPTAINHOOK_PROBE`, `CAPTAINHOOK_COLDSTART`, `CAPTAINHOOK_IDLE_MS`, `CAPTAINHOOK_API_PORT`, `CAPTAINHOOK_ASK_TOOL_TIMEOUT_S`, `CAPTAINHOOK_MAIL_FROM_AGENT` / `_HARNESS` / `_SESSION` (a spawning payload declaring who the process is), `CAPTAINHOOK_SSE_HEARTBEAT_MS` (test knob)
+- env vars: `CAPTAINHOOK_LOG`, `CAPTAINHOOK_LOG_STDERR`, `CAPTAINHOOK_HARNESS_DIR`, `CAPTAINHOOK_DISPATCH_FILE`, `CAPTAINHOOK_HANDLERS_FILE`, `CAPTAINHOOK_WATCH_FILE`, `CAPTAINHOOK_PROBE`, `CAPTAINHOOK_ECHO`, `CAPTAINHOOK_COLDSTART`, `CAPTAINHOOK_IDLE_MS`, `CAPTAINHOOK_API_PORT`, `CAPTAINHOOK_ASK_TOOL_TIMEOUT_S`, `CAPTAINHOOK_MAIL_FROM_AGENT` / `_HARNESS` / `_SESSION` (a spawning payload declaring who the process is), `CAPTAINHOOK_SSE_HEARTBEAT_MS` (test knob)
 - runtime home: `~/.captainHook/` — JSONL logs in `logs/`, user harness overrides in `harnesses/`; daemon rendezvous files (socket/lock/pid) in `$XDG_RUNTIME_DIR/captainHook/` when set, else here
 - install home: `~/.local/share/captainhook/` (lowercase; `versions/<v>/`, `payloads/`, `previous`) behind the `~/.local/bin` links — overridable via `CAPTAINHOOK_INSTALL_DIR` / `CAPTAINHOOK_BIN_DIR` (installer only, ADR-0020)
 
