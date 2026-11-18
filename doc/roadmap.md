@@ -1104,6 +1104,24 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [x] **38. Ship on a patched .NET: 0.1.6 rebuilds on 10.0.15** —
+  CVE-2026-111497 (GHSA-p3jp-9v83-76w9, an out-of-bounds write in .NET's
+  Brotli decoder, fixed in 10.0.14) covered both halves of every archive:
+  the engine's bundled runtime (0.1.5 shipped 10.0.13) and the shim's AOT
+  compiler. Nothing captAInHook ships decodes Brotli (no compression API in
+  the shipped code, no HttpClient, and the AOT shim doesn't link the
+  decoder), so this is hygiene, not an exposure. 0.1.6 builds on SDK
+  10.0.404 (runtime 10.0.15, which also carries that day's security patch
+  set). New guard: `release/runtime-floor` names the oldest .NET a release
+  may ship, and `package.sh` refuses a build whose engine runtime or shim
+  compiler is older, so a stale build host fails loudly instead of shipping
+  old bits (the dev host was on 10.0.9). `RuntimeFloorTests`; platform.md
+  § Single-file distribution. Determinism re-verified on the new SDK.
+  The same release moves darwin-arm64 off the retired macos-14 runner to
+  macos-15 (CI and the post-release smoke too) and states macOS 15 or later,
+  .NET 10's own floor; the AOT shim still targets macOS 12.0 (platform.md
+  § Native AOT).
+
 - [x] **37. The README says Stop can block** —
   [captAInHook#2](https://github.com/LoganBresnahan/captAInHook/issues/2). The
   seam diagram and table read Stop/SessionEnd as Background-only, but

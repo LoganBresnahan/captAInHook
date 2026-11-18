@@ -33,7 +33,9 @@ jobs:
           # runner's glibc, and an older glibc runs on newer distros.
           - { rid: linux-x64,   asset: linux-x64,    runner: ubuntu-22.04 }
           - { rid: linux-arm64, asset: linux-arm64,  runner: ubuntu-22.04-arm }
-          - { rid: osx-arm64,   asset: darwin-arm64, runner: macos-14 }
+          # macos-14 is retired; the AOT shim still targets macOS 12.0, and
+          # .NET 10 supports macOS 15+ (doc/platform.md § Native AOT).
+          - { rid: osx-arm64,   asset: darwin-arm64, runner: macos-15 }
           - { rid: osx-x64,     asset: darwin-x64,   runner: macos-15-intel }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -149,7 +151,7 @@ jobs:
           captainHook install-hooks --apply
           \`\`\`
 
-          Linux x64 and arm64 (glibc 2.35+), macOS on Apple silicon and Intel. See [doc/flow/install.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/doc/flow/install.md)."
+          Linux x64 and arm64 (glibc 2.35+), macOS 15 or later on Apple silicon and Intel. See [doc/flow/install.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/doc/flow/install.md)."
 
   post-release:
     needs: publish

@@ -1,0 +1,10 @@
+# The oldest .NET 10 a captAInHook release may ship. package.sh refuses a
+# build below it (release/runtime-floor.sh), for the engine's bundled runtime
+# and the shim's AOT compiler alike. Raise it when a .NET security advisory
+# lands; a fix reaches users only through a rebuild on a newer SDK and a
+# release (doc/platform.md § Single-file distribution).
+#
+# 10.0.15 (2026-11-10): carries the fix for CVE-2026-111497
+# (GHSA-p3jp-9v83-76w9, an out-of-bounds write in the Brotli decoder,
+# fixed in 10.0.14) and the 10.0.15 security patch set.
+10.0.15

@@ -87,7 +87,7 @@ thesis and the per-event effect contracts.
 ## Install
 
 Targets **Linux** (x64 and arm64, incl. WSL2 — the lived-in platform) and
-**macOS** (Apple silicon and Intel). **Windows: use WSL** — there is no
+**macOS** 15 or later (Apple silicon and Intel). **Windows: use WSL** — there is no
 Windows-native build. No runtime dependencies: the engine ships
 self-contained (bundled .NET runtime) and the shim is a native binary; each
 archive is ~35 MB.

@@ -9,8 +9,9 @@ names what leans on it, so nothing here is trivia.
 Verification status: **Linux/WSL2 is the lived-in target** — facts there are
 exercised by the test suite or observed live. **macOS is a supported target,
 exercised in CI and on hardware since 2026-10-19 (ADR-0020):** the full suite
-runs on macos-14 on every push, every release builds and smoke-tests native
-darwin-arm64 (macos-14) and darwin-x64 (macos-15-intel) archives, and a
+runs on macos-15 on every push (macos-14 until GitHub retired it in November
+2026), every release builds and smoke-tests native darwin-arm64 (macos-15) and
+darwin-x64 (macos-15-intel) archives, and a
 sandboxed install of the CI-built arm64 archive passed on an M1 running macOS
 26.7.1 (cold hook 426ms, warm 27ms). macOS entries the suite or the smoke
 touches are verified; the rest stay marked researched until a run touches
@@ -107,6 +108,7 @@ against the live daemon):
 | Fact | Detail | What leans on it |
 | --- | --- | --- |
 | AOT publish needs a platform linker toolchain | `PublishAot` drives the link through `clang` (+ `objcopy` for symbol strip) on Linux; absent toolchain fails the *publish*, not the build. A **build-host** constraint, not a runtime dependency — the csproj carries no PackageReference. Verified 2026-07-06 (clang 18, Ubuntu/WSL2). | The `captainshim-aot-artifact` slice; `/deploy`'s two-artifact publish (ADR-0004 decision 7 amendment). |
+| A macOS AOT image targets macOS 12.0, whatever macOS builds it; .NET 10 supports macOS 15+ | The ILCompiler's targets link with `arm64-apple-macos12.0` / `x86_64-apple-macos12.0` (`AppleMinOSVersion` defaults to 12.0 in `Microsoft.NETCore.Native.Unix.targets`, read in 10.0.15), so moving the build runner from macOS 14 to 15 doesn't raise the shim's floor. The floor that binds is .NET 10's support: its supported-OS list (dotnet/core `release-notes/10.0/supported-os.json`, read 2026-11-18) names macOS 15, 26 and 27 and lists 14 as unsupported. GitHub retired the macos-14 runner: bb3278c's CI job was cancelled in its first second, "The configuration 'macos-14-arm64-us-default' is not supported" (2026-11-18). Not probed: the shim's actual `LC_BUILD_VERSION` on a macOS build. | release.yml builds darwin-arm64 on macos-15; the release notes and README say macOS 15 or later; ci.yml and post-release.yml run macos-15. |
 | AOT output is per-RID | One native image per `-r <rid>` (`linux-x64` here); no portable fallback inside the artifact. | `/deploy` publishes for the host RID; other-OS support rides the per-OS summary below. |
 | A native image has no MVID | The ELF/Mach-O binary carries no managed metadata; `PEReader` throws `BadImageFormatException`, which `ContentIdentity.Compute` already skips. | The decision-7 amendment's identity story: the hash stays over the deploy dir's managed DLLs; the shim is invisible to it *by this fact*, and co-location + the wire-stamp guard carry the rest. |
 | `AppContext.BaseDirectory` / `Environment.ProcessPath` work under AOT | Both resolve to the native executable's directory/path. | `ShimMain.DefaultEnginePath` (co-located engine), the shim's identity hash over its own directory. |
@@ -119,6 +121,7 @@ against the live daemon):
 | --- | --- | --- |
 | A default `PublishSingleFile` bundle has ZERO loose managed DLLs | Everything (app + runtime) rides inside the exe; `Directory.EnumerateFiles(dir, "*.dll")` finds nothing. Probed 2026-07-21 (.NET 10, linux-x64: one 74MB exe). | `ContentIdentity.Compute` THROWS on such a dir, and the shim's skew guard reads missing-wire-DLL as permanent skew — why the engine csproj's `KeepAppAssembliesLooseForIdentity` target excludes the four app assemblies from the bundle. |
 | The ENTRY assembly can be excluded from its own bundle | `ExcludeFromSingleFile` on the `ResolvedFileToPublish` item works for `captainHook.dll` itself: it publishes loose beside the exe and the single-file host loads it from there. Probed 2026-07-21: cold hook + daemon spawn + warm answer all work. | The publish shape: runtime-only in the bundle, identity surface (4 app DLLs) on disk, byte-identical to the framework-dependent layout's identity. |
+| A self-contained or AOT build carries the SDK's .NET, frozen at build time | `--self-contained` bundles the runtime pack the SDK names as its newest patch (`LatestRuntimeFrameworkVersion` in the SDK's `Microsoft.NETCoreSdk.BundledVersions.props`), and Native AOT compiles in the `Microsoft.DotNet.ILCompiler` of the same version (`ILCompilerPackVersion`). Nothing on a user's machine updates either, so a .NET security fix reaches an install only through a rebuild on a newer SDK and a release. Observed 2026-11-18: SDK 10.0.301 bundles 10.0.9; v0.1.5's CI build carried runtime 10.0.13; SDK 10.0.404 bundles 10.0.15. CVE-2026-111497 (GHSA-p3jp-9v83-76w9) lists both the runtime packs and the ILCompiler, but the restore's NU1903 warning named only the ILCompiler, so NuGet's audit alone undercounts. | `release/runtime-floor` + `release/runtime-floor.sh`, run by `package.sh`: a build whose engine runtime or shim compiler is below the floor is not packaged (`RuntimeFloorTests`). |
 | Single-file publish is deterministic where it matters | Clean publish ×2 (obj/bin wiped between): all four loose DLLs byte-identical. The bundle exe itself was not asserted identical — identity never reads it. | Build-determinism invariant (MVID rendezvous) survives the ADR-0012 publish-shape change. |
 
 ## Install layout (ADR-0020)

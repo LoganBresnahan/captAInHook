@@ -10,6 +10,7 @@ what `/deploy` and CI use), so there is one install path.
                       linux-x64 · linux-arm64 · darwin-arm64 · darwin-x64             │
                       release/package.sh <v> <rid>                                    │
                         dotnet publish engine (single-file) + shim (AOT), ONE build   │
+                        refuse .NET below release/runtime-floor                       │
                         + bosun (pinned tag, sha256 from release/bosun.sha256)        │
                         + ui/ + payloads/ + install.sh + LICENSE NOTICE VERSION       │
                       install.sh --archive <tgz>   into a temp HOME                   │
@@ -153,6 +154,7 @@ then says how to install instead, and one `curl … | sh` fixes it.
 | per-target smoke test | `release/smoke.sh` |
 | a toolchain-free sandbox run (install → smoke → uninstall inside one directory; how a bare Mac is checked) | `release/sandbox-smoke.sh` |
 | bosun pin | `release/bosun.sha256` |
+| the .NET floor (oldest runtime / AOT compiler a release may ship) | `release/runtime-floor`, checked by `release/runtime-floor.sh` from `package.sh`; `RuntimeFloorTests` |
 | hook wiring | `dotnet/captainHook/Install/InstallHooksVerb.cs`, `UnifiedDiff.cs`; `InstallHooksTests`, `UnifiedDiffTests` |
 | where the install lives | `dotnet/captainHook/Install/VersionVerb.cs` |
 | the "another installed build" label | `Doctor.RunAsync` (`selfIdentity`); `DoctorTests.HealthyDaemon_IsLabelledThisBuildOrAnother_LeftAloneEitherWay` |

@@ -88,6 +88,12 @@ for f in captainShim captainHook captainHook.dll captainHookWire.dll captainHook
   [ -f "$STAGE/$f" ] || { echo "package.sh: $f missing from the publish — the loose-DLL target did not run?" >&2; exit 1; }
 done
 
+# A .NET security fix reaches users only through a rebuild on a newer SDK:
+# refuse a build whose runtime (engine) or AOT compiler (shim) is older than
+# release/runtime-floor.
+sh "$ROOT/release/runtime-floor.sh" "$STAGE/captainHook" "$ROOT/dotnet/captainShim/obj/project.assets.json" ||
+  { echo "package.sh: .NET below release/runtime-floor — refusing to package" >&2; exit 1; }
+
 # ---- the rest of the archive ------------------------------------------------
 install -m 0755 "$BOSUN_BIN" "$STAGE/bosun"
 cp -R "$ROOT/ui" "$STAGE/ui"
