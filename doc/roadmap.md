@@ -1104,6 +1104,22 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [x] **37. The README says Stop can block** —
+  [captAInHook#2](https://github.com/LoganBresnahan/captAInHook/issues/2). The
+  seam diagram and table read Stop/SessionEnd as Background-only, but
+  since ADR-0016's `stop-reconcile-seam` slice (2026-08-13) Stop and
+  SubagentStop take `Decide(block)` with a reason, rendered top-level by
+  `ClaudeHookJsonAdapter.DecidesAtTopLevel` (doc/platform.md § The Stop block
+  shape). README and DESIGN.md's effect table now say so, with the two edges a
+  payload author needs: the host never enforces `stop_hook_active`, so a
+  blocking payload must terminate itself, and fail-closed doesn't belong on
+  Stop (ADR-0016 N3). The named consumer is pharos's end-of-turn diagnostics
+  check ([pharos-mcp#6](https://github.com/LoganBresnahan/pharos-mcp/issues/6)).
+  README's seam table and DESIGN.md's effect table and handler sketch drop
+  two claims that don't hold: no effect modifies a tool's input,
+  and Claude Code 2.1.119 discards `Replace` (platform.md). The README also
+  points at geex's `doc/stack.md`, the cross-repo contract.
+
 - [x] **36. The echo demo is opt-in** — the built-in echo handler injected
   "captAInHook: <event> seen @ …" into every prompt of every session (tokens,
   no information) and logged `audit.echo` per tool call. Off by default now;

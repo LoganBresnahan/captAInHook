@@ -50,15 +50,25 @@ whether or not the model would have asked for it.
 The seams span one turn — each is a place to run a guarantee:
 
 ```
-● SessionStart (Inject) → ● UserPromptSubmit (Inject) → ⟨LLM⟩ → ● PreToolUse → (tool) → ● PostToolUse → ⟨LLM⟩ → ● Stop (Background) → ● SessionEnd (Background)
+● SessionStart (Inject) → ● UserPromptSubmit (Inject) → ⟨LLM⟩ → ● PreToolUse → (tool) → ● PostToolUse → ⟨LLM⟩ → ● Stop (Decide: block) → ● SessionEnd (Background)
 ```
 
 | seam | what a hook does there |
 | --- | --- |
 | `SessionStart` / `UserPromptSubmit` (Inject) | inject context before the model sees the prompt |
-| `PreToolUse` | gate the call — allow / deny / ask, or modify its input |
-| `PostToolUse` | annotate or replace the tool's result |
-| `Stop` / `SessionEnd` (Background) | fire-and-forget: audit, memory writes |
+| `PreToolUse` | gate the call — deny, or ask the user (an allow leaves it to the host's own permissions) — or add context |
+| `PostToolUse` | add context about the tool's result (a `Replace` effect exists, but Claude Code 2.1.119 discards it — [doc/platform.md](doc/platform.md#the-stop-block-shape-the-harnesss-turn-end-contract)) |
+| `Stop` / `SubagentStop` (Decide: block) | hold the turn's end — `block` with a reason and the agent keeps working, carrying it (e.g. "files you touched still have errors"); or fire-and-forget audit |
+| `SessionEnd` (Background) | fire-and-forget: audit, memory writes |
+
+The adapter writes a Stop block in the one shape the host reads at turn end,
+a top-level `decision`/`reason` pair
+([doc/platform.md § The Stop block shape](doc/platform.md#the-stop-block-shape-the-harnesss-turn-end-contract)).
+Two edges are the payload's own. **The host has no loop cap**: it passes
+`stop_hook_active` to hooks but never enforces it, so a payload that blocks must
+itself stop blocking once it has nothing new to say. And **fail-closed handlers
+don't belong on Stop**: a crash would block every turn's end forever
+([ADR-0016](doc/adr/0016-mailbox-bus.md) N3).
 
 Two things make a hook different from a tool the model *might* call:
 
@@ -263,6 +273,20 @@ Maps of the system live in [doc/flow/](doc/flow/); decisions in
 [doc/adr/](doc/adr/); direction in [doc/roadmap.md](doc/roadmap.md). The
 `/shipshape` skill verifies tests, docs, and logging are in order. The
 design thesis — why hooks, why these rails — is [DESIGN.md](DESIGN.md).
+
+## Part of a stack
+
+captAInHook is one of three tools built to work together: **geex** (the editor —
+buffers, undo, provenance) and **pharos** (language servers over MCP). Here
+captAInHook is the harness's event tap: at each seam it fans the event out to
+payloads under a budget. Each payload lives with the tool that consumes the
+event: geex ships its attestation payload, and pharos plans a diagnostics check
+([pharos-mcp#6](https://github.com/LoganBresnahan/pharos-mcp/issues/6)).
+captAInHook ships the engine and the seams; the record of who did what is
+geex's. The contract between the three — what each owns, the rules they
+share, the connections and the cross-repo work order — is
+[geex's `doc/stack.md`](https://github.com/LoganBresnahan/geex/blob/main/doc/stack.md);
+a change to it is agreed there first, then lands per repo.
 
 ## License
 

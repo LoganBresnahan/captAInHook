@@ -17,6 +17,8 @@ still allowed, as it always was under Claude Code too. **Revisit** when a
 payload is a *gate* that must know a call's class and cannot read it off the
 call's content; ADR-0005's un-deferral is the likely one. The body below is
 the design as proposed, kept as the record of what was weighed.
+**2026-11-18:** the same reasoning settled captAInHook#1 (multi-file
+writers); see the addendum below.
 **Date:** 2026-08-26
 **Builds on:** [ADR-0003](0003-declarative-harness-registry.md) (the harness
 spec: *declare capabilities in data, provide lookup in code*; its "second real
@@ -31,6 +33,50 @@ its rules are keyed on Claude's tool names and inherit this decision).
 including a shell command mutating `~/.captainHook/bin`, because the guard's
 first gate is `case $envelope in *'"tool_name":"Bash"'*)` and moby's shell tool
 is `run_shell`.
+
+## Addendum (2026-11-18): a multi-file writer is the payload's to recognize (captAInHook#1)
+
+captAInHook#1 asked how a hook should see pharos's `apply_workspace_edit`
+(`dry_run: false`), an MCP tool that writes several files in one call. The
+options were a new canonical kind (this ADR again), a normalized
+touched-paths list the engine hands payloads, or nothing. **Decided: nothing
+in the engine.** Each payload that cares matches the tool by name and reads
+its shape. geex's `geex-attest.sh` adds it to its writer list (geex#1);
+pharos's planned diagnostics payload (pharos-mcp#6) would ship with pharos and
+know its own tool; and pharos's part is to report what it wrote, per file path plus before/after
+sha256, in its result (pharos-mcp#4).
+
+**The principle, the maintainer's: apps stay generic; the payloads between
+two apps do the translating.** captAInHook translates the *harness protocol*:
+where the host puts the event name, session and cwd, and how a decision must
+be shaped to land (the spec's `request` fields, the response adapters). What
+a *tool call means* to a consuming app is that app's translator's job, and
+the app that consumes the event ships it (geex's `doc/stack.md` says the same
+of payload ownership).
+
+The touched-paths list was declined on its own merits, not only by precedent:
+
+- **It isn't enough for the payload that motivated it.** Attestation needs
+  each file's before-hash, and by PostToolUse the old bytes are gone. The
+  hash has to come from pharos's result, or from a PreToolUse snapshot the
+  payload takes itself (geex#3's plan for Bash). Either way `geex-attest.sh`
+  needs tool-specific knowledge a paths list doesn't carry, so the list saves
+  it nothing unless the engine normalizes hashes too, a further step into
+  tool semantics.
+- **The spec can't hold it as data.** `apply_workspace_edit` writes only
+  when `tool_input.dry_run` is false (it defaults to true), and its paths are
+  `file://` URIs under `edit.changes` or `edit.documentChanges`. That is a
+  condition plus a conversion. ADR-0003's rule is *declare capabilities in
+  data, provide lookup in code*: data selects among coded behaviors and never
+  becomes a program. So it becomes one coded extractor per tool shape, which is the engine
+  learning hosts' tools after all.
+- **The count doesn't justify it.** Two payloads times two writer shapes,
+  and one of the payloads would be shipped by the tool's own author.
+
+**Reopen** when a third payload must recognize writes from several writers
+across several harnesses: that is where payloads × writers outgrows an
+engine-side list kept per writer. A shared snippet the payloads copy comes
+before engine surface.
 
 ## Context
 
@@ -265,6 +311,9 @@ not here.
 
 ## Revisit triggers
 
+- **A third payload must recognize writes from several writers across
+  harnesses**: captAInHook#1's reopen condition (addendum, 2026-11-18). The
+  candidate is an engine-side touched-paths list, as its own ADR.
 - **A third real harness** with a tool no v1 kind fits — grow `ToolKinds.Known`
   from three data points, as d6 says; do not grow it from one.
 - **ADR-0005 is un-deferred** — its rule key becomes `kind` with `tool` as the

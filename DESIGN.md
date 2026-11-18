@@ -58,10 +58,16 @@ fail-closed gates (ADR-0005).
 | ---------------- | --------------------------- | ------------------------------------------------- |
 | SessionStart     | session id, cwd, source     | `Inject(context)`                                 |
 | UserPromptSubmit | prompt, session             | `Inject(context)`                                 |
-| PreToolUse       | tool name, tool input       | `Decide(allow/deny/ask)`, `ModifyInput`, `Inject` |
-| PostToolUse      | tool name, input, result    | `Inject(context)`, `ReplaceOutput`                |
-| Stop             | session                     | `SideEffect` only                                 |
+| PreToolUse       | tool name, tool input       | `Decide(allow/deny/ask)`, `Inject`                |
+| PostToolUse      | tool name, input, result    | `Inject(context)`; `Replace` (the host drops it)  |
+| Stop             | session, `stop_hook_active` | `Decide(block)` + reason, `SideEffect`            |
 | SessionEnd       | session                     | `SideEffect` only                                 |
+
+(Stop gained `Decide(block)` with ADR-0016's reconcile seam — `SubagentStop`
+shares it; the wire shape is in
+[doc/platform.md § The Stop block shape](doc/platform.md#the-stop-block-shape-the-harnesss-turn-end-contract),
+whose ⚠ row also records that Claude Code 2.1.119 discards a PostToolUse
+`Replace`. No effect modifies a tool's input.)
 
 (Also available from the host: `Notification`, `PreCompact`, `SubagentStop`,
 `PermissionRequest`. Confirmed live in this repo's owner's Claude Code config:
@@ -77,7 +83,7 @@ ctx   : { deadline, config, services, logger, actor? }
 
 Effect (only the subset valid for the event is honored):
   Inject(text)            |  Decide(verdict, reason)
-  ModifyInput(patch)      |  ReplaceOutput(text)
+  Replace(text)
   SideEffect(async fn)    |  Noop
 ```
 
