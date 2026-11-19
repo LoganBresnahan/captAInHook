@@ -35,6 +35,56 @@ thing is not the effect on your own loop (both answer `noop`) but what reaches
 | [`turn-claude.sh`](turn-claude.sh) | woken member | `mail-nudge` | what a robot NUDGE wakes (ADR-0017 d6): the daemon's watcher decides a role is falling behind, and this opens one fresh `claude -p` turn to deal with it. Carries BOTH guards — `--setting-sources ""`, and a refusal to run on any event but the internal `MailNudge` |
 | [`reaper-deterministic.sh`](reaper-deterministic.sh) | woken member, no model | `mail-nudge` | what a DEAD-MAILBOX nudge wakes (ADR-0018 d6): a mailbox whose window is gone still holds mail, and this disposes of it by a rule the operator wrote — `forward-all-to-role`, `drop-all` or `hold`. No model runs, and it never reads a body: `mail forward` copies envelopes ledger-to-ledger inside the engine |
 
+**A checker** — the project's own compiler after the agent's edits:
+
+| script | mode | events | the idea |
+| --- | --- | --- | --- |
+| [`compiler-hook.sh`](compiler-hook.sh) | `oneshot` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` | arm 2 of the pharos trial (captAInHook#4): a turn-start snapshot, a baseline per file at its first write, new errors after each write as information, and one Stop block if new errors remain. Needs `jq` |
+
+Its contract is shared with arm 3 (geex's `doc/stack-trial-hooks.md`), so its
+wording, cap, order, Stop rule and log lines are fixed there, not here. It
+carries tsc's syntactic error codes per TypeScript version (6.0.3 today), to
+tell a run that hid type errors behind a syntax error; with another version it
+stays silent and logs why, until that version's list is added. One
+entry covers all four events; `--root` is the tsconfig's directory, the checker
+comes after `--`, and `--budget-ms` should match the entry's `budgetMs` (the
+payload stops its checker a second early, so it can log the timeout before the
+engine kills it). The trial's entry:
+
+```json
+{ "name": "compiler-hook",
+  "command": "~/.local/share/captainhook/payloads/compiler-hook.sh",
+  "args": ["--root", "<proj>", "--budget-ms", "20000", "--",
+           "<proj>/node_modules/.bin/tsc", "--noEmit", "--incremental", "--pretty", "false",
+           "--tsBuildInfoFile", "<run dir>/hook.tsbuildinfo", "-p", "<proj>/tsconfig.json"],
+  "events": ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"],
+  "mode": "oneshot", "failMode": "open", "budgetMs": 20000 }
+```
+
+What the trial's configuration has to get right:
+
+- **PreToolUse wired for the writer tools, Bash and Task** (or every tool).
+  The payload reuses its last check only while no writer, Bash or Task call
+  has started since, and it learns about one from that call's PreToolUse.
+  Those calls never wait on a running check.
+- **A budget at least twice a measured warm check**: a check that waits
+  behind the session's lock spends its own budget.
+- **Its own HOME *and* its own `XDG_RUNTIME_DIR`**: 60 characters at most, mode
+  0700, and confirm `captainHook version` prints that directory. The daemon's
+  socket is named by the build, not by HOME
+  (`$XDG_RUNTIME_DIR/captainHook/captaind-<identity>.sock`), so a Claude Code
+  with its own HOME but the inherited runtime dir, running the same build,
+  reaches the installed daemon and runs *that* `handlers.json`, never the
+  trial's. A runtime dir too long for a socket falls back silently to a shared
+  `/tmp/captainhook-<uid>`.
+- **A hook timeout above the budget** in the trial's Claude Code settings (the
+  default is 60 s). After delivery the shim has no timer of its own, so that
+  timeout is the only backstop for a long check.
+- **A running daemon** for the background turn-start snapshot.
+  Reply-then-linger is a daemon-mode pattern. Without a daemon, the turn's
+  first write takes the snapshot itself at PreToolUse, which costs that write
+  one check.
+
 ⚠ **A turn payload alone wakes nobody.** Installing `turn-claude.sh` makes the
 robot channel *exist* (it is what `RoleKinds` calls a turn payload, and it is
 installation-wide); the per-role consent is a `~/.captainHook/watch.json` rule,

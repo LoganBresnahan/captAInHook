@@ -171,7 +171,12 @@ grant. `handlers.residentDegraded` marks it in the trail.
 Demo payloads live in [`examples/payloads/`](../../examples/payloads/):
 `retriever.sh` (resident, PreToolUse, injects a matched note) and
 `memory.sh` (oneshot, Stop, appends a durable log) — dependency-free POSIX
-`sh`, driven end-to-end through the daemon by `DemoPayloadTests`. Five more
+`sh`, driven end-to-end through the daemon by `DemoPayloadTests`.
+`compiler-hook.sh` (oneshot on four events, needs `jq`) is the pharos trial's
+arm 2 (captAInHook#4): it takes a turn-start snapshot with reply-then-linger at
+UserPromptSubmit, a baseline per file at that file's first-write PreToolUse,
+injects new errors at PostToolUse and blocks once at Stop
+(`CompilerHookTests`). Five more
 run as LIVE dogfood on the maintainer's own hooks: `git-orient.sh` (oneshot,
 SessionStart — once-per-session git bearing), `deploy-guard.sh` (oneshot,
 PreToolUse — `Decide(ask)` when any tool call — whatever the host names it — would mutate

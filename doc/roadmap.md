@@ -1104,6 +1104,25 @@ run live*. The framework underneath is what exists today.
 
 ## Next
 
+- [x] **39. A compiler hook: arm 2 of the pharos trial** —
+  [captAInHook#4](https://github.com/LoganBresnahan/captAInHook/issues/4).
+  `examples/payloads/compiler-hook.sh` runs the project's own tsc on four
+  events: a turn-start snapshot at UserPromptSubmit (reply-then-linger), a
+  baseline per file at its first write's PreToolUse (empty for a file created
+  this turn), new errors injected after each write at PostToolUse, and one
+  Stop block per turn while new errors remain. It follows the contract it
+  shares with arm 3, geex's `doc/stack-trial-hooks.md`: errors keyed by path,
+  code and message and counted, the last occurrences in sort order are the new
+  ones, the fixed wording capped at 10, and silence logged as `trial.unsure`
+  whenever a check or baseline fails, can't be read or runs past its budget.
+  tsc hides every type error behind a syntax, options or global error, so such
+  a run is INCOMPLETE: it still reports, but is never a baseline or reused.
+  Stop checks every turn, written or not.
+  The last check is reused only while no writer, Bash or Task call has started
+  since (a lock-free generation counter, so read-only calls never wait).
+  Shipped with the other payloads; registered only in the trial's own
+  configuration. `CompilerHookTests`.
+
 - [x] **38. Ship on a patched .NET: 0.1.6 rebuilds on 10.0.15** —
   CVE-2026-111497 (GHSA-p3jp-9v83-76w9, an out-of-bounds write in .NET's
   Brotli decoder, fixed in 10.0.14) covered both halves of every archive:
