@@ -244,6 +244,7 @@ public class CompilerHookTests : IDisposable
     [InlineData("Grep", false)]
     [InlineData("Bash", true)]
     [InlineData("Task", true)]
+    [InlineData("Agent", true)]                                   // Claude Code 2.1.328's name for the subagent tool
     public async Task TheLastCheck_IsReusedAsABaseline_UntilAWriterBashOrTaskCallStarts(string between, bool stale)
     {
         await BeginTurn("src/a.ts");

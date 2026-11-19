@@ -1118,7 +1118,7 @@ run live*. The framework underneath is what exists today.
   tsc hides every type error behind a syntax, options or global error, so such
   a run is INCOMPLETE: it still reports, but is never a baseline or reused.
   Stop checks every turn, written or not.
-  The last check is reused only while no writer, Bash or Task call has started
+  The last check is reused only while no writer, Bash or subagent call has started
   since (a lock-free generation counter, so read-only calls never wait).
   Shipped with the other payloads; registered only in the trial's own
   configuration. `CompilerHookTests`.

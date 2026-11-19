@@ -63,8 +63,9 @@ engine kills it). The trial's entry:
 
 What the trial's configuration has to get right:
 
-- **PreToolUse wired for the writer tools, Bash and Task** (or every tool).
-  The payload reuses its last check only while no writer, Bash or Task call
+- **PreToolUse wired for the writer tools, Bash and the subagent tool** (`Agent`;
+  `Task` before Claude Code 2.1.328), or every tool.
+  The payload reuses its last check only while no writer, Bash or subagent call
   has started since, and it learns about one from that call's PreToolUse.
   Those calls never wait on a running check.
 - **A budget at least twice a measured warm check**: a check that waits
