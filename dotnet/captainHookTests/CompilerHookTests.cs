@@ -22,6 +22,8 @@ public class CompilerHookTests : IDisposable
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "chook-" + Guid.NewGuid().ToString("N"));
     private string Proj => Path.Combine(_dir, "proj");
+    private string? _link;                                     // the project reached through a symlink
+    private string Root => _link ?? Proj;
     private string Out => Path.Combine(_dir, "checker.out");
     private string Runs => Path.Combine(_dir, "checker.runs");
     private string Checker => Path.Combine(_dir, "fake-tsc");
@@ -29,13 +31,19 @@ public class CompilerHookTests : IDisposable
     private int _rc = 2;          // tsc's exit when it reports errors
     private string? _sleep;
     private string? _version;
+    private string[] _checkerArgs = [];
 
     public CompilerHookTests()
     {
         Directory.CreateDirectory(Path.Combine(Proj, "src"));
         Directory.CreateDirectory(Path.Combine(_dir, "state"));
         File.WriteAllText(Checker,
-            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"Version ${FAKE_VERSION:-6.0.3}\"; exit 0; fi\necho run >> \"$FAKE_RUNS\"\n[ -n \"${FAKE_SLEEP:-}\" ] && sleep \"$FAKE_SLEEP\"\ncat \"$FAKE_OUT\" 2>/dev/null\nexit \"${FAKE_RC:-0}\"\n");
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"Version ${FAKE_VERSION:-6.0.3}\"; exit 0; fi\necho run >> \"$FAKE_RUNS\"\n" +
+            // Like tsc: paths print relative to the (real) cwd, so a -p reached
+            // through a link prints them as ../<link>/…
+            "P=\"\"; while [ $# -gt 0 ]; do [ \"$1\" = -p ] && P=$2; shift; done\n" +
+            "pre=\"\"; [ -n \"$P\" ] && [ \"$(dirname \"$P\")\" != \"$(pwd -P)\" ] && pre=\"${FAKE_LINK_PREFIX:-}\"\n" +
+            "[ -n \"${FAKE_SLEEP:-}\" ] && sleep \"$FAKE_SLEEP\"\nsed \"s#^\\([^ ]\\)#$pre\\1#\" \"$FAKE_OUT\" 2>/dev/null\nexit \"${FAKE_RC:-0}\"\n");
         File.SetUnixFileMode(Checker, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         Errors();
     }
@@ -66,7 +74,8 @@ public class CompilerHookTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        foreach (var a in new[] { Script, "--root", Proj, "--budget-ms", budgetMs.ToString(), "--", Checker }) psi.ArgumentList.Add(a);
+        foreach (var a in new[] { Script, "--root", Root, "--budget-ms", budgetMs.ToString(), "--", Checker }.Concat(_checkerArgs)) psi.ArgumentList.Add(a);
+        psi.Environment["FAKE_LINK_PREFIX"] = "../link/";
         psi.Environment["PATH"] = TestPath.Minimal;
         psi.Environment["HOME"] = _dir;
         psi.Environment["CAPTAINHOOK_COMPILER_HOOK_STATE"] = Path.Combine(_dir, "state");
@@ -77,7 +86,7 @@ public class CompilerHookTests : IDisposable
         if (_version is not null) psi.Environment["FAKE_VERSION"] = _version;
         using var p = Process.Start(psi)!;
         var envelope = "{\"v\":1,\"dispatchId\":\"d-" + Guid.NewGuid().ToString("N") + "\",\"event\":{\"type\":\"" + type +
-            "\",\"harness\":\"claude-code\",\"sessionId\":\"" + session + "\",\"cwd\":" + JsonSerializer.Serialize(Proj) +
+            "\",\"harness\":\"claude-code\",\"sessionId\":\"" + session + "\",\"cwd\":" + JsonSerializer.Serialize(Root) +
             ",\"payload\":" + payload + "}}";
         await p.StandardInput.WriteLineAsync(envelope);
         p.StandardInput.Close();
@@ -92,7 +101,7 @@ public class CompilerHookTests : IDisposable
     }
 
     private string Tool(string tool, string rel) =>
-        "{\"tool_name\":\"" + tool + "\",\"tool_input\":{\"file_path\":" + JsonSerializer.Serialize(Path.Combine(Proj, rel)) + "}}";
+        "{\"tool_name\":\"" + tool + "\",\"tool_input\":{\"file_path\":" + JsonSerializer.Serialize(Path.Combine(Root, rel)) + "}}";
 
     private Task<Result> Prompt(string session = "s1") => RunAsync("UserPromptSubmit", """{"prompt":"go"}""", session);
     private Task<Result> Pre(string rel = "src/a.ts", string tool = "Edit") => RunAsync("PreToolUse", Tool(tool, rel));
@@ -358,6 +367,73 @@ public class CompilerHookTests : IDisposable
         Assert.Equal("noop", Effect(await RunAsync("PreToolUse", Tool("Edit", "../shared/x.ts"))));
         Errors(E("../shared/x.ts", 1, "TS2304", "Cannot find name 'y'."), E("../shared/x.ts", 3, "TS2339", "Property 'q' does not exist on type 'T'."));
         Assert.Equal(HeadEdit + "\n../shared/x.ts:3:1 TS2339 Property 'q' does not exist on type 'T'.", Text(await RunAsync("PostToolUse", Tool("Edit", "../shared/x.ts"))));
+    }
+
+    /// The project reached through a symlink, as macOS's /var → /private/var does.
+    private void LinkTheRoot()
+    {
+        _link = Path.Combine(_dir, "link");
+        File.CreateSymbolicLink(_link, Proj);
+    }
+
+    private void WriteFile(string rel)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(Proj, rel))!);
+        File.WriteAllText(Path.Combine(Proj, rel), "// written\n");
+    }
+
+    [Fact]
+    public async Task ANewFileInANewDirectory_UnderALinkedRoot_IsReported()
+    {
+        // geex-pharos's case, shared with arm 3's pharos-hook.sh.
+        LinkTheRoot();
+        await Prompt();
+        Assert.Equal("noop", Effect(await Pre("deep/er/new.ts", "Write")));   // neither deep/ nor the file exist
+        WriteFile("deep/er/new.ts");
+        Errors(E("deep/er/new.ts", 1, "TS2322", NotNumber));
+        var post = await Post("deep/er/new.ts", "Write");
+        Assert.Equal(HeadEdit + "\ndeep/er/new.ts:1:1 TS2322 " + NotNumber, Text(post));
+        Assert.Equal("decide", Effect(await Stop()));
+    }
+
+    [Fact]
+    public async Task ANewFilesOwnBaseline_UnderALinkedRoot_IsKeyedLikeTscsOutput()
+    {
+        // Arm 2 judges an untouched file by the turn start, so the case above
+        // passes even with a mis-keyed baseline. With the turn start unknown,
+        // the file's own (empty) baseline is the only thing that can make it
+        // known: keyed by an unresolved path, the file would be skipped.
+        LinkTheRoot();
+        File.WriteAllText(Out, "");
+        _rc = 3;                                                  // the turn start fails
+        await Prompt();
+        Errors();
+        await Pre("deep/er/new.ts", "Write");
+        WriteFile("deep/er/new.ts");
+        Errors(E("deep/er/new.ts", 1, "TS2322", NotNumber));
+        var post = await Post("deep/er/new.ts", "Write");
+        Assert.True(post.Answer.GetProperty("effect").GetString() == "inject", post.Stderr);
+        Assert.Equal(HeadEdit + "\ndeep/er/new.ts:1:1 TS2322 " + NotNumber, Text(post));
+        Assert.DoesNotContain("no-baseline", post.Stderr);
+    }
+
+    [Fact]
+    public async Task ALinkedTsconfigPath_IsResolved_SoPathsPrintRelativeToIt()
+    {
+        // verifier-two's finding: `-p <link>/tsconfig.json` made tsc print
+        // ../link/src/a.ts, off the line format, and touched files' own
+        // baselines never matched tsc's keys.
+        LinkTheRoot();
+        _checkerArgs = ["-p", Path.Combine(_link!, "tsconfig.json")];
+        File.WriteAllText(Path.Combine(Proj, "tsconfig.json"), "{}\n");
+        Touch("src/a.ts");
+        Errors(E("src/a.ts", 3, "TS2304", Old));
+        await Prompt();
+        await Pre();
+        Errors(E("src/a.ts", 3, "TS2304", Old), E("src/a.ts", 5, "TS2322", NotNumber));
+        var post = await Post();
+        Assert.True(post.Answer.GetProperty("effect").GetString() == "inject", post.Stderr);
+        Assert.Equal(HeadEdit + "\nsrc/a.ts:5:1 TS2322 " + NotNumber, Text(post));
     }
 
     [Fact]

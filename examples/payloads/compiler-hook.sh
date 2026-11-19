@@ -122,6 +122,30 @@ if [ $# -eq 0 ] || [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
 fi
 ROOT=$(cd "$ROOT" && pwd -P)
 
+# The checker's -p/--project, resolved to a real path (its directory's
+# pwd -P plus the basename; a directory as a whole). tsc prints paths relative
+# to its working directory, which is real (Node's cwd is getcwd()), so a
+# project reached through a symlink would print "../link/src/a.ts" instead of
+# the tsconfig-relative "src/a.ts". The rest of the argv stays as given.
+resolve_project() {
+  ( cd "$ROOT" || exit 0
+    if [ -d "$1" ]; then cd "$1" && pwd -P
+    elif [ -d "$(dirname "$1")" ]; then printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")"
+    else printf '%s\n' "$1"; fi )
+}
+n=$#; project_next=0
+for a do
+  if [ "$project_next" = 1 ]; then a=$(resolve_project "$a"); project_next=0
+  else
+    case $a in
+      -p|--project) project_next=1 ;;
+      -p=*|--project=*) a="${a%%=*}=$(resolve_project "${a#*=}")" ;;
+    esac
+  fi
+  set -- "$@" "$a"
+done
+shift "$n"
+
 SAFE=$(printf '%s' "${SID:-unknown}" | tr -c 'A-Za-z0-9_-' '_')
 DIR=${CAPTAINHOOK_COMPILER_HOOK_STATE:-${HOME:-/tmp}/.captainHook/compiler-hook}/$SAFE
 mkdir -p "$DIR" 2>/dev/null || { unsure failed "no-state-dir"; noop; exit 0; }
@@ -158,12 +182,17 @@ get() { if [ -e "$DIR/$1" ]; then cat "$DIR/$1"; else printf '%s\n' "$2"; fi; }
 is_writer() { case $WRITERS in *" $TOOL "*) return 0 ;; esac; return 1; }
 
 # The written file's path relative to the root, as tsc prints it (../ when
-# it's outside).
+# it's outside). The root is a real path (pwd -P), so the target is resolved
+# the same way: its deepest directory that exists, then the rest. A write can
+# create directories, and macOS's /var is a link to /private/var.
 rel_target() {
   [ -n "$TARGET" ] || return 0
   d=$(dirname "$TARGET"); b=$(basename "$TARGET")
-  if [ -d "$d" ]; then d=$(cd "$d" && pwd -P); fi
-  to=$d/$b; from=$ROOT; up=""
+  while [ ! -d "$d" ] && [ "$d" != / ] && [ "$d" != . ]; do
+    b=$(basename "$d")/$b; d=$(dirname "$d")
+  done
+  d=$(cd "$d" && pwd -P)
+  to=${d%/}/$b; from=$ROOT; up=""
   while :; do
     case "$to" in "$from"/*) break ;; esac
     [ "$from" = / ] && break
